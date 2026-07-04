@@ -7,7 +7,7 @@ export function App() {
   return (
     <main className="min-h-screen bg-background text-foreground" data-testid="app-root">
       <h1 className="sr-only">{t('app.title', locale)}</h1>
+      <div className="border-b border-border px-6 py-3 text-sm font-medium">{t('app.title', locale)}</div>
     </main>
   );
 }
-
