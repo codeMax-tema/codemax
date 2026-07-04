@@ -1,0 +1,13 @@
+{
+  "app.title": "Agent 编程任务调度台",
+  "nav.repositories": "仓库",
+  "nav.tasks": "任务",
+  "nav.approvals": "审批",
+  "nav.settings": "设置",
+  "status.created": "已创建",
+  "status.running": "执行中",
+  "status.waitingApproval": "等待审批",
+  "status.completed": "已完成",
+  "status.merged": "已合入"
+}
+

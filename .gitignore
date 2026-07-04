@@ -1,0 +1,46 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local planning and private project notes
+AGENTS.md
+findings.md
+progress.md
+task_plan.md
+任务拆解.md
+需求解析.md
+
+# Frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Rust
+target/
+Cargo.lock.bak
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local app data and generated artifacts
+app-data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,23 @@
+[package]
+name = "codemax-desktop"
+version = "0.0.0"
+description = "Tauri desktop shell and local backend for Codemax Agent Task Console."
+authors = ["Codemax"]
+edition = "2021"
+
+[lib]
+name = "codemax_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+

@@ -1,0 +1,19 @@
+{
+  "name": "codemax-agent-task-console",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local desktop command center for AI coding agent tasks.",
+  "type": "module",
+  "packageManager": "npm@10.9.3",
+  "scripts": {
+    "check": "npm run check:architecture",
+    "check:architecture": "node tests/architecture/verify-architecture.mjs"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}

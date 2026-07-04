@@ -1,0 +1,13 @@
+{
+  "app.title": "Agent Task Console",
+  "nav.repositories": "Repositories",
+  "nav.tasks": "Tasks",
+  "nav.approvals": "Approvals",
+  "nav.settings": "Settings",
+  "status.created": "Created",
+  "status.running": "Running",
+  "status.waitingApproval": "Waiting for approval",
+  "status.completed": "Completed",
+  "status.merged": "Merged"
+}
+

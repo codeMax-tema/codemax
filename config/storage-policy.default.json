@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "keepRecentMessages": 50,
+  "rawLogRetentionDays": 30,
+  "screenshotRetentionDays": 30,
+  "temporaryContextRetentionDays": 7,
+  "autoCleanupWorktreeAfterMerge": false,
+  "keepFinalDiffForever": true,
+  "keepApprovalRecordsForever": true
+}
+

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "patterns": [
+    {
+      "id": "danger.remove.recursive",
+      "match": "rm -rf",
+      "riskLevel": "high",
+      "action": "deny"
+    },
+    {
+      "id": "danger.windows.remove.recursive",
+      "match": "Remove-Item -Recurse",
+      "riskLevel": "high",
+      "action": "deny"
+    },
+    {
+      "id": "danger.git.force.push",
+      "match": "git push --force",
+      "riskLevel": "high",
+      "action": "deny"
+    },
+    {
+      "id": "danger.git.reset.hard",
+      "match": "git reset --hard",
+      "riskLevel": "high",
+      "action": "approval"
+    }
+  ]
+}
+

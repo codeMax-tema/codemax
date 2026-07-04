@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "id": "git.status",
+      "command": "git status --short",
+      "riskLevel": "low"
+    },
+    {
+      "id": "git.diff",
+      "command": "git diff",
+      "riskLevel": "low"
+    },
+    {
+      "id": "node.test",
+      "command": "npm test",
+      "riskLevel": "low"
+    }
+  ]
+}
+

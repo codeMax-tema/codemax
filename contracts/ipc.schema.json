@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codemax.local/contracts/ipc.schema.json",
+  "title": "Codemax IPC Contract",
+  "type": "object",
+  "properties": {
+    "commands": {
+      "type": "object",
+      "properties": {
+        "health": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/HealthResponse"
+            }
+          },
+          "required": ["response"]
+        },
+        "repository.validate": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RepositoryPathRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RepositorySummary"
+            }
+          },
+          "required": ["request", "response"]
+        }
+      },
+      "required": ["health", "repository.validate"]
+    }
+  },
+  "required": ["commands"],
+  "$defs": {
+    "HealthResponse": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["service", "status", "version"]
+    },
+    "RepositoryPathRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["path"]
+    },
+    "RepositorySummary": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "required": ["path", "name", "branch", "dirty"]
+    }
+  }
+}
+
