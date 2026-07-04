@@ -7,7 +7,11 @@
   "packageManager": "npm@10.9.3",
   "scripts": {
     "check": "npm run check:architecture",
-    "check:architecture": "node tests/architecture/verify-architecture.mjs"
+    "check:architecture": "node tests/architecture/verify-architecture.mjs",
+    "check:tauri": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "build:desktop": "npm --workspace @codemax/desktop run build",
+    "build:tauri:debug": "npm --workspace @codemax/desktop run tauri -- build --debug --no-bundle",
+    "dev:desktop": "npm --workspace @codemax/desktop run dev -- --host 127.0.0.1"
   },
   "workspaces": [
     "apps/*"

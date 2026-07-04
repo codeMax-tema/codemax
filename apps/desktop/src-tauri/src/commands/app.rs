@@ -1,4 +1,7 @@
 use serde::Serialize;
+use tauri::AppHandle;
+
+use crate::events;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,3 +20,20 @@ pub fn health() -> HealthResponse {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PingResponse {
+    pub message: &'static str,
+}
+
+#[tauri::command]
+pub fn ping() -> PingResponse {
+    PingResponse {
+        message: "pong",
+    }
+}
+
+#[tauri::command]
+pub fn emit_app_ready(app: AppHandle) -> Result<(), String> {
+    events::emit_app_ready(&app).map_err(|error| error.to_string())
+}
