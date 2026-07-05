@@ -1,0 +1,820 @@
+<style>
+  .codex-stage {
+    margin-top: 22px;
+    border: 1px solid #d9e0ea;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f7f8fb;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  }
+
+  .codex-shell {
+    height: 690px;
+    min-height: 690px;
+    display: grid;
+    grid-template-columns: 286px minmax(0, 1fr) 286px;
+    color: #151922;
+    font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    background: #fafbfc;
+  }
+
+  .left-rail {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    border-right: 1px solid #e1e6ef;
+    background: #f4f6f9;
+    min-width: 0;
+  }
+
+  .rail-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 16px 13px;
+    border-bottom: 1px solid #e4e9f1;
+  }
+
+  .app-mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: #111827;
+    box-shadow: inset 0 0 0 6px #f4f6f9;
+  }
+
+  .app-title {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .app-title strong {
+    display: block;
+    font-size: 13px;
+    line-height: 1.2;
+  }
+
+  .app-title span {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: #6b7280;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .rail-actions {
+    padding: 12px 12px 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .new-task-button {
+    height: 34px;
+    border-radius: 7px;
+    background: #111827;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .search-box {
+    height: 32px;
+    border: 1px solid #dfe5ee;
+    border-radius: 7px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    color: #8b95a5;
+    font-size: 12px;
+  }
+
+  .thread-list {
+    overflow: hidden;
+    padding: 5px 8px 14px;
+  }
+
+  .group-label {
+    padding: 12px 9px 7px;
+    font-size: 11px;
+    color: #7c8798;
+  }
+
+  .thread-row {
+    display: grid;
+    grid-template-columns: 8px 1fr auto;
+    gap: 9px;
+    align-items: center;
+    padding: 10px 9px;
+    border-radius: 7px;
+    color: #202636;
+  }
+
+  .thread-row.active {
+    background: #fff;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04), 0 0 0 1px #e2e8f0;
+  }
+
+  .thread-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 99px;
+    background: #22c55e;
+  }
+
+  .thread-dot.wait {
+    background: #f59e0b;
+  }
+
+  .thread-dot.done {
+    background: #64748b;
+  }
+
+  .thread-copy {
+    min-width: 0;
+  }
+
+  .thread-copy strong {
+    display: block;
+    font-size: 12px;
+    line-height: 1.25;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .thread-copy span {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: #7c8798;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .thread-badge {
+    min-width: 28px;
+    height: 20px;
+    border-radius: 999px;
+    background: #eef2f7;
+    color: #596579;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .rail-foot {
+    border-top: 1px solid #e1e6ef;
+    padding: 12px;
+    display: grid;
+    gap: 8px;
+    font-size: 11px;
+    color: #6b7280;
+  }
+
+  .storage-line {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #111827 0 46%, #dbe2ec 46% 100%);
+  }
+
+  .main-thread {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-width: 0;
+    background: #fff;
+  }
+
+  .task-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    min-height: 58px;
+    padding: 0 22px;
+    border-bottom: 1px solid #e6ebf2;
+  }
+
+  .task-heading {
+    min-width: 0;
+  }
+
+  .task-heading h3 {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.2;
+    color: #111827;
+  }
+
+  .task-heading p {
+    margin: 4px 0 0;
+    color: #6b7280;
+    font-size: 12px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .topbar-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+
+  .icon-button {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    border: 1px solid #dbe3ee;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #475569;
+    font-size: 13px;
+  }
+
+  .merge-button {
+    height: 30px;
+    border-radius: 7px;
+    background: #111827;
+    color: #fff;
+    padding: 0 11px;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .conversation {
+    overflow: hidden;
+    padding: 22px 34px 24px;
+    background:
+      linear-gradient(#fff, #fff) padding-box,
+      radial-gradient(circle at top right, rgba(15, 23, 42, 0.04), transparent 32%);
+  }
+
+  .message {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 13px;
+    margin-bottom: 18px;
+  }
+
+  .avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #e9eef6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #334155;
+  }
+
+  .avatar.agent {
+    background: #111827;
+    color: #fff;
+  }
+
+  .message-body {
+    min-width: 0;
+    max-width: 840px;
+  }
+
+  .message-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    color: #6b7280;
+    font-size: 11px;
+  }
+
+  .message-title {
+    margin: 0 0 7px;
+    color: #111827;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .message-text {
+    margin: 0;
+    color: #303847;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .inline-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    border: 1px solid #dce4ee;
+    border-radius: 999px;
+    padding: 0 9px;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 11px;
+  }
+
+  .todo-block {
+    border: 1px solid #e0e6ef;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 11px;
+    background: #fbfcfe;
+  }
+
+  .todo-row {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-top: 1px solid #e8edf4;
+    font-size: 12px;
+    color: #303847;
+  }
+
+  .todo-row:first-child {
+    border-top: 0;
+  }
+
+  .check {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #22c55e;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+  }
+
+  .check.progress {
+    background: #2563eb;
+  }
+
+  .mini-status {
+    color: #64748b;
+    font-size: 11px;
+  }
+
+  .run-card {
+    margin-top: 11px;
+    border: 1px solid #dfe6ef;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #111827;
+    color: #d1fae5;
+  }
+
+  .run-head {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    border-bottom: 1px solid #263246;
+    color: #cbd5e1;
+    font-size: 11px;
+  }
+
+  .terminal {
+    padding: 11px 12px 13px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.7;
+  }
+
+  .terminal span {
+    display: block;
+  }
+
+  .terminal .muted {
+    color: #94a3b8;
+  }
+
+  .terminal .ok {
+    color: #86efac;
+  }
+
+  .artifact-strip {
+    margin-top: 11px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .artifact {
+    border: 1px solid #dfe6ef;
+    border-radius: 8px;
+    background: #fbfcfe;
+    padding: 10px;
+    min-height: 58px;
+  }
+
+  .artifact strong {
+    display: block;
+    font-size: 12px;
+    color: #111827;
+  }
+
+  .artifact span {
+    display: block;
+    margin-top: 6px;
+    font-size: 11px;
+    color: #64748b;
+  }
+
+  .composer {
+    border-top: 1px solid #e6ebf2;
+    padding: 13px 18px;
+    background: #fff;
+  }
+
+  .composer-box {
+    min-height: 46px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px 0 14px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .composer-placeholder {
+    font-size: 13px;
+    color: #8b95a5;
+  }
+
+  .send-button {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    background: #111827;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+
+  .review-panel {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-width: 0;
+    border-left: 1px solid #e1e6ef;
+    background: #f7f8fb;
+  }
+
+  .review-head {
+    padding: 17px 16px 13px;
+    border-bottom: 1px solid #e4e9f1;
+  }
+
+  .review-head strong {
+    display: block;
+    font-size: 13px;
+    color: #111827;
+  }
+
+  .review-head span {
+    display: block;
+    margin-top: 4px;
+    color: #6b7280;
+    font-size: 11px;
+  }
+
+  .review-body {
+    padding: 14px 12px;
+    display: grid;
+    align-content: start;
+    gap: 10px;
+  }
+
+  .inspector-section {
+    border: 1px solid #dfe6ef;
+    border-radius: 8px;
+    background: #fff;
+    padding: 12px;
+  }
+
+  .inspector-section h4 {
+    margin: 0 0 9px;
+    font-size: 12px;
+    color: #111827;
+  }
+
+  .score-row {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .score {
+    font-size: 34px;
+    line-height: 1;
+    letter-spacing: 0;
+    font-weight: 760;
+  }
+
+  .score-caption {
+    color: #64748b;
+    font-size: 11px;
+    text-align: right;
+    line-height: 1.4;
+  }
+
+  .gate-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid #edf1f6;
+    font-size: 12px;
+  }
+
+  .gate-row:first-of-type {
+    border-top: 0;
+  }
+
+  .gate-state {
+    color: #16a34a;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .gate-state.warn {
+    color: #b45309;
+  }
+
+  .path-box {
+    border-radius: 6px;
+    background: #f4f7fb;
+    border: 1px solid #e3e9f2;
+    padding: 8px;
+    color: #526071;
+    font-size: 11px;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+
+  .selectable-preview {
+    cursor: pointer;
+  }
+
+  .selectable-preview.selected .codex-stage {
+    border-color: #2563eb;
+    box-shadow: 0 22px 58px rgba(37, 99, 235, 0.18);
+  }
+
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .note {
+    border: 1px solid #dfe6ef;
+    border-radius: 8px;
+    background: #fff;
+    padding: 11px 12px;
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.45;
+  }
+
+  @media (max-width: 1100px) {
+    .codex-shell {
+      grid-template-columns: 244px minmax(0, 1fr);
+    }
+
+    .review-panel {
+      display: none;
+    }
+  }
+</style>
+
+<h2>改成 Codex 桌面版气质啦</h2>
+<p class="subtitle">这版把任务当成一个个“线程”来管理：左侧选任务，中间像 Codex 对话流一样看 Agent 做事，右侧只放审查与合入相关信息。</p>
+
+<div class="selectable-preview card" data-choice="codex-desktop-thread-ui" onclick="toggleSelect(this)">
+  <div class="codex-stage">
+    <div class="codex-shell">
+      <aside class="left-rail">
+        <div class="rail-head">
+          <div class="app-mark"></div>
+          <div class="app-title">
+            <strong>Agent Console</strong>
+            <span>D:\work\payment-service</span>
+          </div>
+          <div class="icon-button" title="设置">⌘</div>
+        </div>
+
+        <div class="rail-actions">
+          <div class="new-task-button">+ 新建任务</div>
+          <div class="search-box">搜索任务、仓库、证据包</div>
+        </div>
+
+        <div class="thread-list">
+          <div class="group-label">今天</div>
+          <div class="thread-row active">
+            <div class="thread-dot"></div>
+            <div class="thread-copy">
+              <strong>修复支付金额精度 Bug</strong>
+              <span>验证中 · 第 2 轮 · 4 个文件</span>
+            </div>
+            <div class="thread-badge">91</div>
+          </div>
+          <div class="thread-row">
+            <div class="thread-dot wait"></div>
+            <div class="thread-copy">
+              <strong>升级订单依赖版本</strong>
+              <span>等待审批 · 依赖变更</span>
+            </div>
+            <div class="thread-badge">!</div>
+          </div>
+          <div class="thread-row">
+            <div class="thread-dot"></div>
+            <div class="thread-copy">
+              <strong>补充商品服务单测</strong>
+              <span>执行中 · pytest</span>
+            </div>
+            <div class="thread-badge">74</div>
+          </div>
+
+          <div class="group-label">昨天</div>
+          <div class="thread-row">
+            <div class="thread-dot done"></div>
+            <div class="thread-copy">
+              <strong>整理登录模块交付说明</strong>
+              <span>已合入 · Proof Pack 已保留</span>
+            </div>
+            <div class="thread-badge">88</div>
+          </div>
+          <div class="thread-row">
+            <div class="thread-dot done"></div>
+            <div class="thread-copy">
+              <strong>解释库存锁实现</strong>
+              <span>已完成 · 未合入</span>
+            </div>
+            <div class="thread-badge">--</div>
+          </div>
+        </div>
+
+        <div class="rail-foot">
+          <div>本地存储 1.8 GB / 4 GB</div>
+          <div class="storage-line"></div>
+          <div>日志 30 天 · Worktree 可手动清理</div>
+        </div>
+      </aside>
+
+      <main class="main-thread">
+        <div class="task-topbar">
+          <div class="task-heading">
+            <h3>修复支付金额精度 Bug</h3>
+            <p>feature/agent-payment-precision · worktrees/task-240705-01 · DeepSeek Coder</p>
+          </div>
+          <div class="topbar-actions">
+            <div class="icon-button" title="暂停">Ⅱ</div>
+            <div class="icon-button" title="取消">×</div>
+            <div class="merge-button">合入前审查</div>
+          </div>
+        </div>
+
+        <div class="conversation">
+          <div class="message">
+            <div class="avatar">我</div>
+            <div class="message-body">
+              <div class="message-meta">用户 · 09:42</div>
+              <p class="message-title">修复支付模块金额精度 Bug，别污染主工作区。</p>
+              <div class="inline-chips">
+                <div class="chip">本地 Git 仓库</div>
+                <div class="chip">隔离 Worktree</div>
+                <div class="chip">默认验证 test + lint</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="message-meta">Agent · 09:43</div>
+              <p class="message-title">我先拆成 4 个步骤，修改前会保持主工作区只读。</p>
+              <div class="todo-block">
+                <div class="todo-row"><div class="check">✓</div><div>定位金额计算入口与失败用例</div><div class="mini-status">完成</div></div>
+                <div class="todo-row"><div class="check">✓</div><div>修正 Decimal 舍入策略</div><div class="mini-status">完成</div></div>
+                <div class="todo-row"><div class="check progress">2</div><div>运行验证并分析失败日志</div><div class="mini-status">验证中</div></div>
+                <div class="todo-row"><div class="check progress">4</div><div>生成 Diff、报告和证据包</div><div class="mini-status">等待</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="message-meta">命令执行 · 实时日志</div>
+              <p class="message-title">验证命令正在任务 Worktree 内运行。</p>
+              <div class="run-card">
+                <div class="run-head"><span>npm run test -- payment</span><span>00:18 · exit pending</span></div>
+                <div class="terminal">
+                  <span class="muted">$ npm run test -- payment</span>
+                  <span class="ok">PASS src/payment/amount.test.ts</span>
+                  <span class="ok">PASS src/payment/refund.test.ts</span>
+                  <span>RUNS src/payment/precision-regression.test.ts</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="message-meta">交付预览 · 自动更新</div>
+              <p class="message-title">当前已发现 4 个变更文件，质量门禁暂未阻塞。</p>
+              <div class="artifact-strip">
+                <div class="artifact"><strong>Diff</strong><span>+82 / -19 · 4 files</span></div>
+                <div class="artifact"><strong>测试报告</strong><span>2 passed · 1 running</span></div>
+                <div class="artifact"><strong>Proof Pack</strong><span>计划、日志、审批记录已索引</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-box">
+            <div class="composer-placeholder">给 Agent 反馈，或要求继续修改当前 Diff...</div>
+            <div class="send-button">↵</div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="review-panel">
+        <div class="review-head">
+          <strong>审查抽屉</strong>
+          <span>合入前证据、风险、记忆与存储透明可查</span>
+        </div>
+
+        <div class="review-body">
+          <div class="inspector-section">
+            <h4>交付评分</h4>
+            <div class="score-row">
+              <div class="score">91</div>
+              <div class="score-caption">低风险<br>可继续审查</div>
+            </div>
+          </div>
+
+          <div class="inspector-section">
+            <h4>质量门禁</h4>
+            <div class="gate-row"><span>验证命令</span><span class="gate-state">进行中</span></div>
+            <div class="gate-row"><span>高风险审批</span><span class="gate-state">通过</span></div>
+            <div class="gate-row"><span>密钥扫描</span><span class="gate-state">通过</span></div>
+            <div class="gate-row"><span>最终 Diff</span><span class="gate-state warn">待生成</span></div>
+          </div>
+
+          <div class="inspector-section">
+            <h4>可控记忆</h4>
+            <div class="gate-row"><span>仓库默认命令</span><span class="gate-state">已使用</span></div>
+            <div class="gate-row"><span>用户偏好</span><span class="gate-state">只读展示</span></div>
+            <div class="gate-row"><span>长期记忆</span><span class="gate-state">2 条</span></div>
+          </div>
+
+          <div class="inspector-section">
+            <h4>本地路径</h4>
+            <div class="path-box">D:\codemax\.agent-console\tasks\task-240705-01\artifacts</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note">左侧沿用 Codex 式线程列表，任务状态、评分和审批提醒直接露出。</div>
+  <div class="note">主区域用对话流承载计划、日志、Diff 摘要和用户反馈，不再像传统后台。</div>
+  <div class="note">右侧审查抽屉保持轻量，专门放质量门禁、证据包、记忆和存储透明度。</div>
+</div>

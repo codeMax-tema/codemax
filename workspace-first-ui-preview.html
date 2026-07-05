@@ -1,0 +1,1365 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Console Workspace Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f6f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --surface-muted: #eef2f7;
+        --text: #161b24;
+        --text-soft: #3c4656;
+        --muted: #727d90;
+        --faint: #9aa4b4;
+        --border: #dfe5ee;
+        --border-strong: #cbd5e1;
+        --accent: #111827;
+        --accent-soft: #e7ecf3;
+        --blue: #2563eb;
+        --green: #16a34a;
+        --yellow: #b7791f;
+        --red: #dc2626;
+        --shadow: 0 20px 56px rgba(15, 23, 42, 0.12);
+        --radius: 8px;
+        --sidebar-width: 308px;
+        --inspector-width: 312px;
+        --row-height: 44px;
+        --font-size: 13px;
+      }
+
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0f131b;
+        --surface: #161b25;
+        --surface-soft: #1b2230;
+        --surface-muted: #232c3d;
+        --text: #eef2f7;
+        --text-soft: #cbd5e1;
+        --muted: #9aa8bb;
+        --faint: #7b8798;
+        --border: #2b3547;
+        --border-strong: #3b475d;
+        --accent: #f8fafc;
+        --accent-soft: #273247;
+        --shadow: 0 24px 64px rgba(0, 0, 0, 0.34);
+      }
+
+      html[data-density="compact"] {
+        --sidebar-width: 292px;
+        --inspector-width: 292px;
+        --row-height: 38px;
+        --font-size: 12px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 1120px;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+        font-size: var(--font-size);
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app {
+        width: min(1540px, calc(100vw - 32px));
+        height: calc(100vh - 32px);
+        min-height: 760px;
+        margin: 16px auto;
+        display: grid;
+        grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .workspace-sidebar {
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        min-width: 0;
+        border-right: 1px solid var(--border);
+        background: var(--surface-soft);
+      }
+
+      .workspace-top {
+        padding: 13px 13px 11px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .workspace-switcher {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .workspace-name {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 9px;
+      }
+
+      .mark {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+        border-radius: 7px;
+        background: var(--accent);
+        box-shadow: inset 0 0 0 7px var(--surface);
+      }
+
+      .workspace-name strong {
+        display: block;
+        max-width: 172px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-size: 13px;
+      }
+
+      .workspace-name span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .chevron {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .quick-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr 34px;
+        gap: 7px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .quick-btn,
+      .icon-btn,
+      .mode-btn,
+      .primary-btn,
+      .ghost-btn {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface);
+        color: var(--text-soft);
+      }
+
+      .quick-btn {
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        font-size: 12px;
+      }
+
+      .quick-btn.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--surface);
+      }
+
+      html[data-theme="dark"] .quick-btn.primary,
+      html[data-theme="dark"] .primary-btn {
+        color: #111827;
+      }
+
+      .icon-btn {
+        width: 34px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .repo-scroll {
+        min-height: 0;
+        overflow: auto;
+        padding: 8px 8px 14px;
+      }
+
+      .repo-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 8px 7px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .repo-heading strong {
+        max-width: 190px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--text-soft);
+        font-size: 12px;
+      }
+
+      .repo-heading span {
+        color: var(--faint);
+      }
+
+      .task-thread {
+        width: 100%;
+        min-height: var(--row-height);
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        margin: 0 0 4px;
+        padding: 8px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+      }
+
+      .task-thread:hover,
+      .task-thread.active {
+        border-color: var(--border);
+        background: var(--surface);
+      }
+
+      .state-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      .state-dot.waiting {
+        background: #f59e0b;
+      }
+
+      .state-dot.done {
+        background: #64748b;
+      }
+
+      .state-dot.failed {
+        background: var(--red);
+      }
+
+      .thread-copy {
+        min-width: 0;
+      }
+
+      .thread-copy strong {
+        display: block;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.25;
+      }
+
+      .thread-copy span {
+        display: block;
+        margin-top: 4px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .thread-pill {
+        min-width: 28px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 7px;
+        border-radius: 999px;
+        background: var(--surface-muted);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .sidebar-footer {
+        padding: 10px 12px 12px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .storage-bar {
+        height: 6px;
+        margin: 8px 0;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--surface-muted);
+      }
+
+      .storage-bar span {
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--accent), var(--blue));
+      }
+
+      .thread-view {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        background: var(--surface);
+      }
+
+      .thread-header {
+        min-height: 62px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 0 22px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .title-block {
+        min-width: 0;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-size: 16px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .title-block p {
+        margin: 5px 0 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+      }
+
+      .primary-btn {
+        height: 32px;
+        padding: 0 12px;
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--surface);
+      }
+
+      .ghost-btn,
+      .mode-btn {
+        height: 32px;
+        padding: 0 10px;
+      }
+
+      .mode-btn.active {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--surface);
+      }
+
+      html[data-theme="dark"] .mode-btn.active {
+        color: #111827;
+      }
+
+      .thread-content {
+        min-height: 0;
+        overflow: auto;
+        padding: 24px 34px 26px;
+      }
+
+      .checkpoint-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 22px;
+      }
+
+      .checkpoint {
+        min-height: 74px;
+        padding: 11px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface-soft);
+      }
+
+      .checkpoint strong {
+        display: block;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .checkpoint span {
+        display: block;
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .message {
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        gap: 13px;
+        margin-bottom: 18px;
+      }
+
+      .avatar {
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: var(--surface-muted);
+        color: var(--text-soft);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .avatar.agent {
+        background: var(--accent);
+        color: var(--surface);
+      }
+
+      html[data-theme="dark"] .avatar.agent {
+        color: #111827;
+      }
+
+      .message-body {
+        max-width: 900px;
+        min-width: 0;
+      }
+
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .message-body h2 {
+        margin: 0 0 7px;
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.45;
+        letter-spacing: 0;
+      }
+
+      .message-body p {
+        margin: 0;
+        color: var(--text-soft);
+        line-height: 1.62;
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 10px;
+      }
+
+      .chip {
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--text-soft);
+        font-size: 11px;
+      }
+
+      .todo-list,
+      .terminal-card,
+      .diff-card,
+      .artifact-grid {
+        margin-top: 11px;
+      }
+
+      .todo-list {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface-soft);
+      }
+
+      .todo-row {
+        display: grid;
+        grid-template-columns: 20px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 42px;
+        padding: 9px 12px;
+        border-top: 1px solid var(--border);
+      }
+
+      .todo-row:first-child {
+        border-top: 0;
+      }
+
+      .todo-state {
+        width: 18px;
+        height: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: var(--green);
+        color: #ffffff;
+        font-size: 11px;
+      }
+
+      .todo-state.running {
+        background: var(--blue);
+      }
+
+      .todo-state.waiting {
+        background: #f59e0b;
+      }
+
+      .todo-text {
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .todo-meta {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .terminal-card {
+        overflow: hidden;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        background: #111827;
+        color: #d1fae5;
+      }
+
+      .terminal-head {
+        min-height: 35px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 12px;
+        border-bottom: 1px solid #263246;
+        color: #cbd5e1;
+        font-size: 11px;
+      }
+
+      .terminal-body {
+        padding: 11px 12px 13px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 11px;
+        line-height: 1.72;
+      }
+
+      .terminal-body span {
+        display: block;
+      }
+
+      .terminal-body .muted {
+        color: #94a3b8;
+      }
+
+      .terminal-body .ok {
+        color: #86efac;
+      }
+
+      .terminal-body .warn {
+        color: #fbbf24;
+      }
+
+      .diff-card {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface-soft);
+      }
+
+      .diff-head {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .diff-lines {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.72;
+      }
+
+      .line-num,
+      .line-code {
+        padding: 2px 10px;
+        border-top: 1px solid rgba(148, 163, 184, 0.16);
+      }
+
+      .line-num {
+        color: var(--faint);
+        text-align: right;
+        background: rgba(148, 163, 184, 0.08);
+      }
+
+      .add {
+        background: rgba(22, 163, 74, 0.11);
+      }
+
+      .remove {
+        background: rgba(220, 38, 38, 0.1);
+      }
+
+      .artifact-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .artifact {
+        min-height: 72px;
+        padding: 11px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface-soft);
+      }
+
+      .artifact strong {
+        display: block;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .artifact span {
+        display: block;
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .composer {
+        padding: 13px 18px;
+        border-top: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .composer-box {
+        min-height: 48px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 0 9px 0 14px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .composer-placeholder {
+        color: var(--muted);
+      }
+
+      .send-btn {
+        width: 32px;
+        height: 32px;
+        border: 0;
+        border-radius: 7px;
+        background: var(--accent);
+        color: var(--surface);
+      }
+
+      html[data-theme="dark"] .send-btn {
+        color: #111827;
+      }
+
+      .inspector {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        border-left: 1px solid var(--border);
+        background: var(--surface-soft);
+      }
+
+      .inspector-top {
+        padding: 14px 14px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .inspector-top strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .inspector-top span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .mode-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 12px;
+      }
+
+      .inspector-scroll {
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .section {
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .section h3 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0;
+      }
+
+      .score-row {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .score {
+        font-size: 34px;
+        line-height: 1;
+        font-weight: 760;
+      }
+
+      .score-note {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        text-align: right;
+      }
+
+      .kv-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 31px;
+        border-top: 1px solid var(--border);
+        color: var(--text-soft);
+        font-size: 12px;
+      }
+
+      .kv-row:first-of-type {
+        border-top: 0;
+      }
+
+      .kv-state {
+        color: var(--green);
+        white-space: nowrap;
+        font-size: 11px;
+      }
+
+      .kv-state.warn {
+        color: var(--yellow);
+      }
+
+      .kv-state.fail {
+        color: var(--red);
+      }
+
+      .path-box {
+        padding: 9px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+        word-break: break-all;
+      }
+
+      .memory-item {
+        padding: 9px 0;
+        border-top: 1px solid var(--border);
+      }
+
+      .memory-item:first-of-type {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .memory-item strong {
+        display: block;
+        font-size: 12px;
+      }
+
+      .memory-item span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 1140px) {
+        .app {
+          grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        }
+
+        .inspector {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="workspace-sidebar" aria-label="Workspace navigation">
+        <div class="workspace-top">
+          <div class="workspace-switcher">
+            <div class="workspace-name">
+              <div class="mark" aria-hidden="true"></div>
+              <div>
+                <strong>codemax</strong>
+                <span data-i18n="workspace.local">本地工作区</span>
+              </div>
+            </div>
+            <div class="chevron" aria-hidden="true">⌄</div>
+          </div>
+        </div>
+
+        <div class="quick-row">
+          <button class="quick-btn primary" type="button" data-i18n="action.newTask">新建任务</button>
+          <button class="quick-btn" type="button" data-i18n="action.review">审查</button>
+          <button class="icon-btn" type="button" aria-label="Search">⌕</button>
+        </div>
+
+        <div class="repo-scroll">
+          <div class="repo-heading">
+            <strong>payment-service</strong>
+            <span>3</span>
+          </div>
+          <button class="task-thread active" type="button" data-title="修复支付金额精度 Bug" data-status="验证中 · 第 2 轮 · DeepSeek Coder">
+            <span class="state-dot"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.payment">修复支付金额精度 Bug</strong>
+              <span data-i18n="task.paymentMeta">验证中 · 第 2 轮</span>
+            </span>
+            <span class="thread-pill">91</span>
+          </button>
+          <button class="task-thread" type="button" data-title="升级订单依赖版本" data-status="等待审批 · 依赖变更">
+            <span class="state-dot waiting"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.dependency">升级订单依赖版本</strong>
+              <span data-i18n="task.dependencyMeta">等待审批 · 依赖变更</span>
+            </span>
+            <span class="thread-pill">!</span>
+          </button>
+          <button class="task-thread" type="button" data-title="生成支付模块证据包" data-status="已完成 · Proof Pack 已保存">
+            <span class="state-dot done"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.proof">生成支付模块证据包</strong>
+              <span data-i18n="task.proofMeta">已完成 · Proof Pack 已保存</span>
+            </span>
+            <span class="thread-pill">88</span>
+          </button>
+
+          <div class="repo-heading">
+            <strong>shop-api</strong>
+            <span>2</span>
+          </div>
+          <button class="task-thread" type="button" data-title="补充商品服务单测" data-status="执行中 · pytest">
+            <span class="state-dot"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.tests">补充商品服务单测</strong>
+              <span data-i18n="task.testsMeta">执行中 · pytest</span>
+            </span>
+            <span class="thread-pill">74</span>
+          </button>
+          <button class="task-thread" type="button" data-title="解释库存锁实现" data-status="已完成 · 未合入">
+            <span class="state-dot done"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.stock">解释库存锁实现</strong>
+              <span data-i18n="task.stockMeta">已完成 · 未合入</span>
+            </span>
+            <span class="thread-pill">--</span>
+          </button>
+
+          <div class="repo-heading">
+            <strong>admin-web</strong>
+            <span>2</span>
+          </div>
+          <button class="task-thread" type="button" data-title="优化任务详情页加载" data-status="排队中 · 等待资源">
+            <span class="state-dot waiting"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.ui">优化任务详情页加载</strong>
+              <span data-i18n="task.uiMeta">排队中 · 等待资源</span>
+            </span>
+            <span class="thread-pill">Q</span>
+          </button>
+          <button class="task-thread" type="button" data-title="处理构建失败" data-status="需要人工介入">
+            <span class="state-dot failed"></span>
+            <span class="thread-copy">
+              <strong data-i18n="task.build">处理构建失败</strong>
+              <span data-i18n="task.buildMeta">需要人工介入</span>
+            </span>
+            <span class="thread-pill">0</span>
+          </button>
+        </div>
+
+        <div class="sidebar-footer">
+          <div data-i18n="storage.summary">本地存储 1.8 GB / 4 GB</div>
+          <div class="storage-bar" aria-hidden="true"><span></span></div>
+          <div data-i18n="storage.rule">SQLite 只存索引，大文件落盘可清理</div>
+        </div>
+      </aside>
+
+      <main class="thread-view">
+        <header class="thread-header">
+          <div class="title-block">
+            <h1 id="taskTitle">修复支付金额精度 Bug</h1>
+            <p id="taskStatus">验证中 · 第 2 轮 · DeepSeek Coder</p>
+          </div>
+          <div class="header-actions">
+            <button class="ghost-btn" type="button" data-i18n="action.pause">暂停</button>
+            <button class="ghost-btn" type="button" data-i18n="action.cancel">取消</button>
+            <button class="primary-btn" type="button" data-i18n="action.mergeReview">合入前审查</button>
+          </div>
+        </header>
+
+        <section class="thread-content" aria-label="Task thread">
+          <div class="checkpoint-strip">
+            <div class="checkpoint">
+              <strong data-i18n="checkpoint.worktree">隔离工作区</strong>
+              <span>D:\codemax\.agent-console\worktrees\task-240705-01</span>
+            </div>
+            <div class="checkpoint">
+              <strong data-i18n="checkpoint.verify">验证命令</strong>
+              <span>npm run test -- payment<br />npm run lint</span>
+            </div>
+            <div class="checkpoint">
+              <strong data-i18n="checkpoint.risk">风险状态</strong>
+              <span data-i18n="checkpoint.riskText">未发现越权路径，依赖无变更</span>
+            </div>
+            <div class="checkpoint">
+              <strong data-i18n="checkpoint.memory">记忆使用</strong>
+              <span data-i18n="checkpoint.memoryText">已使用仓库默认测试命令与用户偏好</span>
+            </div>
+          </div>
+
+          <article class="message">
+            <div class="avatar">我</div>
+            <div class="message-body">
+              <div class="meta" data-i18n="msg.userMeta">用户 · 09:42</div>
+              <h2 data-i18n="msg.userTitle">修复支付模块金额精度 Bug，别污染主工作区。</h2>
+              <div class="chip-row">
+                <span class="chip" data-i18n="chip.localRepo">本地 Git 仓库</span>
+                <span class="chip" data-i18n="chip.worktree">隔离 Worktree</span>
+                <span class="chip" data-i18n="chip.verify">默认验证 test + lint</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="meta" data-i18n="msg.agentMeta">Agent · 09:43</div>
+              <h2 data-i18n="msg.planTitle">我先拆成 4 个步骤，修改前保持主工作区只读。</h2>
+              <div class="todo-list">
+                <div class="todo-row">
+                  <span class="todo-state">✓</span>
+                  <span class="todo-text" data-i18n="todo.locate">定位金额计算入口与失败用例</span>
+                  <span class="todo-meta" data-i18n="state.done">完成</span>
+                </div>
+                <div class="todo-row">
+                  <span class="todo-state">✓</span>
+                  <span class="todo-text" data-i18n="todo.fix">修正 Decimal 舍入策略</span>
+                  <span class="todo-meta" data-i18n="state.done">完成</span>
+                </div>
+                <div class="todo-row">
+                  <span class="todo-state running">2</span>
+                  <span class="todo-text" data-i18n="todo.verify">运行验证并分析失败日志</span>
+                  <span class="todo-meta" data-i18n="state.running">验证中</span>
+                </div>
+                <div class="todo-row">
+                  <span class="todo-state waiting">4</span>
+                  <span class="todo-text" data-i18n="todo.proof">生成 Diff、报告和证据包</span>
+                  <span class="todo-meta" data-i18n="state.waiting">等待</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="meta" data-i18n="msg.commandMeta">命令执行 · 实时日志</div>
+              <h2 data-i18n="msg.commandTitle">验证命令正在任务 Worktree 内运行。</h2>
+              <div class="terminal-card">
+                <div class="terminal-head">
+                  <span>npm run test -- payment</span>
+                  <span>00:18 · exit pending</span>
+                </div>
+                <div class="terminal-body">
+                  <span class="muted">$ npm run test -- payment</span>
+                  <span class="ok">PASS src/payment/amount.test.ts</span>
+                  <span class="ok">PASS src/payment/refund.test.ts</span>
+                  <span class="warn">RUNS src/payment/precision-regression.test.ts</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="message">
+            <div class="avatar agent">A</div>
+            <div class="message-body">
+              <div class="meta" data-i18n="msg.diffMeta">交付预览 · 自动更新</div>
+              <h2 data-i18n="msg.diffTitle">当前已发现 4 个变更文件，质量门禁暂未阻塞。</h2>
+              <div class="diff-card">
+                <div class="diff-head">
+                  <span>src/payment/amount.ts</span>
+                  <span>+28 -9</span>
+                </div>
+                <div class="diff-lines" aria-hidden="true">
+                  <span class="line-num">41</span><span class="line-code remove">- return Math.round(total * 100) / 100</span>
+                  <span class="line-num">41</span><span class="line-code add">+ return decimal(total).toFixed(2)</span>
+                  <span class="line-num">42</span><span class="line-code add">+ // 保持退款与支付路径一致的精度策略</span>
+                  <span class="line-num">43</span><span class="line-code">  }</span>
+                </div>
+              </div>
+              <div class="artifact-grid">
+                <div class="artifact">
+                  <strong>Diff</strong>
+                  <span>+82 / -19 · 4 files</span>
+                </div>
+                <div class="artifact">
+                  <strong data-i18n="artifact.report">测试报告</strong>
+                  <span>2 passed · 1 running</span>
+                </div>
+                <div class="artifact">
+                  <strong>Proof Pack</strong>
+                  <span data-i18n="artifact.proof">计划、日志、审批记录已索引</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <footer class="composer">
+          <div class="composer-box">
+            <div class="composer-placeholder" data-i18n="composer.placeholder">给 Agent 反馈，或要求继续修改当前 Diff...</div>
+            <button class="send-btn" type="button" aria-label="Send">↵</button>
+          </div>
+        </footer>
+      </main>
+
+      <aside class="inspector" aria-label="Review inspector">
+        <div class="inspector-top">
+          <strong data-i18n="inspector.title">审查抽屉</strong>
+          <span data-i18n="inspector.subtitle">证据、风险、记忆与存储透明可查</span>
+          <div class="mode-row" aria-label="Display options">
+            <button class="mode-btn active" type="button" data-theme-btn="light" data-i18n="mode.light">浅色</button>
+            <button class="mode-btn" type="button" data-theme-btn="dark" data-i18n="mode.dark">深色</button>
+            <button class="mode-btn" type="button" data-density-btn data-i18n="mode.compact">紧凑</button>
+            <button class="mode-btn" type="button" data-lang-btn data-i18n="mode.lang">EN</button>
+          </div>
+        </div>
+
+        <div class="inspector-scroll">
+          <section class="section">
+            <h3 data-i18n="section.score">交付评分</h3>
+            <div class="score-row">
+              <div class="score">91</div>
+              <div class="score-note" data-i18n="score.note">低风险<br />可继续审查</div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h3 data-i18n="section.gate">质量门禁</h3>
+            <div class="kv-row"><span data-i18n="gate.verify">验证命令</span><span class="kv-state" data-i18n="gate.running">进行中</span></div>
+            <div class="kv-row"><span data-i18n="gate.approval">高风险审批</span><span class="kv-state" data-i18n="gate.pass">通过</span></div>
+            <div class="kv-row"><span data-i18n="gate.secret">密钥扫描</span><span class="kv-state" data-i18n="gate.pass2">通过</span></div>
+            <div class="kv-row"><span data-i18n="gate.finalDiff">最终 Diff</span><span class="kv-state warn" data-i18n="gate.pending">待生成</span></div>
+          </section>
+
+          <section class="section">
+            <h3 data-i18n="section.memory">可控记忆</h3>
+            <div class="memory-item">
+              <strong data-i18n="memory.command">仓库默认命令</strong>
+              <span data-i18n="memory.commandText">来自用户设置，可编辑，当前任务已使用。</span>
+            </div>
+            <div class="memory-item">
+              <strong data-i18n="memory.preference">用户偏好</strong>
+              <span data-i18n="memory.preferenceText">偏好先拆方案再执行；高风险操作必须审批。</span>
+            </div>
+          </section>
+
+          <section class="section">
+            <h3 data-i18n="section.storage">存储透明</h3>
+            <div class="kv-row"><span>SQLite</span><span class="kv-state">14 MB</span></div>
+            <div class="kv-row"><span>Logs</span><span class="kv-state warn">840 MB</span></div>
+            <div class="kv-row"><span>Worktrees</span><span class="kv-state">980 MB</span></div>
+            <div class="path-box">D:\codemax\.agent-console\tasks\task-240705-01\artifacts</div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      const translations = {
+        "zh-CN": {
+          "workspace.local": "本地工作区",
+          "action.newTask": "新建任务",
+          "action.review": "审查",
+          "action.pause": "暂停",
+          "action.cancel": "取消",
+          "action.mergeReview": "合入前审查",
+          "task.payment": "修复支付金额精度 Bug",
+          "task.paymentMeta": "验证中 · 第 2 轮",
+          "task.dependency": "升级订单依赖版本",
+          "task.dependencyMeta": "等待审批 · 依赖变更",
+          "task.proof": "生成支付模块证据包",
+          "task.proofMeta": "已完成 · Proof Pack 已保存",
+          "task.tests": "补充商品服务单测",
+          "task.testsMeta": "执行中 · pytest",
+          "task.stock": "解释库存锁实现",
+          "task.stockMeta": "已完成 · 未合入",
+          "task.ui": "优化任务详情页加载",
+          "task.uiMeta": "排队中 · 等待资源",
+          "task.build": "处理构建失败",
+          "task.buildMeta": "需要人工介入",
+          "storage.summary": "本地存储 1.8 GB / 4 GB",
+          "storage.rule": "SQLite 只存索引，大文件落盘可清理",
+          "checkpoint.worktree": "隔离工作区",
+          "checkpoint.verify": "验证命令",
+          "checkpoint.risk": "风险状态",
+          "checkpoint.riskText": "未发现越权路径，依赖无变更",
+          "checkpoint.memory": "记忆使用",
+          "checkpoint.memoryText": "已使用仓库默认测试命令与用户偏好",
+          "msg.userMeta": "用户 · 09:42",
+          "msg.userTitle": "修复支付模块金额精度 Bug，别污染主工作区。",
+          "chip.localRepo": "本地 Git 仓库",
+          "chip.worktree": "隔离 Worktree",
+          "chip.verify": "默认验证 test + lint",
+          "msg.agentMeta": "Agent · 09:43",
+          "msg.planTitle": "我先拆成 4 个步骤，修改前保持主工作区只读。",
+          "todo.locate": "定位金额计算入口与失败用例",
+          "todo.fix": "修正 Decimal 舍入策略",
+          "todo.verify": "运行验证并分析失败日志",
+          "todo.proof": "生成 Diff、报告和证据包",
+          "state.done": "完成",
+          "state.running": "验证中",
+          "state.waiting": "等待",
+          "msg.commandMeta": "命令执行 · 实时日志",
+          "msg.commandTitle": "验证命令正在任务 Worktree 内运行。",
+          "msg.diffMeta": "交付预览 · 自动更新",
+          "msg.diffTitle": "当前已发现 4 个变更文件，质量门禁暂未阻塞。",
+          "artifact.report": "测试报告",
+          "artifact.proof": "计划、日志、审批记录已索引",
+          "composer.placeholder": "给 Agent 反馈，或要求继续修改当前 Diff...",
+          "inspector.title": "审查抽屉",
+          "inspector.subtitle": "证据、风险、记忆与存储透明可查",
+          "mode.light": "浅色",
+          "mode.dark": "深色",
+          "mode.compact": "紧凑",
+          "mode.lang": "EN",
+          "section.score": "交付评分",
+          "score.note": "低风险<br />可继续审查",
+          "section.gate": "质量门禁",
+          "gate.verify": "验证命令",
+          "gate.running": "进行中",
+          "gate.approval": "高风险审批",
+          "gate.pass": "通过",
+          "gate.secret": "密钥扫描",
+          "gate.pass2": "通过",
+          "gate.finalDiff": "最终 Diff",
+          "gate.pending": "待生成",
+          "section.memory": "可控记忆",
+          "memory.command": "仓库默认命令",
+          "memory.commandText": "来自用户设置，可编辑，当前任务已使用。",
+          "memory.preference": "用户偏好",
+          "memory.preferenceText": "偏好先拆方案再执行；高风险操作必须审批。",
+          "section.storage": "存储透明"
+        },
+        "en-US": {
+          "workspace.local": "Local workspace",
+          "action.newTask": "New task",
+          "action.review": "Review",
+          "action.pause": "Pause",
+          "action.cancel": "Cancel",
+          "action.mergeReview": "Pre-merge review",
+          "task.payment": "Fix payment precision bug",
+          "task.paymentMeta": "Validating · round 2",
+          "task.dependency": "Upgrade order dependency",
+          "task.dependencyMeta": "Needs approval · dependency change",
+          "task.proof": "Generate payment proof pack",
+          "task.proofMeta": "Done · Proof Pack saved",
+          "task.tests": "Add product service tests",
+          "task.testsMeta": "Running · pytest",
+          "task.stock": "Explain inventory lock",
+          "task.stockMeta": "Done · not merged",
+          "task.ui": "Optimize task detail load",
+          "task.uiMeta": "Queued · waiting for resources",
+          "task.build": "Handle build failure",
+          "task.buildMeta": "Needs human input",
+          "storage.summary": "Local storage 1.8 GB / 4 GB",
+          "storage.rule": "SQLite stores indexes; large files stay cleanable",
+          "checkpoint.worktree": "Isolated worktree",
+          "checkpoint.verify": "Verification",
+          "checkpoint.risk": "Risk state",
+          "checkpoint.riskText": "No path escape or dependency change detected",
+          "checkpoint.memory": "Memory use",
+          "checkpoint.memoryText": "Loaded repo commands and user preferences",
+          "msg.userMeta": "User · 09:42",
+          "msg.userTitle": "Fix the payment precision bug without touching my main workspace.",
+          "chip.localRepo": "Local Git repository",
+          "chip.worktree": "Isolated Worktree",
+          "chip.verify": "Default test + lint",
+          "msg.agentMeta": "Agent · 09:43",
+          "msg.planTitle": "I split this into four steps and keep the main workspace read-only.",
+          "todo.locate": "Find amount calculation entry points and failing cases",
+          "todo.fix": "Adjust Decimal rounding policy",
+          "todo.verify": "Run verification and analyze failure logs",
+          "todo.proof": "Generate Diff, report, and Proof Pack",
+          "state.done": "Done",
+          "state.running": "Validating",
+          "state.waiting": "Waiting",
+          "msg.commandMeta": "Command run · live logs",
+          "msg.commandTitle": "Verification is running inside the task worktree.",
+          "msg.diffMeta": "Delivery preview · live update",
+          "msg.diffTitle": "Four changed files found. Quality gates are not blocking yet.",
+          "artifact.report": "Test report",
+          "artifact.proof": "Plan, logs, and approvals are indexed",
+          "composer.placeholder": "Give feedback, or ask the Agent to keep editing the current Diff...",
+          "inspector.title": "Review drawer",
+          "inspector.subtitle": "Evidence, risk, memory, and storage are transparent",
+          "mode.light": "Light",
+          "mode.dark": "Dark",
+          "mode.compact": "Compact",
+          "mode.lang": "中文",
+          "section.score": "Delivery score",
+          "score.note": "Low risk<br />Ready for review",
+          "section.gate": "Quality gates",
+          "gate.verify": "Verification",
+          "gate.running": "Running",
+          "gate.approval": "Risk approval",
+          "gate.pass": "Passed",
+          "gate.secret": "Secret scan",
+          "gate.pass2": "Passed",
+          "gate.finalDiff": "Final Diff",
+          "gate.pending": "Pending",
+          "section.memory": "Memory cockpit",
+          "memory.command": "Repo default command",
+          "memory.commandText": "From user settings. Editable. Used in this task.",
+          "memory.preference": "User preference",
+          "memory.preferenceText": "Plan before execution; risky operations need approval.",
+          "section.storage": "Storage transparency"
+        }
+      };
+
+      let locale = "zh-CN";
+
+      function applyLocale(nextLocale) {
+        locale = nextLocale;
+        document.documentElement.lang = locale;
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          const key = node.getAttribute("data-i18n");
+          const value = translations[locale][key];
+          if (value) node.innerHTML = value;
+        });
+      }
+
+      document.querySelectorAll("[data-theme-btn]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const theme = button.getAttribute("data-theme-btn");
+          document.documentElement.dataset.theme = theme;
+          document.querySelectorAll("[data-theme-btn]").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+        });
+      });
+
+      document.querySelector("[data-density-btn]").addEventListener("click", (event) => {
+        const isCompact = document.documentElement.dataset.density === "compact";
+        document.documentElement.dataset.density = isCompact ? "comfortable" : "compact";
+        event.currentTarget.classList.toggle("active", !isCompact);
+      });
+
+      document.querySelector("[data-lang-btn]").addEventListener("click", () => {
+        applyLocale(locale === "zh-CN" ? "en-US" : "zh-CN");
+      });
+
+      document.querySelectorAll(".task-thread").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".task-thread").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          document.querySelector("#taskTitle").textContent = button.dataset.title;
+          document.querySelector("#taskStatus").textContent = button.dataset.status;
+        });
+      });
+    </script>
+  </body>
+</html>

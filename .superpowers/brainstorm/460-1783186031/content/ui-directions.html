@@ -1,0 +1,467 @@
+<style>
+  .direction-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 22px;
+  }
+
+  .direction-card {
+    border: 1px solid #d7dee9;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  }
+
+  .direction-card:hover,
+  .direction-card.selected {
+    transform: translateY(-2px);
+    border-color: #2563eb;
+    box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12);
+  }
+
+  .preview-shell {
+    height: 360px;
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    background: #f7f9fc;
+    color: #172033;
+    font-family: Inter, "Microsoft YaHei", sans-serif;
+  }
+
+  .preview-side {
+    padding: 14px 10px;
+    background: #ffffff;
+    border-right: 1px solid #dde5f0;
+  }
+
+  .dot-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: #1d4ed8;
+    margin: 0 auto 20px;
+  }
+
+  .side-pill {
+    height: 28px;
+    border-radius: 6px;
+    background: #e8eef9;
+    margin-bottom: 10px;
+  }
+
+  .side-pill.active {
+    background: #cfe0ff;
+  }
+
+  .preview-main {
+    min-width: 0;
+    display: grid;
+    grid-template-rows: 52px 1fr;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid #dde5f0;
+    background: rgba(255, 255, 255, 0.82);
+  }
+
+  .tiny-title {
+    height: 12px;
+    width: 132px;
+    border-radius: 999px;
+    background: #1f2937;
+  }
+
+  .tiny-actions {
+    display: flex;
+    gap: 7px;
+  }
+
+  .tiny-button {
+    width: 42px;
+    height: 22px;
+    border-radius: 6px;
+    background: #e5eaf2;
+  }
+
+  .tiny-button.primary {
+    background: #2563eb;
+  }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: 0.78fr 1.22fr;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .panel {
+    border: 1px solid #dce4ee;
+    border-radius: 8px;
+    background: #fff;
+    padding: 12px;
+    min-width: 0;
+  }
+
+  .panel-title {
+    height: 10px;
+    width: 92px;
+    border-radius: 999px;
+    background: #64748b;
+    margin-bottom: 12px;
+  }
+
+  .task-row {
+    display: grid;
+    grid-template-columns: 8px 1fr 38px;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 0;
+    border-top: 1px solid #edf2f7;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #16a34a;
+  }
+
+  .status-dot.warn {
+    background: #f59e0b;
+  }
+
+  .line {
+    height: 8px;
+    border-radius: 999px;
+    background: #dbe3ee;
+  }
+
+  .tag {
+    height: 18px;
+    border-radius: 5px;
+    background: #eef3f8;
+  }
+
+  .detail-stack {
+    display: grid;
+    gap: 10px;
+  }
+
+  .metric-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .metric {
+    height: 48px;
+    border-radius: 7px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+  }
+
+  .diff-block {
+    height: 70px;
+    border-radius: 7px;
+    background:
+      linear-gradient(90deg, rgba(22, 163, 74, 0.14), transparent 45%),
+      repeating-linear-gradient(to bottom, #eef2f7, #eef2f7 7px, #fff 7px, #fff 14px);
+    border: 1px solid #dfe7f1;
+  }
+
+  .log-block {
+    height: 70px;
+    border-radius: 7px;
+    background: #101827;
+    border: 1px solid #1e293b;
+    padding: 9px;
+    box-sizing: border-box;
+  }
+
+  .terminal-line {
+    height: 6px;
+    border-radius: 999px;
+    background: #5eead4;
+    opacity: 0.75;
+    margin-bottom: 8px;
+  }
+
+  .dense .preview-shell {
+    grid-template-columns: 46px 1fr;
+    background: #f4f6f8;
+  }
+
+  .dense .workspace {
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .dense .panel {
+    border-radius: 6px;
+    padding: 9px;
+  }
+
+  .dense .task-row {
+    padding: 6px 0;
+  }
+
+  .dense-table {
+    border: 1px solid #dbe3ee;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .dense-tr {
+    display: grid;
+    grid-template-columns: 1fr 44px 44px;
+    gap: 8px;
+    padding: 7px;
+    border-top: 1px solid #e9eef5;
+  }
+
+  .dense-tr:first-child {
+    border-top: 0;
+    background: #f8fafc;
+  }
+
+  .dark .preview-shell {
+    background: #101522;
+    color: #e5edf8;
+  }
+
+  .dark .preview-side,
+  .dark .topbar,
+  .dark .panel {
+    background: #151d2c;
+    border-color: #2b364a;
+  }
+
+  .dark .side-pill {
+    background: #253149;
+  }
+
+  .dark .side-pill.active,
+  .dark .dot-logo {
+    background: #14b8a6;
+  }
+
+  .dark .tiny-title {
+    background: #e2e8f0;
+  }
+
+  .dark .tiny-button {
+    background: #293650;
+  }
+
+  .dark .tiny-button.primary {
+    background: #14b8a6;
+  }
+
+  .dark .panel-title {
+    background: #94a3b8;
+  }
+
+  .dark .line,
+  .dark .tag,
+  .dark .metric {
+    background: #233149;
+    border-color: #34445e;
+  }
+
+  .dark .task-row {
+    border-color: #27354d;
+  }
+
+  .risk-radar {
+    height: 104px;
+    border-radius: 8px;
+    background:
+      radial-gradient(circle at center, rgba(20, 184, 166, 0.25), transparent 35%),
+      conic-gradient(from 35deg, rgba(20, 184, 166, 0.14), rgba(245, 158, 11, 0.22), rgba(239, 68, 68, 0.2), rgba(20, 184, 166, 0.14));
+    border: 1px solid #334155;
+  }
+
+  .card-body {
+    padding: 14px;
+  }
+
+  .card-body h3 {
+    margin: 0 0 7px;
+    font-size: 16px;
+  }
+
+  .card-body p {
+    margin: 0;
+    color: #5f6e84;
+    line-height: 1.45;
+  }
+
+  .tradeoff {
+    margin-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+    color: #475569;
+  }
+
+  .tradeoff span {
+    display: block;
+    padding: 7px 8px;
+    border-radius: 6px;
+    background: #f5f7fb;
+  }
+
+  @media (max-width: 1050px) {
+    .direction-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<h2>先选一个 UI 大方向呀</h2>
+<p class="subtitle">这是 Agent 编程任务调度台的纯前端视觉方向对比。请重点看：信息密度、任务状态是否清楚、风险与证据是否够醒目。</p>
+
+<div class="direction-grid">
+  <div class="direction-card card" data-choice="a-minimal-command" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-side">
+        <div class="dot-logo"></div>
+        <div class="side-pill active"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+      </div>
+      <div class="preview-main">
+        <div class="topbar">
+          <div class="tiny-title"></div>
+          <div class="tiny-actions">
+            <div class="tiny-button"></div>
+            <div class="tiny-button primary"></div>
+          </div>
+        </div>
+        <div class="workspace">
+          <div class="panel">
+            <div class="panel-title"></div>
+            <div class="task-row"><div class="status-dot"></div><div class="line"></div><div class="tag"></div></div>
+            <div class="task-row"><div class="status-dot warn"></div><div class="line"></div><div class="tag"></div></div>
+            <div class="task-row"><div class="status-dot"></div><div class="line"></div><div class="tag"></div></div>
+            <div class="task-row"><div class="status-dot warn"></div><div class="line"></div><div class="tag"></div></div>
+          </div>
+          <div class="panel detail-stack">
+            <div class="panel-title"></div>
+            <div class="metric-row"><div class="metric"></div><div class="metric"></div><div class="metric"></div></div>
+            <div class="diff-block"></div>
+            <div class="log-block"><div class="terminal-line"></div><div class="terminal-line" style="width:76%"></div><div class="terminal-line" style="width:54%"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 简约指挥台（推荐）</h3>
+      <p>浅色、克制、信息层级清楚，适合作为默认 UI。任务总览和详情并重，降低第一次使用的压力。</p>
+      <div class="tradeoff">
+        <span>优点：清楚、稳、容易国际化</span>
+        <span>取舍：单屏信息量适中，不追求极致密度</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="direction-card card dense" data-choice="b-dense-pro" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-side">
+        <div class="dot-logo"></div>
+        <div class="side-pill active"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+      </div>
+      <div class="preview-main">
+        <div class="topbar">
+          <div class="tiny-title"></div>
+          <div class="tiny-actions">
+            <div class="tiny-button"></div>
+            <div class="tiny-button"></div>
+            <div class="tiny-button primary"></div>
+          </div>
+        </div>
+        <div class="workspace">
+          <div class="panel">
+            <div class="panel-title"></div>
+            <div class="dense-table">
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+              <div class="dense-tr"><div class="line"></div><div class="tag"></div><div class="tag"></div></div>
+            </div>
+          </div>
+          <div class="panel detail-stack">
+            <div class="metric-row"><div class="metric"></div><div class="metric"></div><div class="metric"></div></div>
+            <div class="diff-block"></div>
+            <div class="diff-block" style="height:54px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 紧凑专业模式</h3>
+      <p>更像工程管理台，任务表格、状态和门禁结果尽量同屏展示，适合高频管理多个 Agent 任务。</p>
+      <div class="tradeoff">
+        <span>优点：效率高，适合技术负责人</span>
+        <span>取舍：新用户会感觉更“硬核”</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="direction-card card dark" data-choice="c-dark-risk" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-side">
+        <div class="dot-logo"></div>
+        <div class="side-pill active"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+        <div class="side-pill"></div>
+      </div>
+      <div class="preview-main">
+        <div class="topbar">
+          <div class="tiny-title"></div>
+          <div class="tiny-actions">
+            <div class="tiny-button"></div>
+            <div class="tiny-button primary"></div>
+          </div>
+        </div>
+        <div class="workspace">
+          <div class="panel detail-stack">
+            <div class="panel-title"></div>
+            <div class="risk-radar"></div>
+            <div class="task-row"><div class="status-dot warn"></div><div class="line"></div><div class="tag"></div></div>
+            <div class="task-row"><div class="status-dot"></div><div class="line"></div><div class="tag"></div></div>
+          </div>
+          <div class="panel detail-stack">
+            <div class="metric-row"><div class="metric"></div><div class="metric"></div><div class="metric"></div></div>
+            <div class="log-block" style="height:104px"><div class="terminal-line"></div><div class="terminal-line" style="width:78%"></div><div class="terminal-line" style="width:62%"></div><div class="terminal-line" style="width:44%"></div></div>
+            <div class="diff-block"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 深色风险控制台</h3>
+      <p>强调风险雷达、审批和日志监控，视觉更有“运维指挥室”感，适合夜间和高风险任务审查。</p>
+      <div class="tradeoff">
+        <span>优点：风险、日志、审批很醒目</span>
+        <span>取舍：默认使用会稍显紧张</span>
+      </div>
+    </div>
+  </div>
+</div>

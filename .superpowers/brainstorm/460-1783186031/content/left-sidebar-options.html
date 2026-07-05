@@ -1,0 +1,603 @@
+<style>
+  .sidebar-options {
+    margin-top: 22px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .sidebar-option {
+    border: 1px solid #d9e0ea;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    cursor: pointer;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  }
+
+  .sidebar-option:hover,
+  .sidebar-option.selected {
+    border-color: #111827;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.13);
+    transform: translateY(-2px);
+  }
+
+  .mini-app {
+    height: 510px;
+    display: grid;
+    grid-template-columns: 276px 1fr;
+    background: #fff;
+    color: #151922;
+    font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+
+  .mock-main {
+    border-left: 1px solid #e5eaf1;
+    background:
+      linear-gradient(#fff, #fff),
+      radial-gradient(circle at top right, rgba(15, 23, 42, 0.04), transparent 32%);
+    display: grid;
+    grid-template-rows: 50px 1fr 64px;
+  }
+
+  .main-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px;
+    border-bottom: 1px solid #e7ecf3;
+  }
+
+  .top-line {
+    width: 178px;
+    height: 12px;
+    border-radius: 999px;
+    background: #111827;
+  }
+
+  .top-actions {
+    display: flex;
+    gap: 7px;
+  }
+
+  .top-dot {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #dce4ee;
+    border-radius: 7px;
+  }
+
+  .message-lines {
+    padding: 22px 28px;
+    display: grid;
+    gap: 14px;
+    align-content: start;
+  }
+
+  .msg-line {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 12px;
+  }
+
+  .avatar-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #e9eef5;
+  }
+
+  .avatar-dot.dark {
+    background: #111827;
+  }
+
+  .text-stack {
+    display: grid;
+    gap: 7px;
+    padding-top: 4px;
+  }
+
+  .text-line {
+    height: 8px;
+    border-radius: 999px;
+    background: #e0e7f0;
+  }
+
+  .composer-line {
+    margin: 10px 16px 14px;
+    border: 1px solid #d9e1ec;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .option-body {
+    padding: 14px;
+    border-top: 1px solid #edf1f6;
+  }
+
+  .option-body h3 {
+    margin: 0 0 7px;
+    font-size: 15px;
+    color: #111827;
+  }
+
+  .option-body p {
+    margin: 0;
+    color: #5f6d80;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .mini-sidebar-a {
+    background: #f6f7f9;
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+  }
+
+  .codex-head {
+    padding: 14px 14px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .brand-word {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 14px;
+    font-weight: 720;
+  }
+
+  .brand-glyph {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: #111827;
+  }
+
+  .plus {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: 1px solid #dce3ed;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 720;
+  }
+
+  .quiet-search {
+    margin: 0 12px 8px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid #dee5ef;
+    background: #fff;
+    color: #8a95a6;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+  }
+
+  .codex-section {
+    padding: 6px 8px 12px;
+    overflow: hidden;
+  }
+
+  .small-label {
+    padding: 10px 8px 7px;
+    color: #8a95a6;
+    font-size: 11px;
+  }
+
+  .simple-thread {
+    padding: 9px 8px;
+    border-radius: 7px;
+    display: grid;
+    gap: 4px;
+    color: #1f2937;
+  }
+
+  .simple-thread.active {
+    background: #fff;
+    box-shadow: 0 0 0 1px #e5eaf1;
+  }
+
+  .simple-thread strong {
+    font-size: 12px;
+    line-height: 1.3;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .simple-thread span {
+    font-size: 11px;
+    color: #7c8798;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .bottom-user {
+    margin: 8px 12px 12px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #586579;
+    font-size: 12px;
+  }
+
+  .user-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #dce4ef;
+  }
+
+  .mini-sidebar-b {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    background: #f7f8fa;
+  }
+
+  .icon-rail {
+    background: #f0f2f5;
+    border-right: 1px solid #dfe5ee;
+    padding: 12px 8px;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    justify-items: center;
+  }
+
+  .rail-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: #111827;
+    margin-bottom: 18px;
+  }
+
+  .icon-stack {
+    display: grid;
+    align-content: start;
+    gap: 10px;
+  }
+
+  .nav-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6b7280;
+    font-size: 13px;
+  }
+
+  .nav-icon.active {
+    background: #fff;
+    color: #111827;
+    box-shadow: 0 0 0 1px #e3e8f0;
+  }
+
+  .thread-pane {
+    min-width: 0;
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    background: #f7f8fa;
+  }
+
+  .pane-head {
+    padding: 14px 13px 9px;
+  }
+
+  .pane-head strong {
+    display: block;
+    font-size: 13px;
+  }
+
+  .pane-head span {
+    display: block;
+    margin-top: 4px;
+    color: #7b8797;
+    font-size: 11px;
+  }
+
+  .pill-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 0 10px 8px;
+  }
+
+  .pill-tab {
+    height: 24px;
+    border-radius: 999px;
+    padding: 0 9px;
+    background: #eceff4;
+    color: #5f6b7c;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+  }
+
+  .pill-tab.active {
+    background: #111827;
+    color: #fff;
+  }
+
+  .pane-list {
+    padding: 4px 8px 12px;
+  }
+
+  .status-thread {
+    border-radius: 8px;
+    padding: 9px 9px;
+    margin-bottom: 5px;
+  }
+
+  .status-thread.active {
+    background: #fff;
+    box-shadow: 0 0 0 1px #e4e9f1;
+  }
+
+  .status-top {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .mini-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #22c55e;
+    flex: 0 0 auto;
+  }
+
+  .mini-dot.wait {
+    background: #f59e0b;
+  }
+
+  .status-top strong {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+  }
+
+  .status-sub {
+    margin: 5px 0 0 14px;
+    color: #7b8797;
+    font-size: 11px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .mini-sidebar-c {
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    background: #f6f7f9;
+  }
+
+  .workspace-switcher {
+    padding: 13px 13px 11px;
+    border-bottom: 1px solid #e3e8f0;
+  }
+
+  .workspace-pill {
+    height: 38px;
+    border-radius: 8px;
+    border: 1px solid #dfe6ef;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    font-size: 12px;
+    color: #1f2937;
+  }
+
+  .workspace-pill span {
+    color: #7c8798;
+  }
+
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    padding: 10px 12px;
+  }
+
+  .quick-action {
+    height: 30px;
+    border-radius: 7px;
+    background: #fff;
+    border: 1px solid #dfe6ef;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #384253;
+  }
+
+  .repo-list {
+    padding: 4px 8px 12px;
+  }
+
+  .repo-block {
+    margin-bottom: 10px;
+  }
+
+  .repo-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px;
+    font-size: 11px;
+    color: #6b7280;
+  }
+
+  .repo-title strong {
+    color: #384253;
+    font-size: 12px;
+  }
+
+  .repo-thread {
+    margin: 0 2px 4px;
+    border-radius: 7px;
+    padding: 8px;
+    font-size: 12px;
+    color: #202938;
+  }
+
+  .repo-thread.active {
+    background: #fff;
+    box-shadow: 0 0 0 1px #e4e9f1;
+  }
+
+  .repo-thread span {
+    display: block;
+    margin-top: 4px;
+    color: #7b8797;
+    font-size: 11px;
+  }
+
+  @media (max-width: 1180px) {
+    .sidebar-options {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<h2>左侧栏单独改三版呀</h2>
+<p class="subtitle">这次只看左侧：我把评分、存储、门禁这些“审查信息”移出主侧栏，让它更像 Codex 桌面版的线程入口。</p>
+
+<div class="sidebar-options">
+  <div class="sidebar-option card" data-choice="left-a-native-thread" onclick="toggleSelect(this)">
+    <div class="mini-app">
+      <aside class="mini-sidebar-a">
+        <div class="codex-head">
+          <div class="brand-word"><div class="brand-glyph"></div><span>Codex</span></div>
+          <div class="plus">+</div>
+        </div>
+        <div class="quiet-search">Search threads</div>
+        <div class="codex-section">
+          <div class="small-label">Pinned</div>
+          <div class="simple-thread active"><strong>修复支付金额精度 Bug</strong><span>Agent is validating changes</span></div>
+          <div class="simple-thread"><strong>订单依赖升级审批</strong><span>Needs your approval</span></div>
+          <div class="small-label">Recent</div>
+          <div class="simple-thread"><strong>补充商品服务单测</strong><span>Running pytest</span></div>
+          <div class="simple-thread"><strong>解释库存锁实现</strong><span>Completed yesterday</span></div>
+          <div class="simple-thread"><strong>整理登录模块交付说明</strong><span>Proof Pack saved</span></div>
+        </div>
+        <div class="bottom-user"><div class="user-dot"></div><span>Settings</span></div>
+      </aside>
+      <main class="mock-main">
+        <div class="main-top"><div class="top-line"></div><div class="top-actions"><div class="top-dot"></div><div class="top-dot"></div></div></div>
+        <div class="message-lines">
+          <div class="msg-line"><div class="avatar-dot"></div><div class="text-stack"><div class="text-line" style="width:78%"></div><div class="text-line" style="width:52%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:88%"></div><div class="text-line" style="width:69%"></div><div class="text-line" style="width:58%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:74%"></div><div class="text-line" style="width:82%"></div></div></div>
+        </div>
+        <div class="composer-line"></div>
+      </main>
+    </div>
+    <div class="option-body">
+      <h3>A. 原生线程感（推荐）</h3>
+      <p>最接近 Codex 桌面版：左侧只保留线程、新建、搜索和设置；任务分数/存储不出现在这里，整体更安静。</p>
+    </div>
+  </div>
+
+  <div class="sidebar-option card" data-choice="left-b-icon-rail" onclick="toggleSelect(this)">
+    <div class="mini-app">
+      <aside class="mini-sidebar-b">
+        <div class="icon-rail">
+          <div>
+            <div class="rail-logo"></div>
+            <div class="icon-stack">
+              <div class="nav-icon active">⌂</div>
+              <div class="nav-icon">◎</div>
+              <div class="nav-icon">◇</div>
+              <div class="nav-icon">?</div>
+            </div>
+          </div>
+          <div></div>
+          <div class="nav-icon">⚙</div>
+        </div>
+        <div class="thread-pane">
+          <div class="pane-head"><strong>Tasks</strong><span>D:\codemax</span></div>
+          <div class="pill-tabs"><div class="pill-tab active">All</div><div class="pill-tab">Running</div><div class="pill-tab">Review</div></div>
+          <div class="pane-list">
+            <div class="status-thread active"><div class="status-top"><div class="mini-dot"></div><strong>修复支付金额精度 Bug</strong></div><div class="status-sub">验证中 · 第 2 轮</div></div>
+            <div class="status-thread"><div class="status-top"><div class="mini-dot wait"></div><strong>升级订单依赖版本</strong></div><div class="status-sub">等待审批</div></div>
+            <div class="status-thread"><div class="status-top"><div class="mini-dot"></div><strong>补充商品服务单测</strong></div><div class="status-sub">执行中</div></div>
+            <div class="status-thread"><div class="status-top"><div class="mini-dot"></div><strong>整理登录模块交付说明</strong></div><div class="status-sub">已合入</div></div>
+          </div>
+        </div>
+      </aside>
+      <main class="mock-main">
+        <div class="main-top"><div class="top-line"></div><div class="top-actions"><div class="top-dot"></div><div class="top-dot"></div></div></div>
+        <div class="message-lines">
+          <div class="msg-line"><div class="avatar-dot"></div><div class="text-stack"><div class="text-line" style="width:72%"></div><div class="text-line" style="width:54%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:86%"></div><div class="text-line" style="width:70%"></div><div class="text-line" style="width:48%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:80%"></div><div class="text-line" style="width:64%"></div></div></div>
+        </div>
+        <div class="composer-line"></div>
+      </main>
+    </div>
+    <div class="option-body">
+      <h3>B. 双层侧栏</h3>
+      <p>更像桌面工具：最左是功能入口，第二列是线程列表。好处是后续审批中心、记忆、设置扩展更稳。</p>
+    </div>
+  </div>
+
+  <div class="sidebar-option card" data-choice="left-c-workspace-first" onclick="toggleSelect(this)">
+    <div class="mini-app">
+      <aside class="mini-sidebar-c">
+        <div class="workspace-switcher">
+          <div class="workspace-pill"><strong>codemax</strong><span>⌄</span></div>
+        </div>
+        <div class="quick-actions">
+          <div class="quick-action">New task</div>
+          <div class="quick-action">Review</div>
+        </div>
+        <div class="repo-list">
+          <div class="repo-block">
+            <div class="repo-title"><strong>payment-service</strong><span>3</span></div>
+            <div class="repo-thread active">修复金额精度 Bug<span>验证中 · DeepSeek</span></div>
+            <div class="repo-thread">订单依赖升级<span>等待审批</span></div>
+          </div>
+          <div class="repo-block">
+            <div class="repo-title"><strong>shop-api</strong><span>2</span></div>
+            <div class="repo-thread">补充商品服务单测<span>执行中</span></div>
+            <div class="repo-thread">解释库存锁实现<span>已完成</span></div>
+          </div>
+          <div class="repo-block">
+            <div class="repo-title"><strong>history</strong><span>8</span></div>
+            <div class="repo-thread">登录模块交付说明<span>已合入</span></div>
+          </div>
+        </div>
+      </aside>
+      <main class="mock-main">
+        <div class="main-top"><div class="top-line"></div><div class="top-actions"><div class="top-dot"></div><div class="top-dot"></div></div></div>
+        <div class="message-lines">
+          <div class="msg-line"><div class="avatar-dot"></div><div class="text-stack"><div class="text-line" style="width:82%"></div><div class="text-line" style="width:50%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:84%"></div><div class="text-line" style="width:68%"></div><div class="text-line" style="width:52%"></div></div></div>
+          <div class="msg-line"><div class="avatar-dot dark"></div><div class="text-stack"><div class="text-line" style="width:76%"></div><div class="text-line" style="width:60%"></div></div></div>
+        </div>
+        <div class="composer-line"></div>
+      </main>
+    </div>
+    <div class="option-body">
+      <h3>C. 工作区优先</h3>
+      <p>如果未来常同时管多个仓库，这版更清楚；但它比 Codex 原生线程感更“项目管理”一点哦。</p>
+    </div>
+  </div>
+</div>
