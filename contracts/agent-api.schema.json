@@ -1,0 +1,1000 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codemax.local/contracts/agent-api.schema.json",
+  "title": "Codemax Agent HTTP API Contract",
+  "type": "object",
+  "properties": {
+    "baseUrl": {
+      "const": "http://127.0.0.1:8765"
+    },
+    "endpoints": {
+      "type": "object",
+      "properties": {
+        "health": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "const": "/health"
+            },
+            "response": {
+              "$ref": "#/$defs/HealthResponse"
+            }
+          },
+          "required": ["method", "path", "response"]
+        },
+        "getModelConfig": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "const": "/api/v1/models/config"
+            },
+            "response": {
+              "$ref": "#/$defs/ModelConfigView"
+            }
+          },
+          "required": ["method", "path", "response"]
+        },
+        "listModelProviders": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "const": "/api/v1/models/providers"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProviderSpec"
+              }
+            }
+          },
+          "required": ["method", "path", "response"]
+        },
+        "createModelChatCompletion": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/models/chat"
+            },
+            "request": {
+              "$ref": "#/$defs/ChatCompletionRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ChatCompletionResponse"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "addMemoryMessage": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/memory/messages"
+            },
+            "request": {
+              "$ref": "#/$defs/NewConversationMessage"
+            },
+            "response": {
+              "$ref": "#/$defs/ConversationMessage"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "loadMemoryContext": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/memory/context"
+            },
+            "request": {
+              "$ref": "#/$defs/LoadMemoryContextRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/MemoryContextBundle"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "searchMemories": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "const": "/api/v1/memory/search"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MemoryItem"
+              }
+            }
+          },
+          "required": ["method", "path", "response"]
+        },
+        "summarizeTempContext": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/memory/temp-context/summary"
+            },
+            "request": {
+              "$ref": "#/$defs/TempContextSummaryRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TempContextSummary"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "createAgentTask": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/tasks"
+            },
+            "request": {
+              "$ref": "#/$defs/CreateAgentTaskRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CreateAgentTaskResponse"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "getAgentTaskState": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "const": "/api/v1/tasks/{taskId}"
+            },
+            "response": {
+              "$ref": "#/$defs/AgentState"
+            }
+          },
+          "required": ["method", "path", "response"]
+        },
+        "advanceAgentTask": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/tasks/{taskId}/advance"
+            },
+            "request": {
+              "$ref": "#/$defs/AdvanceAgentTaskRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AdvanceAgentTaskResponse"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "submitAgentValidationResult": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/tasks/{taskId}/validation-result"
+            },
+            "request": {
+              "$ref": "#/$defs/ValidationResultRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AdvanceAgentTaskResponse"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        },
+        "resumeAgentApproval": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/api/v1/tasks/{taskId}/approvals/{approvalId}/resume"
+            },
+            "request": {
+              "$ref": "#/$defs/ResumeApprovalRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ResumeApprovalResponse"
+            }
+          },
+          "required": ["method", "path", "request", "response"]
+        }
+      },
+      "required": [
+        "health",
+        "getModelConfig",
+        "listModelProviders",
+        "createModelChatCompletion",
+        "addMemoryMessage",
+        "loadMemoryContext",
+        "searchMemories",
+        "summarizeTempContext",
+        "createAgentTask",
+        "getAgentTaskState",
+        "advanceAgentTask",
+        "submitAgentValidationResult",
+        "resumeAgentApproval"
+      ]
+    }
+  },
+  "required": ["baseUrl", "endpoints"],
+  "$defs": {
+    "HealthResponse": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "const": "codemax-agent"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["service", "status", "version"]
+    },
+    "ModelProvider": {
+      "enum": [
+        "openai-compatible",
+        "claude",
+        "deepseek",
+        "ds",
+        "bailian",
+        "volcengine",
+        "glm",
+        "gemini",
+        "openai-gpt",
+        "openai-claude",
+        "anthropic",
+        "relay"
+      ]
+    },
+    "ProviderSpec": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ModelProvider"
+        },
+        "label": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["ready", "placeholder"]
+        },
+        "implemented": {
+          "type": "boolean"
+        },
+        "defaultBaseUrl": {
+          "type": "string"
+        },
+        "defaultModelName": {
+          "type": "string"
+        },
+        "requiresBaseUrl": {
+          "type": "boolean"
+        },
+        "transport": {
+          "enum": ["openai-compatible", "placeholder"]
+        },
+        "codeLocation": {
+          "type": "string"
+        },
+        "envLocation": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "label",
+        "status",
+        "implemented",
+        "defaultBaseUrl",
+        "defaultModelName",
+        "requiresBaseUrl",
+        "transport",
+        "codeLocation",
+        "envLocation",
+        "note"
+      ]
+    },
+    "ModelConfigView": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ModelProvider"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "apiKeyConfigured": {
+          "type": "boolean"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": ["ready", "placeholder"]
+        },
+        "implemented": {
+          "type": "boolean"
+        },
+        "codeLocation": {
+          "type": "string"
+        },
+        "envLocation": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "baseUrl",
+        "modelName",
+        "timeoutSeconds",
+        "apiKeyConfigured",
+        "configured",
+        "status",
+        "implemented",
+        "codeLocation",
+        "envLocation",
+        "note"
+      ]
+    },
+    "ChatMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": ["system", "user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["role", "content"]
+    },
+    "ChatCompletionRequest": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "temperature": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 2
+        },
+        "maxTokens": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      },
+      "required": ["messages"]
+    },
+    "UsageResponse": {
+      "type": "object",
+      "properties": {
+        "promptTokens": {
+          "type": ["integer", "null"]
+        },
+        "completionTokens": {
+          "type": ["integer", "null"]
+        },
+        "totalTokens": {
+          "type": ["integer", "null"]
+        }
+      },
+      "required": ["promptTokens", "completionTokens", "totalTokens"]
+    },
+    "ChatCompletionResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "finishReason": {
+          "type": ["string", "null"]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["id", "model", "content", "finishReason", "usage"]
+    },
+    "NewConversationMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": ["string", "null"]
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taskId": {
+          "type": ["string", "null"]
+        },
+        "repositoryPath": {
+          "type": ["string", "null"]
+        },
+        "tokenCount": {
+          "type": ["integer", "null"]
+        },
+        "retentionClass": {
+          "type": "string"
+        }
+      },
+      "required": ["conversationId", "role", "content"]
+    },
+    "ConversationMessage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/NewConversationMessage"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string"
+            }
+          },
+          "required": ["id", "createdAt"]
+        }
+      ]
+    },
+    "RollingSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "coveredMessageCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "conversationId", "coveredMessageCount", "summary", "updatedAt"]
+    },
+    "MemoryItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": ["global", "repository", "task"]
+        },
+        "scopeId": {
+          "type": ["string", "null"]
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "preference",
+            "repository_command",
+            "solution_choice",
+            "approval_decision"
+          ]
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "isUserEditable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "scopeId",
+        "key",
+        "value",
+        "category",
+        "confidence",
+        "source",
+        "isUserEditable"
+      ],
+      "additionalProperties": true
+    },
+    "LoadMemoryContextRequest": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repositoryPath": {
+          "type": ["string", "null"]
+        },
+        "taskId": {
+          "type": ["string", "null"]
+        },
+        "query": {
+          "type": ["string", "null"]
+        },
+        "recentMessageLimit": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "MemoryContextBundle": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string"
+        },
+        "recentMessageLimit": {
+          "type": "integer"
+        },
+        "recentMessages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationMessage"
+          }
+        },
+        "rollingSummary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RollingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longTermMemories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryItem"
+          }
+        },
+        "safetyNotice": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conversationId",
+        "recentMessageLimit",
+        "recentMessages",
+        "rollingSummary",
+        "longTermMemories",
+        "safetyNotice"
+      ]
+    },
+    "TempContextSummaryRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["taskId", "items"]
+    },
+    "TempContextSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "sourceItemCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "taskId", "summary", "sourceItemCount", "createdAt"]
+    },
+    "AgentTaskPhase": {
+      "enum": [
+        "created",
+        "planned",
+        "editing",
+        "validating",
+        "analyzing_error",
+        "waiting_approval",
+        "completed",
+        "failed"
+      ]
+    },
+    "CreateAgentTaskRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repositoryPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worktreePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "validationCommand": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "repositoryPath", "worktreePath", "title"]
+    },
+    "CreateAgentTaskResponse": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "const": "created"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "message": {
+          "type": "string"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        }
+      },
+      "required": ["taskId", "status", "phase", "checkpointId", "message", "state"]
+    },
+    "AdvanceAgentTaskRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "userMessage": {
+          "type": ["string", "null"]
+        },
+        "requireApproval": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "AdvanceAgentTaskResponse": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "const": "accepted"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        }
+      },
+      "required": ["taskId", "status", "phase", "checkpointId", "state"]
+    },
+    "ValidationResultRequest": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": ["string", "null"]
+        },
+        "command": {
+          "type": ["string", "null"]
+        },
+        "cwd": {
+          "type": ["string", "null"]
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ResumeApprovalRequest": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "enum": ["approved", "rejected", "cancelled"]
+        },
+        "comment": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["decision"]
+    },
+    "ResumeApprovalResponse": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "approvalId": {
+          "type": "string"
+        },
+        "status": {
+          "const": "accepted"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        }
+      },
+      "required": ["taskId", "approvalId", "status", "phase", "checkpointId", "state"]
+    },
+    "AgentTodo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["pending", "in_progress", "completed", "failed", "skipped"]
+        },
+        "errorMessage": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["id", "title", "description", "status", "errorMessage"]
+    },
+    "ValidationRequest": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["requested", "passed", "failed", "cancelled", "timed_out"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["command", "cwd", "reason", "status", "createdAt"]
+    },
+    "AgentApproval": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["pending", "approved", "rejected", "cancelled"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "status", "content", "reason"],
+      "additionalProperties": true
+    },
+    "AgentState": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "repositoryPath": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "todos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentTodo"
+          }
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validationRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidationRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkpointIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repairRound": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "taskId",
+        "repositoryPath",
+        "worktreePath",
+        "title",
+        "description",
+        "phase",
+        "todos",
+        "approval",
+        "validationRequest",
+        "checkpointIndex",
+        "repairRound"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

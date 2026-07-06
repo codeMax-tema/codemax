@@ -11,6 +11,9 @@ dependencies = [
   "uvicorn>=0.30.0"
 ]
 
+[project.scripts]
+codemax-agent = "app.main:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0.0",

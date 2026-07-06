@@ -19,9 +19,14 @@ pub fn run() {
             let managed_storage = storage::ManagedStorage::initialize(app_data_dir)?;
             app.manage(managed_storage);
             app.manage(exec::CommandRunRegistry::default());
+            app.manage(agent::AgentService::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::agent::start_agent_service,
+            commands::agent::stop_agent_service,
+            commands::agent::get_agent_service_status,
+            commands::agent::check_agent_health,
             commands::app::health,
             commands::app::ping,
             commands::app::emit_app_ready,

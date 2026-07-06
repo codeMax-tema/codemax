@@ -172,6 +172,42 @@
             }
           },
           "required": ["response"]
+        },
+        "start_agent_service": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/AgentServiceStatus"
+            }
+          },
+          "required": ["response"]
+        },
+        "stop_agent_service": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/AgentServiceStatus"
+            }
+          },
+          "required": ["response"]
+        },
+        "get_agent_service_status": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/AgentServiceStatus"
+            }
+          },
+          "required": ["response"]
+        },
+        "check_agent_health": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/AgentHealthResponse"
+            }
+          },
+          "required": ["response"]
         }
       },
       "required": [
@@ -188,7 +224,11 @@
         "cancel_task_command",
         "read_task_command_log",
         "summarize_task_command_log",
-        "cleanup_expired_task_logs"
+        "cleanup_expired_task_logs",
+        "start_agent_service",
+        "stop_agent_service",
+        "get_agent_service_status",
+        "check_agent_health"
       ]
     }
   },
@@ -208,6 +248,69 @@
         }
       },
       "required": ["service", "status", "version"]
+    },
+    "AgentHealthResponse": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "const": "codemax-agent"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["service", "status", "version"]
+    },
+    "AgentServiceStatus": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": ["integer", "null"]
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "healthUrl": {
+          "type": "string"
+        },
+        "agentDir": {
+          "type": "string"
+        },
+        "pythonExecutable": {
+          "type": "string"
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentHealthResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "running",
+        "pid",
+        "host",
+        "port",
+        "healthUrl",
+        "agentDir",
+        "pythonExecutable",
+        "health"
+      ]
     },
     "RepositoryPathRequest": {
       "type": "object",
