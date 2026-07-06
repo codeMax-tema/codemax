@@ -329,6 +329,41 @@ impl<'conn> TaskRepository<'conn> {
         )?;
         Ok(())
     }
+
+    pub fn update_worktree_metadata(
+        &self,
+        task_id: &str,
+        worktree_path: &str,
+        branch_name: &str,
+    ) -> StorageResult<TaskRecord> {
+        let updated = self.connection.execute(
+            "UPDATE tasks
+             SET worktree_path = ?2, branch_name = ?3, updated_at = ?4
+             WHERE id = ?1",
+            params![task_id, worktree_path, branch_name, now_text()],
+        )?;
+
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!("task {task_id}")));
+        }
+
+        self.get_required(task_id)
+    }
+
+    pub fn clear_worktree_metadata(&self, task_id: &str) -> StorageResult<TaskRecord> {
+        let updated = self.connection.execute(
+            "UPDATE tasks
+             SET worktree_path = NULL, branch_name = NULL, updated_at = ?2
+             WHERE id = ?1",
+            params![task_id, now_text()],
+        )?;
+
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!("task {task_id}")));
+        }
+
+        self.get_required(task_id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1567,6 +1602,25 @@ mod tests {
             .expect("task exists");
         assert_eq!(loaded.status, "completed");
         assert_eq!(loaded.completed_at.as_deref(), Some("2026-07-04T12:00:00Z"));
+
+        let updated = tasks
+            .update_worktree_metadata(
+                "task-001",
+                "D:/codemax/app-data/worktrees/task-001",
+                "agent/task-001",
+            )
+            .expect("update worktree metadata");
+        assert_eq!(
+            updated.worktree_path.as_deref(),
+            Some("D:/codemax/app-data/worktrees/task-001")
+        );
+        assert_eq!(updated.branch_name.as_deref(), Some("agent/task-001"));
+
+        let cleared = tasks
+            .clear_worktree_metadata("task-001")
+            .expect("clear worktree metadata");
+        assert_eq!(cleared.worktree_path, None);
+        assert_eq!(cleared.branch_name, None);
     }
 
     #[test]

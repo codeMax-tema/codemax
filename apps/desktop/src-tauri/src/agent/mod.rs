@@ -3,4 +3,3 @@ pub struct AgentServiceConfig {
     pub host: String,
     pub port: u16,
 }
-

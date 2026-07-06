@@ -16,7 +16,23 @@
           },
           "required": ["response"]
         },
-        "repository.validate": {
+        "select_repository_path": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RepositoryPathSelection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["response"]
+        },
+        "validate_repository_path": {
           "type": "object",
           "properties": {
             "request": {
@@ -27,9 +43,91 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "get_repository_current_branch": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RepositoryPathRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RepositoryBranchInfo"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_repository_dirty_status": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RepositoryPathRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RepositoryDirtyStatus"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "create_task_branch": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CreateTaskBranchRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskBranch"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "create_task_worktree": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskWorktree"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_task_worktree_status": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/WorktreeStatus"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "cleanup_task_worktree": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CleanupTaskWorktreeRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/WorktreeCleanupResult"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
-      "required": ["health", "repository.validate"]
+      "required": [
+        "health",
+        "select_repository_path",
+        "validate_repository_path",
+        "get_repository_current_branch",
+        "get_repository_dirty_status",
+        "create_task_branch",
+        "create_task_worktree",
+        "get_task_worktree_status",
+        "cleanup_task_worktree"
+      ]
     }
   },
   "required": ["commands"],
@@ -58,6 +156,15 @@
       },
       "required": ["path"]
     },
+    "RepositoryPathSelection": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["path"]
+    },
     "RepositorySummary": {
       "type": "object",
       "properties": {
@@ -75,6 +182,138 @@
         }
       },
       "required": ["path", "name", "branch", "dirty"]
+    },
+    "RepositoryBranchInfo": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        }
+      },
+      "required": ["branch"]
+    },
+    "RepositoryDirtyStatus": {
+      "type": "object",
+      "properties": {
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "required": ["dirty"]
+    },
+    "TaskIdRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId"]
+    },
+    "CreateTaskBranchRequest": {
+      "type": "object",
+      "properties": {
+        "repositoryPath": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["repositoryPath", "taskId"]
+    },
+    "CleanupTaskWorktreeRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId", "confirmed"]
+    },
+    "TaskBranch": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "branchName": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "branchName"]
+    },
+    "TaskWorktree": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "repositoryPath": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "branchName": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "repositoryPath", "worktreePath", "branchName"]
+    },
+    "WorktreeFileChange": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["added", "modified", "deleted"]
+        }
+      },
+      "required": ["path", "status"]
+    },
+    "WorktreeStatus": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "branchName": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorktreeFileChange"
+          }
+        }
+      },
+      "required": ["taskId", "worktreePath", "branchName", "dirty", "changes"]
+    },
+    "WorktreeCleanupResult": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId", "worktreePath", "removed"]
     }
   }
 }

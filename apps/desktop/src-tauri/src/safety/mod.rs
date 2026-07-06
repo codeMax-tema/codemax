@@ -11,4 +11,3 @@ pub struct RiskAssessment {
     pub reason: String,
     pub requires_approval: bool,
 }
-

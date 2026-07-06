@@ -4,10 +4,20 @@
   "nav.tasks": "任务",
   "nav.approvals": "审批",
   "nav.settings": "设置",
+  "repository.title": "本地仓库",
+  "repository.select": "选择仓库",
+  "repository.refresh": "刷新",
+  "repository.empty": "未选择仓库",
+  "repository.loaded": "仓库已读取",
+  "repository.name": "仓库名称",
+  "repository.currentBranch": "当前分支",
+  "repository.path": "本地路径",
+  "repository.workspaceStatus": "工作区状态",
+  "repository.status.clean": "无未提交改动",
+  "repository.status.dirty": "存在未提交改动",
   "status.created": "已创建",
   "status.running": "执行中",
   "status.waitingApproval": "等待审批",
   "status.completed": "已完成",
   "status.merged": "已合入"
 }
-

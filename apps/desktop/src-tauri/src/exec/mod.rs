@@ -4,4 +4,3 @@ pub struct CommandRequest {
     pub cwd: String,
     pub timeout_ms: Option<u64>,
 }
-

@@ -28,9 +28,7 @@ pub struct PingResponse {
 
 #[tauri::command]
 pub fn ping() -> PingResponse {
-    PingResponse {
-        message: "pong",
-    }
+    PingResponse { message: "pong" }
 }
 
 #[tauri::command]

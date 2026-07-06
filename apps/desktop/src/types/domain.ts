@@ -22,6 +22,47 @@ export interface RepositorySummary {
   dirty: boolean;
 }
 
+export interface RepositoryBranchInfo {
+  branch: string;
+}
+
+export interface RepositoryDirtyStatus {
+  dirty: boolean;
+}
+
+export interface TaskBranch {
+  taskId: string;
+  branchName: string;
+}
+
+export interface TaskWorktree {
+  taskId: string;
+  repositoryPath: string;
+  worktreePath: string;
+  branchName: string;
+}
+
+export type WorktreeFileChangeStatus = 'added' | 'modified' | 'deleted';
+
+export interface WorktreeFileChange {
+  path: string;
+  status: WorktreeFileChangeStatus;
+}
+
+export interface WorktreeStatus {
+  taskId: string;
+  worktreePath: string;
+  branchName: string;
+  dirty: boolean;
+  changes: WorktreeFileChange[];
+}
+
+export interface WorktreeCleanupResult {
+  taskId: string;
+  worktreePath: string;
+  removed: boolean;
+}
+
 export interface TaskSummary {
   id: string;
   title: string;
