@@ -538,6 +538,19 @@ impl<'conn> CommandRunRepository<'conn> {
         Ok(runs)
     }
 
+    pub fn get_for_task(&self, task_id: &str, run_id: &str) -> StorageResult<CommandRunRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, command, cwd, status, stdout_path, stderr_path,
+                    exit_code, duration_ms, created_at
+                 FROM command_runs WHERE task_id = ?1 AND id = ?2",
+                params![task_id, run_id],
+                map_command_run_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("command run {run_id}")))
+    }
+
     fn get_required(&self, run_id: &str) -> StorageResult<CommandRunRecord> {
         self.connection
             .query_row(

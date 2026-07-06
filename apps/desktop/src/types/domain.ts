@@ -63,6 +63,69 @@ export interface WorktreeCleanupResult {
   removed: boolean;
 }
 
+export type CommandRunStatus = 'passed' | 'failed' | 'timedOut' | 'cancelled';
+
+export type CommandOutputStream = 'stdout' | 'stderr';
+
+export interface CommandExecutionResult {
+  runId: string;
+  taskId: string;
+  command: string;
+  cwd: string;
+  status: CommandRunStatus;
+  stdoutPath: string;
+  stderrPath: string;
+  exitCode?: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  cancelled: boolean;
+}
+
+export interface CommandOutputEvent {
+  taskId: string;
+  runId: string;
+  stream: CommandOutputStream;
+  chunk: string;
+  sequence: number;
+  timestampMs: number;
+}
+
+export interface CommandFinishedEvent {
+  result: CommandExecutionResult;
+}
+
+export interface CommandCancelResult {
+  runId: string;
+  cancelled: boolean;
+}
+
+export interface CommandLogPage {
+  taskId: string;
+  runId: string;
+  stream: CommandOutputStream;
+  offsetBytes: number;
+  nextOffsetBytes: number;
+  content: string;
+  eof: boolean;
+  compressed: boolean;
+}
+
+export interface CommandLogSummary {
+  taskId: string;
+  runId: string;
+  sourceStream: CommandOutputStream;
+  lines: string[];
+  truncated: boolean;
+}
+
+export interface LogCleanupResult {
+  retentionDays: number;
+  scannedFiles: number;
+  deletedFiles: number;
+  deletedBytes: number;
+  cleanupDisabled: boolean;
+}
+
 export interface TaskSummary {
   id: string;
   title: string;

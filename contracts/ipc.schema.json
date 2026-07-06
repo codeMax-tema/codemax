@@ -115,6 +115,63 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "execute_task_command": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ExecuteTaskCommandRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CommandExecutionResult"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "cancel_task_command": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CancelTaskCommandRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CommandCancelResult"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "read_task_command_log": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ReadCommandLogRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CommandLogPage"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "summarize_task_command_log": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CommandLogSummaryRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CommandLogSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "cleanup_expired_task_logs": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/LogCleanupResult"
+            }
+          },
+          "required": ["response"]
         }
       },
       "required": [
@@ -126,7 +183,12 @@
         "create_task_branch",
         "create_task_worktree",
         "get_task_worktree_status",
-        "cleanup_task_worktree"
+        "cleanup_task_worktree",
+        "execute_task_command",
+        "cancel_task_command",
+        "read_task_command_log",
+        "summarize_task_command_log",
+        "cleanup_expired_task_logs"
       ]
     }
   },
@@ -234,6 +296,85 @@
       },
       "required": ["taskId", "confirmed"]
     },
+    "ExecuteTaskCommandRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["taskId", "command", "cwd"]
+    },
+    "CancelTaskCommandRequest": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": ["runId"]
+    },
+    "CommandOutputStream": {
+      "enum": ["stdout", "stderr"]
+    },
+    "ReadCommandLogRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/$defs/CommandOutputStream"
+        },
+        "offsetBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["taskId", "runId", "stream"]
+    },
+    "CommandLogSummaryRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["taskId", "runId"]
+    },
     "TaskBranch": {
       "type": "object",
       "properties": {
@@ -314,6 +455,165 @@
         }
       },
       "required": ["taskId", "worktreePath", "removed"]
+    },
+    "CommandExecutionResult": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["passed", "failed", "timedOut", "cancelled"]
+        },
+        "stdoutPath": {
+          "type": "string"
+        },
+        "stderrPath": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "runId",
+        "taskId",
+        "command",
+        "cwd",
+        "status",
+        "stdoutPath",
+        "stderrPath",
+        "exitCode",
+        "durationMs",
+        "timedOut",
+        "cancelled"
+      ]
+    },
+    "CommandCancelResult": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "required": ["runId", "cancelled"]
+    },
+    "CommandLogPage": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/$defs/CommandOutputStream"
+        },
+        "offsetBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nextOffsetBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content": {
+          "type": "string"
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "compressed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "taskId",
+        "runId",
+        "stream",
+        "offsetBytes",
+        "nextOffsetBytes",
+        "content",
+        "eof",
+        "compressed"
+      ]
+    },
+    "CommandLogSummary": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "sourceStream": {
+          "$ref": "#/$defs/CommandOutputStream"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId", "runId", "sourceStream", "lines", "truncated"]
+    },
+    "LogCleanupResult": {
+      "type": "object",
+      "properties": {
+        "retentionDays": {
+          "type": "integer"
+        },
+        "scannedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cleanupDisabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "retentionDays",
+        "scannedFiles",
+        "deletedFiles",
+        "deletedBytes",
+        "cleanupDisabled"
+      ]
     }
   }
 }

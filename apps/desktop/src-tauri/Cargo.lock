@@ -337,6 +337,7 @@ dependencies = [
 name = "codemax-desktop"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",

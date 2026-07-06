@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { normalizeIpcError } from '@/api/errors';
 import type {
+  CommandCancelResult,
+  CommandExecutionResult,
+  CommandLogPage,
+  CommandLogSummary,
+  CommandOutputStream,
+  LogCleanupResult,
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
@@ -44,6 +50,49 @@ export function pingDesktop() {
 
 export function emitAppReady() {
   return invokeCommand<void>('emit_app_ready');
+}
+
+export interface ExecuteTaskCommandRequest {
+  taskId: string;
+  runId?: string;
+  command: string;
+  cwd: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+export function executeTaskCommand(request: ExecuteTaskCommandRequest) {
+  return invokeCommand<CommandExecutionResult>('execute_task_command', { request });
+}
+
+export function cancelTaskCommand(runId: string) {
+  return invokeCommand<CommandCancelResult>('cancel_task_command', { runId });
+}
+
+export interface ReadCommandLogRequest {
+  taskId: string;
+  runId: string;
+  stream: CommandOutputStream;
+  offsetBytes?: number;
+  maxBytes?: number;
+}
+
+export function readTaskCommandLog(request: ReadCommandLogRequest) {
+  return invokeCommand<CommandLogPage>('read_task_command_log', { request });
+}
+
+export interface CommandLogSummaryRequest {
+  taskId: string;
+  runId: string;
+  maxLines?: number;
+}
+
+export function summarizeTaskCommandLog(request: CommandLogSummaryRequest) {
+  return invokeCommand<CommandLogSummary>('summarize_task_command_log', { request });
+}
+
+export function cleanupExpiredTaskLogs() {
+  return invokeCommand<LogCleanupResult>('cleanup_expired_task_logs');
 }
 
 export interface RepositoryPathSelection {
