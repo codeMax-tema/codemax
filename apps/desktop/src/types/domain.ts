@@ -57,6 +57,67 @@ export interface WorktreeStatus {
   changes: WorktreeFileChange[];
 }
 
+export interface TaskDiffFile {
+  path: string;
+  status: WorktreeFileChangeStatus;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export interface GeneratedTaskDiff {
+  taskId: string;
+  baseRef: string;
+  worktreePath: string;
+  branchName: string;
+  artifactId: string;
+  diffPath: string;
+  files: TaskDiffFile[];
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export type DeliveryReportStatus = 'passed' | 'failed' | 'notRun';
+
+export interface TaskValidationRunSummary {
+  runId: string;
+  command: string;
+  cwd: string;
+  status: CommandRunStatus;
+  exitCode?: number | null;
+  durationMs?: number | null;
+  createdAt: string;
+}
+
+export interface TaskDeliveryReport {
+  taskId: string;
+  artifactId: string;
+  taskTitle: string;
+  generatedAt: string;
+  overallStatus: DeliveryReportStatus;
+  summary: string;
+  commandCount: number;
+  passedCount: number;
+  failedCount: number;
+  changedFiles: string[];
+  diffPath?: string | null;
+  deliveryPath: string;
+  runs: TaskValidationRunSummary[];
+  risk: string;
+}
+
+export interface GeneratedTaskDelivery {
+  taskId: string;
+  artifactId: string;
+  reportPath: string;
+  deliveryPath: string;
+  diffPath?: string | null;
+  summary: string;
+  commitMessage: string;
+  report: TaskDeliveryReport;
+}
+
 export interface WorktreeCleanupResult {
   taskId: string;
   worktreePath: string;

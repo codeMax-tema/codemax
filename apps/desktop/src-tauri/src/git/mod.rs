@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -47,6 +48,29 @@ pub struct WorktreeStatus {
 pub struct WorktreeFileChange {
     pub path: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDiff {
+    pub task_id: String,
+    pub base_ref: String,
+    pub worktree_path: String,
+    pub branch_name: String,
+    pub patch: String,
+    pub files: Vec<TaskDiffFile>,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDiffFile {
+    pub path: String,
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub patch: String,
 }
 
 #[derive(Debug, Error)]
@@ -213,6 +237,39 @@ pub fn worktree_status(
     })
 }
 
+pub fn task_diff(
+    task_id: &str,
+    worktree_path: impl AsRef<Path>,
+    base_ref: &str,
+) -> GitResult<TaskDiff> {
+    let worktree_root = repository_root(worktree_path.as_ref())?;
+    let base_ref = base_ref.trim();
+    let branch_name = current_branch_in_repository(&worktree_root)?;
+    let changes = worktree_changes(&worktree_root)?;
+    let status_by_path = changes
+        .iter()
+        .map(|change| (change.path.clone(), change.status.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut stat_by_path = diff_numstat(&worktree_root, base_ref)?;
+    let tracked_patch = diff_patch(&worktree_root, base_ref)?;
+    let untracked_patches = untracked_file_patches(&worktree_root, &mut stat_by_path)?;
+    let patch = join_patch_sections(tracked_patch, untracked_patches);
+    let files = split_patch_by_file(&patch, &status_by_path, &stat_by_path);
+    let additions = files.iter().map(|file| file.additions).sum();
+    let deletions = files.iter().map(|file| file.deletions).sum();
+
+    Ok(TaskDiff {
+        task_id: task_id.to_string(),
+        base_ref: base_ref.to_string(),
+        worktree_path: worktree_root.to_string_lossy().to_string(),
+        branch_name,
+        patch,
+        files,
+        additions,
+        deletions,
+    })
+}
+
 pub fn remove_task_worktree(
     repository_path: impl AsRef<Path>,
     worktree_path: impl AsRef<Path>,
@@ -335,6 +392,243 @@ fn worktree_changes(worktree_path: &Path) -> GitResult<Vec<WorktreeFileChange>> 
         .lines()
         .filter_map(parse_porcelain_status_line)
         .collect())
+}
+
+fn diff_patch(worktree_path: &Path, base_ref: &str) -> GitResult<String> {
+    let output = run_git(
+        worktree_path,
+        &["diff", "--binary", "--find-renames", base_ref, "--"],
+    )?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: worktree_path.to_path_buf(),
+            args: format!("diff --binary --find-renames {base_ref} --"),
+            stderr: output.stderr,
+        });
+    }
+
+    Ok(output.stdout)
+}
+
+fn diff_numstat(worktree_path: &Path, base_ref: &str) -> GitResult<HashMap<String, (u64, u64)>> {
+    let output = run_git(worktree_path, &["diff", "--numstat", base_ref, "--"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: worktree_path.to_path_buf(),
+            args: format!("diff --numstat {base_ref} --"),
+            stderr: output.stderr,
+        });
+    }
+
+    let mut stats = HashMap::new();
+    for line in output.stdout.lines() {
+        let mut fields = line.splitn(3, '\t');
+        let additions = parse_numstat_count(fields.next());
+        let deletions = parse_numstat_count(fields.next());
+        let Some(path) = fields.next().map(parse_numstat_path) else {
+            continue;
+        };
+        stats.insert(path, (additions, deletions));
+    }
+
+    Ok(stats)
+}
+
+fn parse_numstat_count(value: Option<&str>) -> u64 {
+    value
+        .and_then(|count| count.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+fn parse_numstat_path(path: &str) -> String {
+    path.split(" => ")
+        .last()
+        .unwrap_or(path)
+        .trim_matches('"')
+        .to_string()
+}
+
+fn untracked_file_patches(
+    worktree_path: &Path,
+    stat_by_path: &mut HashMap<String, (u64, u64)>,
+) -> GitResult<Vec<String>> {
+    let output = run_git(
+        worktree_path,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: worktree_path.to_path_buf(),
+            args: "ls-files --others --exclude-standard -z".to_string(),
+            stderr: output.stderr,
+        });
+    }
+
+    let mut patches = Vec::new();
+    for raw_path in output.stdout.split('\0').filter(|path| !path.is_empty()) {
+        let patch = untracked_file_patch(worktree_path, raw_path)?;
+        stat_by_path.insert(raw_path.to_string(), (patch.additions, 0));
+        patches.push(patch.patch);
+    }
+
+    Ok(patches)
+}
+
+struct GeneratedPatch {
+    patch: String,
+    additions: u64,
+}
+
+fn untracked_file_patch(worktree_path: &Path, relative_path: &str) -> GitResult<GeneratedPatch> {
+    let path = worktree_path.join(relative_path);
+    let bytes = fs::read(&path)?;
+    let mode = if is_executable(&path) {
+        "100755"
+    } else {
+        "100644"
+    };
+    let display_path = normalize_diff_path(relative_path);
+
+    if bytes.contains(&0) {
+        return Ok(GeneratedPatch {
+            patch: format!(
+                "diff --git a/{display_path} b/{display_path}\nnew file mode {mode}\nindex 0000000..0000000\nBinary files /dev/null and b/{display_path} differ\n"
+            ),
+            additions: 0,
+        });
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    let lines = text.lines().collect::<Vec<_>>();
+    let additions = lines.len() as u64;
+    let mut patch = format!(
+        "diff --git a/{display_path} b/{display_path}\nnew file mode {mode}\nindex 0000000..0000000\n--- /dev/null\n+++ b/{display_path}\n"
+    );
+
+    if additions > 0 {
+        patch.push_str(&format!("@@ -0,0 +1,{additions} @@\n"));
+        for line in lines {
+            patch.push('+');
+            patch.push_str(line.trim_end_matches('\r'));
+            patch.push('\n');
+        }
+    }
+
+    Ok(GeneratedPatch { patch, additions })
+}
+
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn normalize_diff_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn join_patch_sections(tracked_patch: String, untracked_patches: Vec<String>) -> String {
+    let mut patch = tracked_patch;
+    for section in untracked_patches {
+        if !patch.is_empty() && !patch.ends_with('\n') {
+            patch.push('\n');
+        }
+        patch.push_str(&section);
+    }
+    patch
+}
+
+fn split_patch_by_file(
+    patch: &str,
+    status_by_path: &HashMap<String, String>,
+    stat_by_path: &HashMap<String, (u64, u64)>,
+) -> Vec<TaskDiffFile> {
+    let mut files = Vec::new();
+    let mut current_path: Option<String> = None;
+    let mut current_patch = String::new();
+
+    for line in patch.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            push_diff_file(
+                &mut files,
+                current_path.take(),
+                std::mem::take(&mut current_patch),
+                status_by_path,
+                stat_by_path,
+            );
+            current_path = parse_diff_git_path(line);
+        }
+        current_patch.push_str(line);
+    }
+
+    push_diff_file(
+        &mut files,
+        current_path,
+        current_patch,
+        status_by_path,
+        stat_by_path,
+    );
+
+    files
+}
+
+fn push_diff_file(
+    files: &mut Vec<TaskDiffFile>,
+    path: Option<String>,
+    patch: String,
+    status_by_path: &HashMap<String, String>,
+    stat_by_path: &HashMap<String, (u64, u64)>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+    if patch.trim().is_empty() {
+        return;
+    }
+
+    let (additions, deletions) = stat_by_path.get(&path).copied().unwrap_or((0, 0));
+    let status = status_by_path
+        .get(&path)
+        .cloned()
+        .unwrap_or_else(|| infer_diff_status(&patch).to_string());
+
+    files.push(TaskDiffFile {
+        path,
+        status,
+        additions,
+        deletions,
+        patch,
+    });
+}
+
+fn parse_diff_git_path(line: &str) -> Option<String> {
+    let body = line.strip_prefix("diff --git ")?;
+    if let Some(index) = body.rfind(" b/") {
+        return Some(body[index + 3..].trim().to_string());
+    }
+
+    body.rfind("\"b/")
+        .map(|index| body[index + 3..].trim().trim_end_matches('"').to_string())
+}
+
+fn infer_diff_status(patch: &str) -> &'static str {
+    if patch.contains("\ndeleted file mode ") {
+        "deleted"
+    } else if patch.contains("\nnew file mode ") {
+        "added"
+    } else {
+        "modified"
+    }
 }
 
 fn parse_porcelain_status_line(line: &str) -> Option<WorktreeFileChange> {

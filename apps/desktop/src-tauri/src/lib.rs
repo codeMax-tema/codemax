@@ -36,6 +36,8 @@ pub fn run() {
             commands::app::health,
             commands::app::ping,
             commands::app::emit_app_ready,
+            commands::delivery::generate_task_delivery,
+            commands::diff::generate_task_diff,
             commands::exec::execute_task_command,
             commands::exec::cancel_task_command,
             commands::exec::read_task_command_log,

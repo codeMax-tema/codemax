@@ -17,6 +17,12 @@
   "workspaces": [
     "apps/*"
   ],
+  "dependencies": {
+    "monaco-editor": "0.53.0"
+  },
+  "overrides": {
+    "monaco-editor": "0.53.0"
+  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"

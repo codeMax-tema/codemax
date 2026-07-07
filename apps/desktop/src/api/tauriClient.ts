@@ -9,6 +9,8 @@ import type {
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
+  GeneratedTaskDelivery,
+  GeneratedTaskDiff,
   LogCleanupResult,
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
@@ -188,6 +190,23 @@ export function createTaskWorktree(taskId: string) {
 
 export function getTaskWorktreeStatus(taskId: string) {
   return invokeCommand<WorktreeStatus>('get_task_worktree_status', { taskId });
+}
+
+export interface GenerateTaskDiffRequest {
+  taskId: string;
+  baseRef?: string | null;
+}
+
+export function generateTaskDiff(request: GenerateTaskDiffRequest) {
+  return invokeCommand<GeneratedTaskDiff>('generate_task_diff', { request });
+}
+
+export interface GenerateTaskDeliveryRequest {
+  taskId: string;
+}
+
+export function generateTaskDelivery(request: GenerateTaskDeliveryRequest) {
+  return invokeCommand<GeneratedTaskDelivery>('generate_task_delivery', { request });
 }
 
 export function cleanupTaskWorktree(taskId: string, confirmed: boolean) {
