@@ -1,0 +1,145 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = process.cwd();
+
+function read(path) {
+  return readFileSync(join(root, path), 'utf8');
+}
+
+function assertIncludes(file, content, expected) {
+  if (!content.includes(expected)) {
+    throw new Error(`${file} must include ${expected}`);
+  }
+}
+
+function assertJsonKey(locale, dictionary, key) {
+  if (!(key in dictionary)) {
+    throw new Error(`${locale} is missing i18n key: ${key}`);
+  }
+}
+
+const app = read('apps/desktop/src/app/App.tsx');
+const store = read('apps/desktop/src/state/appStore.ts');
+const dialog = read('apps/desktop/src/features/tasks/NewTaskDialog.tsx');
+const taskOverview = read('apps/desktop/src/features/tasks/TaskOverviewPage.tsx');
+const settings = read('apps/desktop/src/features/settings/SettingsPage.tsx');
+const css = read('apps/desktop/src/styles/global.css');
+const zhCN = JSON.parse(read('apps/desktop/src/i18n/locales/zh-CN.json'));
+const enUS = JSON.parse(read('apps/desktop/src/i18n/locales/en-US.json'));
+
+assertIncludes('App.tsx', app, 'NewTaskDialog');
+assertIncludes('App.tsx', app, 'SettingsPage');
+assertIncludes('appStore.ts', store, 'newTaskDialogOpen');
+assertIncludes('appStore.ts', store, 'currentRoute');
+assertIncludes('appStore.ts', store, 'getInitialRoute');
+assertIncludes('appStore.ts', store, 'getInitialDialogOpen');
+
+for (const marker of [
+  'codex-desktop-shell',
+  'codex-window-menubar',
+  'codex-app-body',
+  'codex-thread-sidebar',
+  'codex-sidebar-section',
+  'codex-sidebar-footer',
+  'codex-main-pane',
+]) {
+  assertIncludes('App.tsx', app, marker);
+}
+
+for (const marker of [
+  'codex-composer-dialog',
+  'codex-composer',
+  'composer-toolbar',
+  'AGENT',
+  'PLAN',
+  'ASK',
+  'modelStrength',
+  'accessPermissions',
+  'model-select-trigger',
+  'reasoning-control',
+  'access-mode-control',
+  'mode-control',
+  'codex-contract-grid',
+  'codex-send-button',
+  'workspace-write',
+  'command-execution',
+  'network-access',
+]) {
+  assertIncludes('NewTaskDialog.tsx', dialog, marker);
+}
+
+for (const marker of [
+  'codex-execution-layout',
+  'execution-topbar',
+  'codex-run-transcript',
+  'command-run-card',
+  'command-output-block',
+  'code-change-panel',
+  'execution-code-diff-preview',
+  'diff-file-row',
+  'environment-panel',
+  'execution-followup-composer',
+]) {
+  assertIncludes('TaskOverviewPage.tsx', taskOverview, marker);
+}
+
+for (const marker of [
+  'codex-settings-page',
+  'settings-return-button',
+  'settings-search-box',
+  'settings-sidebar',
+  'settings-group-heading',
+  'settings-detail',
+  'settings-toggle-switch',
+  'settings.categories.models',
+]) {
+  assertIncludes('SettingsPage.tsx', settings, marker);
+}
+
+for (const marker of [
+  '.codex-desktop-shell',
+  '.codex-window-menubar',
+  '.codex-app-body',
+  '.codex-thread-sidebar',
+  '.codex-sidebar-section',
+  '.codex-sidebar-footer',
+  '.codex-execution-layout',
+  '.execution-topbar',
+  '.command-run-card',
+  '.code-change-panel',
+  '.execution-code-diff-preview',
+  '.environment-panel',
+  '.codex-composer',
+  '.codex-composer-dialog',
+  '.codex-contract-grid',
+  '.codex-send-button',
+  '.codex-settings-page',
+  '.settings-return-button',
+  '.settings-search-box',
+  '.settings-group-heading',
+  '.settings-toggle-switch',
+  '.permission-toggle',
+  '.model-option',
+]) {
+  assertIncludes('global.css', css, marker);
+}
+
+for (const key of [
+  'tasks.new.mode.agent',
+  'tasks.new.model.title',
+  'tasks.new.modelStrength',
+  'tasks.new.accessPermissions',
+  'tasks.execution.commands',
+  'tasks.execution.codeChanges',
+  'tasks.environment.title',
+  'settings.categories.models',
+  'settings.categories.permissions',
+  'settings.categories.modes',
+  'settings.categories.storage',
+]) {
+  assertJsonKey('zh-CN', zhCN, key);
+  assertJsonKey('en-US', enUS, key);
+}
+
+console.log('S6 UI contract verified');

@@ -6,8 +6,9 @@
   "type": "module",
   "packageManager": "npm@10.9.3",
   "scripts": {
-    "check": "npm run check:architecture",
+    "check": "npm run check:architecture && npm run check:frontend",
     "check:architecture": "node tests/architecture/verify-architecture.mjs",
+    "check:frontend": "node tests/frontend/verify-s6-ui.mjs",
     "check:tauri": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "build:desktop": "npm --workspace @codemax/desktop run build",
     "build:tauri:debug": "npm --workspace @codemax/desktop run tauri -- build --debug --no-bundle",
