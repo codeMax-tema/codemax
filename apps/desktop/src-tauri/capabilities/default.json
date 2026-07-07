@@ -3,6 +3,6 @@
   "identifier": "default",
   "description": "Default desktop capability for the Codemax shell.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }
 

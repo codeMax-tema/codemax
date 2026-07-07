@@ -68,6 +68,7 @@ export function NewTaskDialog() {
   const [mode, setMode] = useState<RunMode>('AGENT');
   const [modelId, setModelId] = useState(s6SettingsFixture.models[0].id);
   const [modelStrength, setModelStrength] = useState<ModelStrength>('balanced');
+  const [validationCommand, setValidationCommand] = useState(s6SettingsFixture.validationCommands[0] ?? '');
   const [enabledPermissions, setEnabledPermissions] = useState<Record<string, boolean>>({
     'workspace-write': true,
     'command-execution': true,
@@ -130,6 +131,31 @@ export function NewTaskDialog() {
             placeholder={t('tasks.new.descriptionPlaceholder', locale)}
             aria-label={t('tasks.new.description', locale)}
           />
+
+          <div className="codex-validation-command" aria-label={t('tasks.new.validationCommand', locale)}>
+            <label htmlFor="new-task-validation-command">{t('tasks.new.validationCommand', locale)}</label>
+            <div className="codex-validation-command-row">
+              <TerminalSquare className="h-4 w-4" aria-hidden="true" />
+              <input
+                id="new-task-validation-command"
+                value={validationCommand}
+                onChange={(event) => setValidationCommand(event.target.value)}
+                placeholder={t('tasks.new.validationCommandPlaceholder', locale)}
+              />
+            </div>
+            <div className="codex-validation-presets" aria-label={t('tasks.new.validationPresets', locale)}>
+              {s6SettingsFixture.validationCommands.map((command) => (
+                <button
+                  key={command}
+                  type="button"
+                  className={cn(validationCommand === command && 'active')}
+                  onClick={() => setValidationCommand(command)}
+                >
+                  {command}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="composer-toolbar codex-primary-toolbar">
             <button type="button" className="composer-attach-button">
@@ -207,6 +233,10 @@ export function NewTaskDialog() {
             <section className="codex-contract-card wide">
               <strong>{t('tasks.new.accessPermissions', locale)}</strong>
               <span>{t('tasks.new.permissions.workspace', locale)} · {t('tasks.new.permissions.command', locale)}</span>
+            </section>
+            <section className="codex-contract-card wide">
+              <strong>{t('tasks.new.validationCommand', locale)}</strong>
+              <span>{validationCommand.trim() || t('tasks.new.validationAuto', locale)}</span>
             </section>
           </div>
 

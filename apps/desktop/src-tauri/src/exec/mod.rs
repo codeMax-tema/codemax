@@ -321,7 +321,7 @@ impl LogRedactor {
         }
 
         for (key, value) in std::env::vars() {
-            if is_sensitive_key(key) && value.len() >= 4 {
+            if is_sensitive_key(&key) && value.len() >= 4 {
                 secrets.push(value.to_string());
             }
         }
@@ -618,8 +618,7 @@ mod tests {
             small
         );
 
-        let compressed =
-            compress_log_file_if_large(&large, 1).expect("compress large test log");
+        let compressed = compress_log_file_if_large(&large, 1).expect("compress large test log");
         assert_eq!(compressed.file_name().unwrap(), "large.log.gz");
         assert!(compressed.exists());
         assert!(!large.exists());

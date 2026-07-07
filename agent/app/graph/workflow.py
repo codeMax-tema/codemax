@@ -11,6 +11,7 @@ from app.graph.nodes import (
     plan_node,
     route_after_approval,
     route_after_edit,
+    route_after_error_analysis,
     route_after_validate,
     validate_node,
 )
@@ -52,8 +53,12 @@ def compiled_graph():
         wrap_router(route_after_validate),
         {"complete": "complete", "error_analysis": "error_analysis", "end": END},
     )
+    graph.add_conditional_edges(
+        "error_analysis",
+        wrap_router(route_after_error_analysis),
+        {"edit": "edit", "end": END},
+    )
     graph.add_edge("complete", END)
-    graph.add_edge("error_analysis", END)
 
     return graph.compile()
 

@@ -2723,6 +2723,66 @@ button:disabled {
   padding: 0;
 }
 
+.codex-validation-command {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #eeeeef;
+  padding: 12px;
+}
+
+.codex-validation-command label {
+  color: #20242b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.codex-validation-command-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 0 11px;
+  color: #73737c;
+}
+
+.codex-validation-command-row input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #20242b;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  outline: none;
+}
+
+.codex-validation-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.codex-validation-presets button {
+  min-height: 30px;
+  border: 1px solid #e4e4e7;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 0 10px;
+  color: #3f3f46;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.codex-validation-presets button.active,
+.codex-validation-presets button:hover {
+  border-color: #20242b;
+  background: #f7f7f8;
+  color: #20242b;
+}
+
 .codex-contract-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

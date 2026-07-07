@@ -4,6 +4,8 @@ import { normalizeIpcError } from '@/api/errors';
 import type {
   CommandCancelResult,
   CommandExecutionResult,
+  AgentTaskResponse,
+  AgentValidationCycleResult,
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
@@ -93,6 +95,63 @@ export function summarizeTaskCommandLog(request: CommandLogSummaryRequest) {
 
 export function cleanupExpiredTaskLogs() {
   return invokeCommand<LogCleanupResult>('cleanup_expired_task_logs');
+}
+
+export interface CreateAgentTaskRequest {
+  taskId: string;
+  repositoryPath: string;
+  worktreePath: string;
+  title: string;
+  description?: string;
+  modelId?: string | null;
+  validationCommand?: string | null;
+}
+
+export function createAgentTask(request: CreateAgentTaskRequest) {
+  return invokeCommand<AgentTaskResponse>('create_agent_task', { request });
+}
+
+export function getAgentTaskState(taskId: string) {
+  return invokeCommand<AgentTaskResponse['state']>('get_agent_task_state', { taskId });
+}
+
+export interface AdvanceAgentTaskRequest {
+  reason?: string | null;
+  userMessage?: string | null;
+  requireApproval?: boolean;
+}
+
+export function advanceAgentTask(taskId: string, request: AdvanceAgentTaskRequest = {}) {
+  return invokeCommand<AgentTaskResponse>('advance_agent_task', { taskId, request });
+}
+
+export interface SubmitAgentValidationResultRequest {
+  runId?: string | null;
+  command?: string | null;
+  cwd?: string | null;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  cancelled?: boolean;
+}
+
+export function submitAgentValidationResult(
+  taskId: string,
+  request: SubmitAgentValidationResultRequest,
+) {
+  return invokeCommand<AgentTaskResponse>('submit_agent_validation_result', { taskId, request });
+}
+
+export interface RunAgentValidationCycleRequest {
+  taskId: string;
+  reason?: string | null;
+  timeoutMs?: number;
+  maxIterations?: number;
+}
+
+export function runAgentValidationCycle(request: RunAgentValidationCycleRequest) {
+  return invokeCommand<AgentValidationCycleResult>('run_agent_validation_cycle', { request });
 }
 
 export interface RepositoryPathSelection {

@@ -703,7 +703,9 @@
         "editing",
         "validating",
         "analyzing_error",
+        "repairing",
         "waiting_approval",
+        "needs_intervention",
         "completed",
         "failed"
       ]
@@ -734,7 +736,7 @@
           "type": ["string", "null"]
         },
         "validationCommand": {
-          "type": "string"
+          "type": ["string", "null"]
         }
       },
       "required": ["taskId", "repositoryPath", "worktreePath", "title"]
@@ -906,6 +908,33 @@
       },
       "required": ["command", "cwd", "reason", "status", "createdAt"]
     },
+    "ValidationCommandCandidate": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "ecosystem": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priority": {
+          "type": "integer"
+        }
+      },
+      "required": ["language", "ecosystem", "command", "reason", "evidence", "priority"]
+    },
     "AgentApproval": {
       "type": "object",
       "properties": {
@@ -972,11 +1001,21 @@
             }
           ]
         },
+        "validationCandidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidationCommandCandidate"
+          }
+        },
         "checkpointIndex": {
           "type": "integer",
           "minimum": 0
         },
         "repairRound": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxRepairRounds": {
           "type": "integer",
           "minimum": 0
         }
@@ -991,8 +1030,10 @@
         "todos",
         "approval",
         "validationRequest",
+        "validationCandidates",
         "checkpointIndex",
-        "repairRound"
+        "repairRound",
+        "maxRepairRounds"
       ],
       "additionalProperties": true
     }

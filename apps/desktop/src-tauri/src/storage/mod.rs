@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -113,7 +113,7 @@ pub struct ManagedStorage {
 
 impl ManagedStorage {
     pub fn initialize(app_data_dir: impl AsRef<Path>) -> StorageResult<Self> {
-        let roots = StorageRoots::from_app_data_dir(app_data_dir);
+        let roots = StorageRoots::from_runtime(app_data_dir);
         roots.ensure_base_dirs()?;
 
         let store = SqliteStore::open(roots.database_path())?;
@@ -131,21 +131,42 @@ pub struct StorageRoots {
     pub app_data_dir: PathBuf,
     pub artifact_root: PathBuf,
     pub worktree_root: PathBuf,
+    database_path: PathBuf,
 }
 
 impl StorageRoots {
     pub fn from_app_data_dir(app_data_dir: impl AsRef<Path>) -> Self {
         let app_data_dir = app_data_dir.as_ref().to_path_buf();
+        let database_path = app_data_dir.join(DEFAULT_DATABASE_FILE);
 
         Self {
             artifact_root: app_data_dir.join("tasks"),
             worktree_root: app_data_dir.join("worktrees"),
             app_data_dir,
+            database_path,
+        }
+    }
+
+    pub fn from_runtime(app_data_dir: impl AsRef<Path>) -> Self {
+        let app_data_dir =
+            env_path("CODEMAX_APP_DATA_DIR").unwrap_or_else(|| app_data_dir.as_ref().to_path_buf());
+        let artifact_root =
+            env_path("CODEMAX_ARTIFACT_ROOT").unwrap_or_else(|| app_data_dir.join("tasks"));
+        let worktree_root =
+            env_path("CODEMAX_WORKTREE_ROOT").unwrap_or_else(|| app_data_dir.join("worktrees"));
+        let database_path = env_database_path("CODEMAX_DATABASE_URL")
+            .unwrap_or_else(|| app_data_dir.join(DEFAULT_DATABASE_FILE));
+
+        Self {
+            app_data_dir,
+            artifact_root,
+            worktree_root,
+            database_path,
         }
     }
 
     pub fn database_path(&self) -> PathBuf {
-        self.app_data_dir.join(DEFAULT_DATABASE_FILE)
+        self.database_path.clone()
     }
 
     pub fn ensure_base_dirs(&self) -> StorageResult<()> {
@@ -186,6 +207,31 @@ impl StorageRoots {
 
         StorageUsage::measure(&paths, Some(&worktree_path))
     }
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn env_database_path(key: &str) -> Option<PathBuf> {
+    let value = env::var(key).ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(path) = value.strip_prefix("sqlite://") {
+        if path == "app-data/app.db" {
+            return None;
+        }
+        return (!path.is_empty()).then(|| PathBuf::from(path));
+    }
+
+    Some(PathBuf::from(value))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

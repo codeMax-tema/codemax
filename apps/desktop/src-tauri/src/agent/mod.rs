@@ -1,14 +1,16 @@
 use std::{
+    collections::BTreeMap,
     env,
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::Mutex,
     time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use tokio::{process::Child, process::Command, time::sleep};
 
@@ -25,6 +27,7 @@ pub struct AgentServiceConfig {
     pub agent_dir: PathBuf,
     pub startup_timeout_ms: u64,
     pub health_timeout_ms: u64,
+    pub runtime_env: BTreeMap<String, String>,
 }
 
 impl Default for AgentServiceConfig {
@@ -32,8 +35,7 @@ impl Default for AgentServiceConfig {
         let agent_dir = default_agent_dir();
 
         Self {
-            host: env::var("CODEMAX_AGENT_HOST")
-                .unwrap_or_else(|_| DEFAULT_AGENT_HOST.to_string()),
+            host: env::var("CODEMAX_AGENT_HOST").unwrap_or_else(|_| DEFAULT_AGENT_HOST.to_string()),
             port: parse_env_u16("CODEMAX_AGENT_PORT", DEFAULT_AGENT_PORT),
             python_executable: discover_python_executable(&agent_dir),
             agent_dir,
@@ -45,13 +47,37 @@ impl Default for AgentServiceConfig {
                 "CODEMAX_AGENT_HEALTH_TIMEOUT_MS",
                 DEFAULT_HEALTH_TIMEOUT_MS,
             ),
+            runtime_env: BTreeMap::new(),
         }
     }
 }
 
 impl AgentServiceConfig {
+    pub fn with_app_data_defaults(mut self, app_data_dir: impl AsRef<Path>) -> Self {
+        let app_data_dir = app_data_dir.as_ref();
+        self.set_env_default("CODEMAX_APP_DATA_DIR", app_data_dir);
+        self.set_env_default(
+            "CODEMAX_AGENT_CHECKPOINT_DIR",
+            app_data_dir.join("agent").join("checkpoints"),
+        );
+        self.set_env_default(
+            "CODEMAX_AGENT_MEMORY_DIR",
+            app_data_dir.join("agent").join("memory"),
+        );
+        self
+    }
+
     fn health_url(&self) -> String {
         format!("http://{}:{}/health", self.host, self.port)
+    }
+
+    fn set_env_default(&mut self, key: &str, path: impl AsRef<Path>) {
+        if env::var(key).is_ok_and(|value| !value.trim().is_empty()) {
+            return;
+        }
+
+        self.runtime_env
+            .insert(key.to_string(), path.as_ref().to_string_lossy().to_string());
     }
 }
 
@@ -95,6 +121,10 @@ pub enum AgentServiceError {
     Health(String),
     #[error("agent health response was invalid: {0}")]
     InvalidHealthResponse(String),
+    #[error("agent API request failed: {0}")]
+    Api(String),
+    #[error("agent API response was invalid: {0}")]
+    InvalidApiResponse(String),
     #[error("agent process operation failed: {0}")]
     Process(std::io::Error),
     #[error("agent health check task failed: {0}")]
@@ -116,6 +146,13 @@ impl Default for AgentService {
 }
 
 impl AgentService {
+    pub fn with_app_data_dir(app_data_dir: impl AsRef<Path>) -> Self {
+        Self {
+            config: AgentServiceConfig::default().with_app_data_defaults(app_data_dir),
+            child: Mutex::new(None),
+        }
+    }
+
     pub async fn start(&self) -> Result<AgentServiceStatus, AgentServiceError> {
         if let Ok(health) = self.health_check().await {
             if health.status == "ok" {
@@ -140,6 +177,7 @@ impl AgentService {
             .current_dir(&self.config.agent_dir)
             .env("CODEMAX_AGENT_HOST", &self.config.host)
             .env("CODEMAX_AGENT_PORT", self.config.port.to_string())
+            .envs(&self.config.runtime_env)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -176,6 +214,22 @@ impl AgentService {
     pub async fn health_check(&self) -> Result<AgentHealthResponse, AgentServiceError> {
         let config = self.config.clone();
         tokio::task::spawn_blocking(move || health_probe(&config))
+            .await
+            .map_err(|error| AgentServiceError::Join(error.to_string()))?
+    }
+
+    pub async fn api_json(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, AgentServiceError> {
+        self.start().await?;
+
+        let config = self.config.clone();
+        let method = method.to_string();
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || api_json_request(&config, &method, &path, body))
             .await
             .map_err(|error| AgentServiceError::Join(error.to_string()))?
     }
@@ -320,11 +374,83 @@ fn health_probe(config: &AgentServiceConfig) -> Result<AgentHealthResponse, Agen
         .map_err(|error| AgentServiceError::InvalidHealthResponse(error.to_string()))
 }
 
-fn response_body(response: &str) -> Result<&str, AgentServiceError> {
-    let (headers, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
-        AgentServiceError::InvalidHealthResponse("missing HTTP response body".to_string())
+fn api_json_request(
+    config: &AgentServiceConfig,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, AgentServiceError> {
+    let method = method.to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "POST") {
+        return Err(AgentServiceError::Api(format!(
+            "unsupported agent API method: {method}"
+        )));
+    }
+
+    let timeout = Duration::from_millis(config.health_timeout_ms.max(1) * 20);
+    let address = (config.host.as_str(), config.port)
+        .to_socket_addrs()
+        .map_err(|error| AgentServiceError::Api(error.to_string()))?
+        .next()
+        .ok_or_else(|| AgentServiceError::Api("agent host did not resolve".to_string()))?;
+    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| {
+        AgentServiceError::Api(format!(
+            "unable to connect to {}: {error}",
+            config.health_url()
+        ))
     })?;
-    let status_line = headers.lines().next().unwrap_or_default();
+
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(AgentServiceError::Process)?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(AgentServiceError::Process)?;
+
+    let body = body
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "{}".to_string());
+    let request = if method == "GET" {
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            config.host, config.port
+        )
+    } else {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            config.host,
+            config.port,
+            body.as_bytes().len()
+        )
+    };
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| AgentServiceError::Api(error.to_string()))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| AgentServiceError::Api(error.to_string()))?;
+
+    let (status_line, body) = split_http_response(&response)?;
+    let status = http_status_code(status_line).ok_or_else(|| {
+        AgentServiceError::InvalidApiResponse(format!("invalid HTTP status: {status_line}"))
+    })?;
+
+    if !(200..300).contains(&status) {
+        return Err(AgentServiceError::Api(format!(
+            "{status_line}: {}",
+            body.trim().chars().take(500).collect::<String>()
+        )));
+    }
+
+    serde_json::from_str(body.trim())
+        .map_err(|error| AgentServiceError::InvalidApiResponse(error.to_string()))
+}
+
+fn response_body(response: &str) -> Result<&str, AgentServiceError> {
+    let (status_line, body) = split_http_response(response)?;
 
     if !status_line.contains(" 200 ") {
         return Err(AgentServiceError::Health(format!(
@@ -335,8 +461,24 @@ fn response_body(response: &str) -> Result<&str, AgentServiceError> {
     Ok(body)
 }
 
+fn split_http_response(response: &str) -> Result<(&str, &str), AgentServiceError> {
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+        AgentServiceError::InvalidHealthResponse("missing HTTP response body".to_string())
+    })?;
+    let status_line = headers.lines().next().unwrap_or_default();
+    Ok((status_line, body))
+}
+
+fn http_status_code(status_line: &str) -> Option<u16> {
+    status_line.split_whitespace().nth(1)?.parse().ok()
+}
+
 async fn terminate_child(child: &mut Child) -> Result<(), AgentServiceError> {
-    if child.try_wait().map_err(AgentServiceError::Process)?.is_some() {
+    if child
+        .try_wait()
+        .map_err(AgentServiceError::Process)?
+        .is_some()
+    {
         return Ok(());
     }
 
@@ -406,6 +548,30 @@ mod tests {
     fn default_agent_dir_points_at_workspace_agent_folder() {
         let path = default_agent_dir();
 
-        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("agent"));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("agent")
+        );
+    }
+
+    #[test]
+    fn app_data_defaults_fill_agent_storage_paths() {
+        let root = PathBuf::from("D:/codemax/app-data");
+        let config = AgentServiceConfig::default().with_app_data_defaults(&root);
+
+        assert_eq!(
+            config
+                .runtime_env
+                .get("CODEMAX_AGENT_CHECKPOINT_DIR")
+                .map(PathBuf::from),
+            Some(root.join("agent").join("checkpoints"))
+        );
+        assert_eq!(
+            config
+                .runtime_env
+                .get("CODEMAX_AGENT_MEMORY_DIR")
+                .map(PathBuf::from),
+            Some(root.join("agent").join("memory"))
+        );
     }
 }

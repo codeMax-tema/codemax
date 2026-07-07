@@ -126,6 +126,63 @@ export interface LogCleanupResult {
   cleanupDisabled: boolean;
 }
 
+export type AgentTaskPhase =
+  | 'created'
+  | 'planned'
+  | 'editing'
+  | 'validating'
+  | 'analyzing_error'
+  | 'repairing'
+  | 'waiting_approval'
+  | 'needs_intervention'
+  | 'completed'
+  | 'failed';
+
+export interface AgentValidationRequest {
+  command: string;
+  cwd: string;
+  reason: string;
+  status: 'requested' | 'passed' | 'failed' | 'cancelled' | 'timed_out';
+  createdAt: string;
+}
+
+export interface AgentStateSnapshot {
+  taskId: string;
+  repositoryPath: string;
+  worktreePath: string;
+  title: string;
+  description: string;
+  phase: AgentTaskPhase;
+  validationRequest?: AgentValidationRequest | null;
+  validationCandidates?: Array<{
+    language: string;
+    ecosystem: string;
+    command: string;
+    reason: string;
+    evidence: string[];
+    priority: number;
+  }>;
+  repairRound?: number;
+  maxRepairRounds?: number;
+}
+
+export interface AgentTaskResponse {
+  taskId: string;
+  status: 'created' | 'accepted';
+  phase: AgentTaskPhase;
+  checkpointId: string;
+  message?: string;
+  state: AgentStateSnapshot;
+}
+
+export interface AgentValidationCycleResult {
+  taskId: string;
+  phase: AgentTaskPhase | string;
+  iterations: number;
+  commandResults: CommandExecutionResult[];
+  state: AgentStateSnapshot;
+}
+
 export interface TaskSummary {
   id: string;
   title: string;

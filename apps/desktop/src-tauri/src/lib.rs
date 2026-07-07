@@ -17,9 +17,10 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let managed_storage = storage::ManagedStorage::initialize(app_data_dir)?;
+            let agent_app_data_dir = managed_storage.roots.app_data_dir.clone();
             app.manage(managed_storage);
             app.manage(exec::CommandRunRegistry::default());
-            app.manage(agent::AgentService::default());
+            app.manage(agent::AgentService::with_app_data_dir(agent_app_data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -27,6 +28,11 @@ pub fn run() {
             commands::agent::stop_agent_service,
             commands::agent::get_agent_service_status,
             commands::agent::check_agent_health,
+            commands::agent::create_agent_task,
+            commands::agent::get_agent_task_state,
+            commands::agent::advance_agent_task,
+            commands::agent::submit_agent_validation_result,
+            commands::agent::run_agent_validation_cycle,
             commands::app::health,
             commands::app::ping,
             commands::app::emit_app_ready,

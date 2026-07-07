@@ -92,7 +92,16 @@ pub async fn execute_task_command(
     registry: State<'_, CommandRunRegistry>,
     request: CommandRequest,
 ) -> AppResult<CommandExecutionResult> {
-    let task = load_task(&storage, &request.task_id)?;
+    run_task_command(&app, storage.inner(), registry.inner(), request).await
+}
+
+pub(crate) async fn run_task_command(
+    app: &AppHandle,
+    storage: &ManagedStorage,
+    registry: &CommandRunRegistry,
+    request: CommandRequest,
+) -> AppResult<CommandExecutionResult> {
+    let task = load_task(storage, &request.task_id)?;
     validate_command_cwd(&task, &request.cwd)?;
 
     let request = request.with_run_id();
@@ -101,24 +110,19 @@ pub async fn execute_task_command(
         .as_deref()
         .expect("run id is assigned")
         .to_string();
-    let log_paths = command_log_paths(&storage, &request.task_id, &run_id)?;
+    let log_paths = command_log_paths(storage, &request.task_id, &run_id)?;
     let sink_app = app.clone();
     let output_sink: CommandOutputSink = std::sync::Arc::new(move |event| {
         let _ = events::emit_command_output(&sink_app, event);
     });
 
     let result = CommandExecutor
-        .run(
-            request,
-            log_paths,
-            registry.inner().clone(),
-            output_sink,
-        )
+        .run(request, log_paths, registry.clone(), output_sink)
         .await
         .map_err(command_execution_error)?;
 
-    record_command_result(&storage, &result)?;
-    events::emit_command_finished(&app, result.clone()).map_err(event_error)?;
+    record_command_result(storage, &result)?;
+    events::emit_command_finished(app, result.clone()).map_err(event_error)?;
 
     Ok(result)
 }
@@ -171,7 +175,10 @@ pub fn summarize_task_command_log(
     request: CommandLogSummaryRequest,
 ) -> AppResult<CommandLogSummary> {
     let run = load_command_run(&storage, &request.task_id, &request.run_id)?;
-    let max_lines = request.max_lines.unwrap_or(DEFAULT_ERROR_SUMMARY_LINES).clamp(1, 100);
+    let max_lines = request
+        .max_lines
+        .unwrap_or(DEFAULT_ERROR_SUMMARY_LINES)
+        .clamp(1, 100);
     let stderr_path = resolve_command_log_path(&storage, &run, CommandOutputStream::Stderr)?;
     let stdout_path = resolve_command_log_path(&storage, &run, CommandOutputStream::Stdout)?;
     let (stderr_tail, stderr_truncated) =
@@ -217,7 +224,9 @@ pub fn summarize_task_command_log(
 }
 
 #[tauri::command]
-pub fn cleanup_expired_task_logs(storage: State<'_, ManagedStorage>) -> AppResult<LogCleanupResult> {
+pub fn cleanup_expired_task_logs(
+    storage: State<'_, ManagedStorage>,
+) -> AppResult<LogCleanupResult> {
     let retention_days = {
         let store = storage.store.lock().map_err(|_| storage_lock_error())?;
         StoragePolicyRepository::new(store.connection())
@@ -334,7 +343,11 @@ fn resolve_command_log_path(
     .ok_or_else(|| {
         CommandError::new(
             "command.logPathMissing",
-            format!("Command run {} does not have a saved {} log path.", run.id, stream.as_str()),
+            format!(
+                "Command run {} does not have a saved {} log path.",
+                run.id,
+                stream.as_str()
+            ),
         )
     })?;
     let path = existing_log_path(PathBuf::from(saved_path)).ok_or_else(|| {
@@ -343,12 +356,16 @@ fn resolve_command_log_path(
             format!("Command log file is no longer available: {saved_path}"),
         )
     })?;
-    let artifact_root = storage.roots.artifact_root.canonicalize().map_err(|error| {
-        CommandError::new(
-            "storage.artifactRootUnavailable",
-            format!("Task artifact root is unavailable: {error}"),
-        )
-    })?;
+    let artifact_root = storage
+        .roots
+        .artifact_root
+        .canonicalize()
+        .map_err(|error| {
+            CommandError::new(
+                "storage.artifactRootUnavailable",
+                format!("Task artifact root is unavailable: {error}"),
+            )
+        })?;
     let canonical = path.canonicalize().map_err(|error| {
         CommandError::new(
             "command.logFileUnavailable",
@@ -708,10 +725,9 @@ fn log_read_error(error: std::io::Error) -> CommandError {
 
 fn command_execution_error(error: CommandExecutionError) -> CommandError {
     match error {
-        CommandExecutionError::EmptyCommand => CommandError::new(
-            "command.empty",
-            "Command cannot be empty.",
-        ),
+        CommandExecutionError::EmptyCommand => {
+            CommandError::new("command.empty", "Command cannot be empty.")
+        }
         CommandExecutionError::DuplicateRun(run_id) => CommandError::new(
             "command.duplicateRun",
             format!("Command run is already active: {run_id}"),
@@ -793,10 +809,8 @@ mod tests {
 
     #[test]
     fn extracts_error_summary_from_tail() {
-        let lines = extract_error_lines(
-            "ok\nTraceback: call failed\nERROR test failed\nall done",
-            1,
-        );
+        let lines =
+            extract_error_lines("ok\nTraceback: call failed\nERROR test failed\nall done", 1);
 
         assert_eq!(lines, vec!["ERROR test failed".to_string()]);
     }

@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.config import AgentSettings, load_settings
 from app.graph import (
     AgentPhase,
     AgentState,
@@ -15,11 +16,13 @@ from app.graph import (
 )
 from app.graph.state import (
     ApprovalStatus,
+    ValidationCommandCandidate,
     ValidationResult,
     append_log,
     utc_now,
 )
 from app.memory import MemoryService
+from app.validation import detect_validation_candidates
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 _store = CheckpointStore()
@@ -49,7 +52,7 @@ class CreateAgentTaskRequest(AgentModel):
     title: str = Field(min_length=1)
     description: str = ""
     model_id: str | None = Field(default=None, alias="modelId")
-    validation_command: str = Field(default="python --version", alias="validationCommand")
+    validation_command: str | None = Field(default=None, alias="validationCommand")
 
 
 class CreateAgentTaskResponse(AgentModel):
@@ -109,6 +112,8 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 detail=f"Agent task already exists: {request.task_id}",
             )
 
+        settings = load_settings()
+        validation_command, validation_candidates = resolve_validation_command(request, settings)
         state = create_initial_state(
             task_id=request.task_id,
             repository_path=request.repository_path,
@@ -116,8 +121,13 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
             title=request.title,
             description=request.description,
             model_id=request.model_id,
-            validation_command=request.validation_command,
-            context_notes=memory_context_notes(request),
+            validation_command=validation_command,
+            validation_candidates=validation_candidates,
+            max_repair_rounds=settings.max_repair_rounds,
+            context_notes=[
+                *memory_context_notes(request),
+                *validation_context_notes(validation_candidates),
+            ],
         )
         state = _store.save(state)
 
@@ -289,6 +299,44 @@ def memory_context_notes(request: CreateAgentTaskRequest) -> list[str]:
     for memory in bundle.long_term_memories:
         notes.append(f"Memory[{memory.category}:{memory.key}]: {memory.value}")
     return notes
+
+
+def resolve_validation_command(
+    request: CreateAgentTaskRequest,
+    settings: AgentSettings,
+) -> tuple[str, list[ValidationCommandCandidate]]:
+    explicit_command = (request.validation_command or "").strip()
+    raw_candidates = detect_validation_candidates(request.worktree_path)
+    if not raw_candidates:
+        raw_candidates = detect_validation_candidates(request.repository_path)
+
+    candidates = [
+        ValidationCommandCandidate(
+            language=item.language,
+            ecosystem=item.ecosystem,
+            command=item.command,
+            reason=item.reason,
+            evidence=list(item.evidence),
+            priority=item.priority,
+        )
+        for item in raw_candidates
+    ]
+    if explicit_command:
+        return explicit_command, candidates
+    if candidates:
+        return candidates[0].command, candidates
+    return settings.default_validation_command, candidates
+
+
+def validation_context_notes(candidates: list[ValidationCommandCandidate]) -> list[str]:
+    if not candidates:
+        return ["Validation command detection: no project-specific command detected."]
+
+    summary = "; ".join(
+        f"{candidate.language}/{candidate.ecosystem} -> {candidate.command}"
+        for candidate in candidates[:8]
+    )
+    return [f"Validation command detection: {summary}."]
 
 
 def load_state_or_404(task_id: str) -> AgentState:

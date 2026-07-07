@@ -28,9 +28,6 @@ pub fn emit_command_output(app: &AppHandle, payload: CommandOutputEvent) -> taur
     app.emit(COMMAND_OUTPUT_EVENT, payload)
 }
 
-pub fn emit_command_finished(
-    app: &AppHandle,
-    result: CommandExecutionResult,
-) -> tauri::Result<()> {
+pub fn emit_command_finished(app: &AppHandle, result: CommandExecutionResult) -> tauri::Result<()> {
     app.emit(COMMAND_FINISHED_EVENT, CommandFinishedEvent { result })
 }

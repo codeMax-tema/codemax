@@ -9,6 +9,8 @@ class AgentSettings:
     log_level: str
     memory_dir: str
     keep_recent_messages: int
+    max_repair_rounds: int
+    default_validation_command: str
     model_provider: str
     model_base_url: str
     model_name: str
@@ -23,6 +25,11 @@ def load_settings() -> AgentSettings:
         log_level=environ.get("CODEMAX_AGENT_LOG_LEVEL", "info"),
         memory_dir=environ.get("CODEMAX_AGENT_MEMORY_DIR", ""),
         keep_recent_messages=int(environ.get("CODEMAX_KEEP_RECENT_MESSAGES", "50")),
+        max_repair_rounds=max(0, int(environ.get("CODEMAX_MAX_REPAIR_ROUNDS", "5"))),
+        default_validation_command=environ.get(
+            "CODEMAX_DEFAULT_VALIDATION_COMMAND",
+            "python --version",
+        ),
         model_provider=environ.get("CODEMAX_MODEL_PROVIDER", "openai-compatible"),
         model_base_url=environ.get("CODEMAX_MODEL_BASE_URL", ""),
         model_name=environ.get("CODEMAX_MODEL_NAME", ""),

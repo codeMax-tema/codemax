@@ -208,6 +208,66 @@
             }
           },
           "required": ["response"]
+        },
+        "create_agent_task": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/AgentTaskCreateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AgentTaskResponse"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_agent_task_state": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AgentStateSnapshot"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "advance_agent_task": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/AgentTaskAdvanceRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AgentTaskResponse"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "submit_agent_validation_result": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/AgentValidationResultRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AgentTaskResponse"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "run_agent_validation_cycle": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RunAgentValidationCycleRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RunAgentValidationCycleResponse"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
       "required": [
@@ -228,7 +288,12 @@
         "start_agent_service",
         "stop_agent_service",
         "get_agent_service_status",
-        "check_agent_health"
+        "check_agent_health",
+        "create_agent_task",
+        "get_agent_task_state",
+        "advance_agent_task",
+        "submit_agent_validation_result",
+        "run_agent_validation_cycle"
       ]
     }
   },
@@ -374,6 +439,231 @@
         }
       },
       "required": ["taskId"]
+    },
+    "AgentTaskCreateRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "repositoryPath": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "validationCommand": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId", "repositoryPath", "worktreePath", "title"]
+    },
+    "AgentTaskAdvanceRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "userMessage": {
+          "type": ["string", "null"]
+        },
+        "requireApproval": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId"]
+    },
+    "AgentValidationResultRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": ["string", "null"]
+        },
+        "command": {
+          "type": ["string", "null"]
+        },
+        "cwd": {
+          "type": ["string", "null"]
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId"]
+    },
+    "RunAgentValidationCycleRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["taskId"]
+    },
+    "AgentTaskPhase": {
+      "enum": [
+        "created",
+        "planned",
+        "editing",
+        "validating",
+        "analyzing_error",
+        "repairing",
+        "waiting_approval",
+        "needs_intervention",
+        "completed",
+        "failed"
+      ]
+    },
+    "AgentValidationRequest": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["requested", "passed", "failed", "cancelled", "timed_out"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["command", "cwd", "reason", "status", "createdAt"]
+    },
+    "AgentStateSnapshot": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "repositoryPath": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "validationRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentValidationRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repairRound": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxRepairRounds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["taskId", "repositoryPath", "worktreePath", "title", "description", "phase"],
+      "additionalProperties": true
+    },
+    "AgentTaskResponse": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["created", "accepted"]
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentStateSnapshot"
+        }
+      },
+      "required": ["taskId", "status", "phase", "checkpointId", "state"]
+    },
+    "RunAgentValidationCycleResponse": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AgentTaskPhase"
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "commandResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommandExecutionResult"
+          }
+        },
+        "state": {
+          "$ref": "#/$defs/AgentStateSnapshot"
+        }
+      },
+      "required": ["taskId", "phase", "iterations", "commandResults", "state"]
     },
     "CreateTaskBranchRequest": {
       "type": "object",

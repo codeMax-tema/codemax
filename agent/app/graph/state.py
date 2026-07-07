@@ -14,7 +14,9 @@ class AgentPhase(StrEnum):
     EDITING = "editing"
     VALIDATING = "validating"
     ANALYZING_ERROR = "analyzing_error"
+    REPAIRING = "repairing"
     WAITING_APPROVAL = "waiting_approval"
+    NEEDS_INTERVENTION = "needs_intervention"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -118,6 +120,15 @@ class AgentRepairPlan(AgentModel):
     next_actions: list[str] = Field(default_factory=list, alias="nextActions")
 
 
+class ValidationCommandCandidate(AgentModel):
+    language: str
+    ecosystem: str
+    command: str
+    reason: str
+    evidence: list[str] = Field(default_factory=list)
+    priority: int = 0
+
+
 class AgentState(AgentModel):
     task_id: str = Field(alias="taskId")
     repository_path: str = Field(alias="repositoryPath")
@@ -132,11 +143,16 @@ class AgentState(AgentModel):
     requires_approval: bool = Field(default=False, alias="requiresApproval")
     approval: AgentApproval | None = None
     validation_command: str = Field(default="python --version", alias="validationCommand")
+    validation_candidates: list[ValidationCommandCandidate] = Field(
+        default_factory=list,
+        alias="validationCandidates",
+    )
     validation_request: ValidationRequest | None = Field(default=None, alias="validationRequest")
     validation_result: ValidationResult | None = Field(default=None, alias="validationResult")
     file_edits: list[AgentFileEdit] = Field(default_factory=list, alias="fileEdits")
     repair_plan: AgentRepairPlan | None = Field(default=None, alias="repairPlan")
     repair_round: int = Field(default=0, alias="repairRound")
+    max_repair_rounds: int = Field(default=5, alias="maxRepairRounds")
     checkpoint_index: int = Field(default=0, alias="checkpointIndex")
     created_at: str = Field(default_factory=utc_now, alias="createdAt")
     updated_at: str = Field(default_factory=utc_now, alias="updatedAt")
@@ -150,6 +166,8 @@ def create_initial_state(
     description: str = "",
     model_id: str | None = None,
     validation_command: str = "python --version",
+    validation_candidates: list[ValidationCommandCandidate] | None = None,
+    max_repair_rounds: int = 5,
     context_notes: list[str] | None = None,
 ) -> AgentState:
     context = TaskContext(
@@ -167,6 +185,8 @@ def create_initial_state(
         modelId=model_id,
         context=context,
         validationCommand=validation_command,
+        validationCandidates=validation_candidates or [],
+        maxRepairRounds=max_repair_rounds,
     )
     return append_log(state, "Agent task state created.")
 
