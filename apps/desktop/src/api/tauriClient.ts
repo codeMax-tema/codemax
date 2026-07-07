@@ -6,12 +6,15 @@ import type {
   CommandExecutionResult,
   AgentTaskResponse,
   AgentValidationCycleResult,
+  ApprovalDecision,
+  ApprovalSummary,
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
   LogCleanupResult,
+  ModelConfigView,
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
@@ -97,6 +100,45 @@ export function summarizeTaskCommandLog(request: CommandLogSummaryRequest) {
 
 export function cleanupExpiredTaskLogs() {
   return invokeCommand<LogCleanupResult>('cleanup_expired_task_logs');
+}
+
+export interface SaveModelConfigRequest {
+  id?: string;
+  provider: string;
+  baseUrl: string;
+  modelName: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+}
+
+export function getModelConfig(id = 'model-default') {
+  return invokeCommand<ModelConfigView | null>('get_model_config', { id });
+}
+
+export function saveModelConfig(request: SaveModelConfigRequest) {
+  return invokeCommand<ModelConfigView>('save_model_config', { request });
+}
+
+export function listPendingApprovals() {
+  return invokeCommand<ApprovalSummary[]>('list_pending_approvals');
+}
+
+export interface ListTaskApprovalsRequest {
+  taskId: string;
+}
+
+export function listTaskApprovals(request: ListTaskApprovalsRequest) {
+  return invokeCommand<ApprovalSummary[]>('list_task_approvals', { request });
+}
+
+export interface DecideApprovalRequest {
+  approvalId: string;
+  decision: ApprovalDecision;
+  comment?: string;
+}
+
+export function decideApproval(request: DecideApprovalRequest) {
+  return invokeCommand<ApprovalSummary>('decide_approval', { request });
 }
 
 export interface CreateAgentTaskRequest {

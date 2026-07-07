@@ -668,14 +668,19 @@ impl<'conn> ApprovalRepository<'conn> {
         approval_id: &str,
         decision: &str,
         comment: Option<&str>,
-    ) -> StorageResult<()> {
-        self.connection.execute(
+    ) -> StorageResult<ApprovalRecord> {
+        let updated = self.connection.execute(
             "UPDATE approvals
              SET decision = ?2, comment = ?3, decided_at = ?4
              WHERE id = ?1",
             params![approval_id, decision, comment, now_text()],
         )?;
-        Ok(())
+
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!("approval {approval_id}")));
+        }
+
+        self.get_required(approval_id)
     }
 
     pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ApprovalRecord>> {
@@ -696,7 +701,46 @@ impl<'conn> ApprovalRepository<'conn> {
         Ok(approvals)
     }
 
-    fn get_required(&self, approval_id: &str) -> StorageResult<ApprovalRecord> {
+    pub fn list_pending(&self) -> StorageResult<Vec<ApprovalRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, type, risk_level, content, reason, decision,
+                comment, created_at, decided_at
+             FROM approvals
+             WHERE decision IS NULL
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map([], map_approval_record)?;
+        let mut approvals = Vec::new();
+
+        for row in rows {
+            approvals.push(row?);
+        }
+
+        Ok(approvals)
+    }
+
+    pub fn find_for_content(
+        &self,
+        task_id: &str,
+        approval_type: &str,
+        content: &str,
+    ) -> StorageResult<Option<ApprovalRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, type, risk_level, content, reason, decision,
+                    comment, created_at, decided_at
+                 FROM approvals
+                 WHERE task_id = ?1 AND type = ?2 AND content = ?3
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                params![task_id, approval_type, content],
+                map_approval_record,
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    pub fn get_required(&self, approval_id: &str) -> StorageResult<ApprovalRecord> {
         self.connection
             .query_row(
                 "SELECT id, task_id, type, risk_level, content, reason, decision,
@@ -799,6 +843,22 @@ impl<'conn> ModelConfigRepository<'conn> {
             )
             .optional()
             .map_err(StorageError::from)
+    }
+
+    pub fn list(&self) -> StorageResult<Vec<ModelConfigRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, provider, base_url, model_name, api_key_secret_ref, created_at, updated_at
+             FROM model_configs
+             ORDER BY updated_at DESC, id",
+        )?;
+        let rows = statement.query_map([], map_model_config_record)?;
+        let mut configs = Vec::new();
+
+        for row in rows {
+            configs.push(row?);
+        }
+
+        Ok(configs)
     }
 }
 

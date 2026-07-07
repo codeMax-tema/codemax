@@ -161,6 +161,7 @@ impl CommandExecutor {
         log_paths: CommandLogPaths,
         registry: CommandRunRegistry,
         output_sink: CommandOutputSink,
+        additional_redaction_values: Vec<String>,
     ) -> CommandExecutionResultType<CommandExecutionResult> {
         let request = request.with_run_id();
         let command_text = request.command.trim();
@@ -174,7 +175,8 @@ impl CommandExecutor {
             registry: registry.clone(),
             run_id: run_id.clone(),
         };
-        let redactor = LogRedactor::from_command_env(&request.env);
+        let redactor =
+            LogRedactor::from_command_env_and_values(&request.env, additional_redaction_values);
 
         let stdout_file = File::create(&log_paths.stdout_path).await?;
         let stderr_file = File::create(&log_paths.stderr_path).await?;
@@ -217,7 +219,7 @@ impl CommandExecutor {
             stream: CommandOutputStream::Stderr,
             reader: stderr,
             file: stderr_file,
-            redactor,
+            redactor: redactor.clone(),
             sequence,
             sink: output_sink,
         });
@@ -269,7 +271,7 @@ impl CommandExecutor {
         Ok(CommandExecutionResult {
             run_id,
             task_id: request.task_id,
-            command: request.command,
+            command: redactor.redact(&request.command),
             cwd: request.cwd,
             status: command_status(exit_code, timed_out, cancelled).to_string(),
             stdout_path: stdout_path.to_string_lossy().to_string(),
@@ -306,12 +308,19 @@ impl CommandRequest {
 }
 
 #[derive(Clone)]
-struct LogRedactor {
+pub struct LogRedactor {
     secrets: Arc<Vec<String>>,
 }
 
 impl LogRedactor {
-    fn from_command_env(env: &BTreeMap<String, String>) -> Self {
+    pub fn from_command_env(env: &BTreeMap<String, String>) -> Self {
+        Self::from_command_env_and_values(env, Vec::new())
+    }
+
+    pub fn from_command_env_and_values(
+        env: &BTreeMap<String, String>,
+        additional_values: Vec<String>,
+    ) -> Self {
         let mut secrets = Vec::new();
 
         for (key, value) in env {
@@ -326,15 +335,26 @@ impl LogRedactor {
             }
         }
 
+        for value in additional_values {
+            if value.len() >= 4 {
+                secrets.push(value);
+            }
+        }
+
         secrets.sort();
         secrets.dedup();
+        secrets.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
 
         Self {
             secrets: Arc::new(secrets),
         }
     }
 
-    fn redact(&self, chunk: &str) -> String {
+    pub fn from_values(values: Vec<String>) -> Self {
+        Self::from_command_env_and_values(&BTreeMap::new(), values)
+    }
+
+    pub fn redact(&self, chunk: &str) -> String {
         let mut redacted = chunk.to_string();
         for secret in self.secrets.iter() {
             redacted = redacted.replace(secret, "[REDACTED]");
@@ -538,6 +558,7 @@ mod tests {
                 log_paths(&root),
                 CommandRunRegistry::default(),
                 sink,
+                Vec::new(),
             )
             .await
             .expect("run command");
@@ -581,6 +602,7 @@ mod tests {
                 log_paths(&root),
                 CommandRunRegistry::default(),
                 sink,
+                Vec::new(),
             )
             .await
             .expect("run timeout command");
@@ -601,6 +623,17 @@ mod tests {
         assert_eq!(
             redactor.redact("token sk-test-secret was printed"),
             "token [REDACTED] was printed"
+        );
+    }
+
+    #[test]
+    fn log_redactor_masks_additional_secret_values_longest_first() {
+        let redactor =
+            LogRedactor::from_values(vec!["sk-test".to_string(), "sk-test-secret".to_string()]);
+
+        assert_eq!(
+            redactor.redact("token sk-test-secret and sk-test"),
+            "token [REDACTED] and [REDACTED]"
         );
     }
 

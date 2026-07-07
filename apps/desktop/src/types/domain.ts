@@ -187,6 +187,19 @@ export interface LogCleanupResult {
   cleanupDisabled: boolean;
 }
 
+export interface ModelConfigView {
+  id: string;
+  provider: string;
+  baseUrl: string;
+  modelName: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string | null;
+  secretStorage?: string | null;
+  secretLocation?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type AgentTaskPhase =
   | 'created'
   | 'planned'
@@ -261,8 +274,15 @@ export type RiskLevel = 'low' | 'medium' | 'high';
 export interface ApprovalSummary {
   id: string;
   taskId: string;
+  approvalType?: string;
   riskLevel: RiskLevel;
   content: string;
+  reason?: string;
+  decision?: ApprovalDecision | null;
+  comment?: string | null;
   createdAt: string;
+  decidedAt?: string | null;
 }
+
+export type ApprovalDecision = 'approved' | 'rejected' | 'revise';
 

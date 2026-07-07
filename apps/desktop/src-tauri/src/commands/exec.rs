@@ -14,13 +14,17 @@ use crate::{
     events,
     exec::{
         CommandExecutionError, CommandExecutionResult, CommandExecutor, CommandLogPaths,
-        CommandOutputSink, CommandOutputStream, CommandRequest, CommandRunRegistry,
+        CommandOutputSink, CommandOutputStream, CommandRequest, CommandRunRegistry, LogRedactor,
     },
+    safety::{self, RiskAssessment},
     storage::{
-        CommandRunRecord, CommandRunRepository, ManagedStorage, NewCommandRun, StorageError,
-        StoragePolicyRepository, TaskRecord, TaskRepository,
+        ApprovalRecord, ApprovalRepository, CommandRunRecord, CommandRunRepository, ManagedStorage,
+        NewApproval, NewCommandRun, StorageError, StoragePolicyRepository, TaskRecord,
+        TaskRepository,
     },
 };
+
+use super::models::load_model_api_key_values;
 
 const DEFAULT_LOG_PAGE_BYTES: u64 = 64 * 1024;
 const MAX_LOG_PAGE_BYTES: u64 = 256 * 1024;
@@ -102,7 +106,11 @@ pub(crate) async fn run_task_command(
     request: CommandRequest,
 ) -> AppResult<CommandExecutionResult> {
     let task = load_task(storage, &request.task_id)?;
-    validate_command_cwd(&task, &request.cwd)?;
+    let path_guard = validate_command_cwd(&task, &request.cwd)?;
+    let additional_redaction_values = load_model_api_key_values(storage);
+    let redactor =
+        LogRedactor::from_command_env_and_values(&request.env, additional_redaction_values.clone());
+    enforce_command_safety(storage, &task, &request, &path_guard, &redactor)?;
 
     let request = request.with_run_id();
     let run_id = request
@@ -117,7 +125,13 @@ pub(crate) async fn run_task_command(
     });
 
     let result = CommandExecutor
-        .run(request, log_paths, registry.clone(), output_sink)
+        .run(
+            request,
+            log_paths,
+            registry.clone(),
+            output_sink,
+            additional_redaction_values,
+        )
         .await
         .map_err(command_execution_error)?;
 
@@ -156,6 +170,8 @@ pub fn read_task_command_log(
     let compressed = is_gzip_path(&path);
     let (bytes, eof) =
         read_log_window(&path, offset, max_bytes as usize).map_err(log_read_error)?;
+    let redactor = stored_secret_redactor(storage.inner());
+    let content = redactor.redact(&String::from_utf8_lossy(&bytes));
 
     Ok(CommandLogPage {
         task_id: request.task_id,
@@ -163,7 +179,7 @@ pub fn read_task_command_log(
         stream: request.stream,
         offset_bytes: offset,
         next_offset_bytes: offset + bytes.len() as u64,
-        content: String::from_utf8_lossy(&bytes).to_string(),
+        content,
         eof,
         compressed,
     })
@@ -185,6 +201,9 @@ pub fn summarize_task_command_log(
         read_log_tail(&stderr_path, ERROR_SUMMARY_TAIL_BYTES).map_err(log_read_error)?;
     let (stdout_tail, stdout_truncated) =
         read_log_tail(&stdout_path, ERROR_SUMMARY_TAIL_BYTES).map_err(log_read_error)?;
+    let redactor = stored_secret_redactor(storage.inner());
+    let stderr_tail = redactor.redact(&stderr_tail);
+    let stdout_tail = redactor.redact(&stdout_tail);
 
     let stderr_errors = extract_error_lines(&stderr_tail, max_lines);
     if !stderr_errors.is_empty() {
@@ -280,7 +299,13 @@ fn load_command_run(
         .map_err(storage_error)
 }
 
-fn validate_command_cwd(task: &TaskRecord, cwd: &str) -> AppResult<()> {
+#[derive(Debug, Clone)]
+struct CommandPathGuard {
+    cwd: PathBuf,
+    worktree: PathBuf,
+}
+
+fn validate_command_cwd(task: &TaskRecord, cwd: &str) -> AppResult<CommandPathGuard> {
     let worktree_path = task.worktree_path.as_deref().ok_or_else(|| {
         CommandError::new(
             "command.worktreeMissing",
@@ -311,7 +336,126 @@ fn validate_command_cwd(task: &TaskRecord, cwd: &str) -> AppResult<()> {
         ));
     }
 
-    Ok(())
+    Ok(CommandPathGuard { cwd, worktree })
+}
+
+fn enforce_command_safety(
+    storage: &ManagedStorage,
+    task: &TaskRecord,
+    request: &CommandRequest,
+    path_guard: &CommandPathGuard,
+    redactor: &LogRedactor,
+) -> AppResult<()> {
+    let assessment =
+        safety::assess_command(&request.command, &path_guard.cwd, &path_guard.worktree);
+
+    if assessment.denied {
+        return Err(CommandError::new(
+            "command.blockedBySafetyPolicy",
+            format!(
+                "Command was blocked before execution. {}",
+                assessment.reason
+            ),
+        ));
+    }
+
+    if !assessment.requires_approval {
+        return Ok(());
+    }
+
+    let content = approval_content(request, redactor);
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+    let approvals = ApprovalRepository::new(connection);
+
+    if let Some(existing) = approvals
+        .find_for_content(&task.id, "command", &content)
+        .map_err(storage_error)?
+    {
+        return match existing.decision.as_deref() {
+            Some("approved") => Ok(()),
+            Some("rejected") => Err(CommandError::new(
+                "approval.rejected",
+                format!(
+                    "Command was rejected by the user and will not run: {}",
+                    existing.comment.unwrap_or(existing.reason)
+                ),
+            )),
+            Some("revise") => Err(CommandError::new(
+                "approval.reviseRequested",
+                format!(
+                    "User requested a revised plan before this command can run: {}",
+                    existing.comment.unwrap_or(existing.reason)
+                ),
+            )),
+            _ => Err(CommandError::new(
+                "approval.pending",
+                format!(
+                    "Command requires approval before execution. Approval id: {}",
+                    existing.id
+                ),
+            )),
+        };
+    }
+
+    let approval = create_command_approval(&approvals, &task.id, &content, &assessment)?;
+    TaskRepository::new(connection)
+        .update_status(&task.id, "waitingApproval", None)
+        .map_err(storage_error)?;
+
+    Err(CommandError::new(
+        "approval.required",
+        format!(
+            "Command requires approval before execution. Approval id: {}",
+            approval.id
+        ),
+    ))
+}
+
+fn create_command_approval(
+    approvals: &ApprovalRepository<'_>,
+    task_id: &str,
+    content: &str,
+    assessment: &RiskAssessment,
+) -> AppResult<ApprovalRecord> {
+    let id = format!("approval-{}", uuid::Uuid::new_v4());
+    approvals
+        .create(NewApproval {
+            id: &id,
+            task_id,
+            approval_type: "command",
+            risk_level: assessment.level.as_str(),
+            content,
+            reason: &approval_reason(assessment),
+        })
+        .map_err(storage_error)
+}
+
+fn approval_content(request: &CommandRequest, redactor: &LogRedactor) -> String {
+    redactor.redact(&format!(
+        "command: {}\ncwd: {}",
+        request.command.trim(),
+        request.cwd.trim()
+    ))
+}
+
+fn approval_reason(assessment: &RiskAssessment) -> String {
+    let operations = assessment
+        .operations
+        .iter()
+        .map(|operation| operation.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let matched_rules = if assessment.matched_rule_ids.is_empty() {
+        "none".to_string()
+    } else {
+        assessment.matched_rule_ids.join(", ")
+    };
+
+    format!(
+        "{} Operations: [{}]. Matched rules: [{}].",
+        assessment.reason, operations, matched_rules
+    )
 }
 
 fn command_log_paths(
@@ -412,6 +556,10 @@ fn record_command_result(
         })
         .map_err(storage_error)?;
     Ok(())
+}
+
+fn stored_secret_redactor(storage: &ManagedStorage) -> LogRedactor {
+    LogRedactor::from_values(load_model_api_key_values(storage))
 }
 
 fn clamp_log_page_size(max_bytes: Option<u64>) -> u64 {
@@ -761,6 +909,11 @@ fn event_error(error: tauri::Error) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        secrets::SecretStore,
+        storage::{ModelConfigRepository, NewModelConfig, NewTask, SqliteStore, StorageRoots},
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn safe_file_stem_removes_path_separators_and_limits_length() {
@@ -813,5 +966,181 @@ mod tests {
             extract_error_lines("ok\nTraceback: call failed\nERROR test failed\nall done", 1);
 
         assert_eq!(lines, vec!["ERROR test failed".to_string()]);
+    }
+
+    fn safety_storage() -> (ManagedStorage, TaskRecord, CommandPathGuard, CommandRequest) {
+        let root =
+            std::env::temp_dir().join(format!("codemax-safety-test-{}", uuid::Uuid::new_v4()));
+        let worktree = root.join("worktrees").join("task-001");
+        std::fs::create_dir_all(&worktree).expect("create worktree");
+
+        let store = SqliteStore::open_in_memory().expect("open sqlite");
+        store.migrate().expect("migrate sqlite");
+        let task = TaskRepository::new(store.connection())
+            .create(NewTask {
+                id: "task-001",
+                title: "Safety test",
+                description: "Exercise S9 command approval",
+                task_type: "custom",
+                status: "validating",
+                repository_path: root.to_string_lossy().as_ref(),
+                worktree_path: Some(worktree.to_string_lossy().as_ref()),
+                branch_name: Some("codex/task-001"),
+                model_id: None,
+            })
+            .expect("create task");
+        let storage = ManagedStorage {
+            roots: StorageRoots::from_app_data_dir(root),
+            store: std::sync::Mutex::new(store),
+        };
+        let guard = CommandPathGuard {
+            cwd: worktree.clone(),
+            worktree,
+        };
+        let request = CommandRequest {
+            task_id: "task-001".to_string(),
+            run_id: Some("run-001".to_string()),
+            command: "npm install left-pad".to_string(),
+            cwd: guard.cwd.to_string_lossy().to_string(),
+            env: BTreeMap::new(),
+            timeout_ms: Some(30_000),
+        };
+
+        (storage, task, guard, request)
+    }
+
+    fn test_redactor() -> LogRedactor {
+        LogRedactor::from_values(Vec::new())
+    }
+
+    #[test]
+    fn approval_content_redacts_secret_values() {
+        let request = CommandRequest {
+            task_id: "task-001".to_string(),
+            run_id: Some("run-001".to_string()),
+            command: "echo sk-test-secret-value".to_string(),
+            cwd: "D:/repo/worktree".to_string(),
+            env: BTreeMap::new(),
+            timeout_ms: Some(30_000),
+        };
+        let redactor = LogRedactor::from_values(vec!["sk-test-secret-value".to_string()]);
+        let content = approval_content(&request, &redactor);
+
+        assert!(content.contains("[REDACTED]"));
+        assert!(!content.contains("sk-test-secret-value"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stored_secret_redactor_masks_saved_model_keys() {
+        let (storage, root) = {
+            let root = std::env::temp_dir().join(format!(
+                "codemax-command-redaction-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let store = SqliteStore::open_in_memory().expect("open sqlite");
+            store.migrate().expect("migrate sqlite");
+            let storage = ManagedStorage {
+                roots: StorageRoots::from_app_data_dir(&root),
+                store: std::sync::Mutex::new(store),
+            };
+            (storage, root)
+        };
+        let secret = "sk-test-saved-key";
+        let secret_ref = SecretStore::new(&storage.roots.app_data_dir)
+            .put_model_api_key("model-default", secret)
+            .expect("save secret");
+        let store = storage.store.lock().expect("storage lock");
+        ModelConfigRepository::new(store.connection())
+            .save(NewModelConfig {
+                id: "model-default",
+                provider: "openai-compatible",
+                base_url: "",
+                model_name: "codemax-test",
+                api_key_secret_ref: Some(&secret_ref),
+            })
+            .expect("save model config");
+        drop(store);
+
+        let redactor = stored_secret_redactor(&storage);
+
+        assert_eq!(
+            redactor.redact("printed sk-test-saved-key"),
+            "printed [REDACTED]"
+        );
+
+        std::fs::remove_dir_all(root).expect("clean temp redaction storage");
+    }
+
+    #[test]
+    fn high_risk_command_creates_pending_approval_and_suspends_task() {
+        let (storage, task, guard, request) = safety_storage();
+
+        let error = enforce_command_safety(&storage, &task, &request, &guard, &test_redactor())
+            .expect_err("dependency install should require approval");
+
+        assert_eq!(error.code, "approval.required");
+
+        let store = storage.store.lock().expect("storage lock");
+        let approvals = ApprovalRepository::new(store.connection())
+            .list_for_task("task-001")
+            .expect("list approvals");
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].decision, None);
+        assert_eq!(
+            TaskRepository::new(store.connection())
+                .get_required("task-001")
+                .expect("load task")
+                .status,
+            "waitingApproval"
+        );
+    }
+
+    #[test]
+    fn rejected_approval_blocks_command_execution() {
+        let (storage, task, guard, request) = safety_storage();
+        let redactor = test_redactor();
+        let _ = enforce_command_safety(&storage, &task, &request, &guard, &redactor);
+        let store = storage.store.lock().expect("storage lock");
+        let approval = ApprovalRepository::new(store.connection())
+            .list_for_task("task-001")
+            .expect("list approvals")
+            .remove(0);
+        ApprovalRepository::new(store.connection())
+            .decide(
+                &approval.id,
+                "rejected",
+                Some("Do not install new dependencies"),
+            )
+            .expect("reject approval");
+        drop(store);
+
+        let error = enforce_command_safety(&storage, &task, &request, &guard, &redactor)
+            .expect_err("rejected command should stay blocked");
+
+        assert_eq!(error.code, "approval.rejected");
+    }
+
+    #[test]
+    fn approved_command_can_continue() {
+        let (storage, task, guard, request) = safety_storage();
+        let redactor = test_redactor();
+        let _ = enforce_command_safety(&storage, &task, &request, &guard, &redactor);
+        let store = storage.store.lock().expect("storage lock");
+        let approval = ApprovalRepository::new(store.connection())
+            .list_for_task("task-001")
+            .expect("list approvals")
+            .remove(0);
+        ApprovalRepository::new(store.connection())
+            .decide(
+                &approval.id,
+                "approved",
+                Some("Run once in the task worktree"),
+            )
+            .expect("approve command");
+        drop(store);
+
+        enforce_command_safety(&storage, &task, &request, &guard, &redactor)
+            .expect("approved command should be allowed");
     }
 }

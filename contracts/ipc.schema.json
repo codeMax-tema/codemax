@@ -173,6 +173,37 @@
           },
           "required": ["response"]
         },
+        "get_model_config": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ModelConfigIdRequest"
+            },
+            "response": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelConfigView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "save_model_config": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/SaveModelConfigRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ModelConfigView"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "start_agent_service": {
           "type": "object",
           "properties": {
@@ -285,6 +316,8 @@
         "read_task_command_log",
         "summarize_task_command_log",
         "cleanup_expired_task_logs",
+        "get_model_config",
+        "save_model_config",
         "start_agent_service",
         "stop_agent_service",
         "get_agent_service_status",
@@ -1006,6 +1039,86 @@
         "deletedFiles",
         "deletedBytes",
         "cleanupDisabled"
+      ]
+    },
+    "ModelConfigIdRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": ["id"]
+    },
+    "SaveModelConfigRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": "string"
+        },
+        "apiKey": {
+          "type": "string"
+        },
+        "clearApiKey": {
+          "type": "boolean"
+        }
+      },
+      "required": ["provider", "baseUrl", "modelName"]
+    },
+    "ModelConfigView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": "string"
+        },
+        "apiKeyConfigured": {
+          "type": "boolean"
+        },
+        "apiKeyMasked": {
+          "type": ["string", "null"]
+        },
+        "secretStorage": {
+          "type": ["string", "null"]
+        },
+        "secretLocation": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "baseUrl",
+        "modelName",
+        "apiKeyConfigured",
+        "apiKeyMasked",
+        "secretStorage",
+        "secretLocation",
+        "createdAt",
+        "updatedAt"
       ]
     }
   }

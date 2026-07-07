@@ -6,6 +6,7 @@ pub mod core;
 pub mod exec;
 pub mod git;
 pub mod safety;
+pub mod secrets;
 pub mod storage;
 
 use tauri::Manager;
@@ -36,6 +37,9 @@ pub fn run() {
             commands::app::health,
             commands::app::ping,
             commands::app::emit_app_ready,
+            commands::approvals::list_pending_approvals,
+            commands::approvals::list_task_approvals,
+            commands::approvals::decide_approval,
             commands::delivery::generate_task_delivery,
             commands::diff::generate_task_diff,
             commands::exec::execute_task_command,
@@ -43,6 +47,8 @@ pub fn run() {
             commands::exec::read_task_command_log,
             commands::exec::summarize_task_command_log,
             commands::exec::cleanup_expired_task_logs,
+            commands::models::get_model_config,
+            commands::models::save_model_config,
             commands::repository::select_repository_path,
             commands::repository::validate_repository_path,
             commands::repository::get_repository_current_branch,

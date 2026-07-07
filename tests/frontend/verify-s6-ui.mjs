@@ -24,12 +24,15 @@ const store = read('apps/desktop/src/state/appStore.ts');
 const dialog = read('apps/desktop/src/features/tasks/NewTaskDialog.tsx');
 const taskOverview = read('apps/desktop/src/features/tasks/TaskOverviewPage.tsx');
 const settings = read('apps/desktop/src/features/settings/SettingsPage.tsx');
+const approvals = read('apps/desktop/src/features/approvals/ApprovalsPage.tsx');
+const tauriClient = read('apps/desktop/src/api/tauriClient.ts');
 const css = read('apps/desktop/src/styles/global.css');
 const zhCN = JSON.parse(read('apps/desktop/src/i18n/locales/zh-CN.json'));
 const enUS = JSON.parse(read('apps/desktop/src/i18n/locales/en-US.json'));
 
 assertIncludes('App.tsx', app, 'NewTaskDialog');
 assertIncludes('App.tsx', app, 'SettingsPage');
+assertIncludes('App.tsx', app, 'ApprovalsPage');
 assertIncludes('appStore.ts', store, 'newTaskDialogOpen');
 assertIncludes('appStore.ts', store, 'currentRoute');
 assertIncludes('appStore.ts', store, 'getInitialRoute');
@@ -93,8 +96,37 @@ for (const marker of [
   'settings-detail',
   'settings-toggle-switch',
   'settings.categories.models',
+  'saveModelConfig',
+  'getModelConfig',
+  'api-key-input',
+  'api-key-preview',
+  'secret-storage-location',
 ]) {
   assertIncludes('SettingsPage.tsx', settings, marker);
+}
+
+for (const marker of [
+  'listPendingApprovals',
+  'decideApproval',
+  'approval-center-page',
+  'approval-card',
+  'approved',
+  'rejected',
+  'revise',
+]) {
+  assertIncludes('ApprovalsPage.tsx', approvals, marker);
+}
+
+for (const marker of [
+  'list_pending_approvals',
+  'list_task_approvals',
+  'decide_approval',
+  'save_model_config',
+  'get_model_config',
+  'ApprovalSummary',
+  'ModelConfigView',
+]) {
+  assertIncludes('tauriClient.ts', tauriClient, marker);
 }
 
 for (const marker of [
@@ -119,8 +151,14 @@ for (const marker of [
   '.settings-search-box',
   '.settings-group-heading',
   '.settings-toggle-switch',
+  '.settings-form-field',
+  '.model-secret-form',
+  '.secret-storage-location',
   '.permission-toggle',
   '.model-option',
+  '.approval-center-page',
+  '.approval-card',
+  '.approval-risk-pill',
 ]) {
   assertIncludes('global.css', css, marker);
 }
@@ -137,6 +175,13 @@ for (const key of [
   'settings.categories.permissions',
   'settings.categories.modes',
   'settings.categories.storage',
+  'settings.models.apiKey',
+  'settings.models.apiKeyPreview',
+  'settings.models.secretStorage',
+  'approvals.approve',
+  'approvals.reject',
+  'approvals.revise',
+  'approvals.pendingList',
 ]) {
   assertJsonKey('zh-CN', zhCN, key);
   assertJsonKey('en-US', enUS, key);

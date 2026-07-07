@@ -19,13 +19,15 @@ import {
   TerminalSquare,
   Workflow,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
+import { getModelConfig, saveModelConfig } from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
 import { s6SettingsFixture } from '@/features/tasks/taskFixtures';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
+import type { ModelConfigView } from '@/types/domain';
 
 type SettingsCategory =
   | 'general'
@@ -48,6 +50,8 @@ type SettingsCategory =
   | 'storage'
   | 'memory'
   | 'language';
+
+const DEFAULT_MODEL_CONFIG_ID = 'model-default';
 
 const settingsGroups: Array<{
   headingKey: string;
@@ -251,11 +255,136 @@ function GeneralSettings() {
 
 function ModelSettings() {
   const locale = useAppStore((state) => state.locale);
+  const [provider, setProvider] = useState('openai-compatible');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [modelName, setModelName] = useState('gpt-5-codex');
+  const [apiKey, setApiKey] = useState('');
+  const [savedConfig, setSavedConfig] = useState<ModelConfigView | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'loading' | 'saving' | 'saved' | 'error'>('idle');
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setSaveState('loading');
+    getModelConfig(DEFAULT_MODEL_CONFIG_ID)
+      .then((config) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (config) {
+          setSavedConfig(config);
+          setProvider(config.provider);
+          setBaseUrl(config.baseUrl);
+          setModelName(config.modelName);
+        }
+        setSaveState('idle');
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setSaveState('error');
+        setStatusMessage(readErrorMessage(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaveState('saving');
+    setStatusMessage('');
+
+    try {
+      const config = await saveModelConfig({
+        id: DEFAULT_MODEL_CONFIG_ID,
+        provider,
+        baseUrl,
+        modelName,
+        apiKey: apiKey.trim() || undefined,
+      });
+      setSavedConfig(config);
+      setApiKey('');
+      setSaveState('saved');
+      setStatusMessage(t('settings.models.saved', locale));
+    } catch (error) {
+      setSaveState('error');
+      setStatusMessage(readErrorMessage(error));
+    }
+  }
+
+  const apiKeyPreview = apiKey.trim()
+    ? maskApiKey(apiKey)
+    : savedConfig?.apiKeyMasked ?? t('settings.models.notConfigured', locale);
 
   return (
     <>
       <SettingsPaneHeader titleKey="settings.models.title" bodyKey="settings.models.body" />
-      <div className="settings-section-list">
+      <form className="settings-section-list model-secret-form" onSubmit={handleSave}>
+        <label className="settings-form-field">
+          <span>{t('settings.models.provider', locale)}</span>
+          <select value={provider} onChange={(event) => setProvider(event.target.value)}>
+            <option value="openai-compatible">OpenAI-compatible</option>
+            <option value="claude">Claude-compatible</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </label>
+        <label className="settings-form-field">
+          <span>{t('settings.models.baseUrl', locale)}</span>
+          <input
+            type="url"
+            value={baseUrl}
+            placeholder="https://api.example.com/v1"
+            onChange={(event) => setBaseUrl(event.target.value)}
+          />
+        </label>
+        <label className="settings-form-field">
+          <span>{t('settings.models.modelName', locale)}</span>
+          <input value={modelName} onChange={(event) => setModelName(event.target.value)} />
+        </label>
+        <label className="settings-form-field">
+          <span>{t('settings.models.apiKey', locale)}</span>
+          <input
+            className="api-key-input"
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            placeholder={
+              savedConfig?.apiKeyConfigured
+                ? t('settings.models.keepExistingKey', locale)
+                : t('settings.models.apiKeyPlaceholder', locale)
+            }
+            onChange={(event) => setApiKey(event.target.value)}
+          />
+        </label>
+        <section className="settings-line-section api-key-preview">
+          <span>
+            <strong>{t('settings.models.apiKeyPreview', locale)}</strong>
+            <small>{t('settings.models.apiKeyPreviewBody', locale)}</small>
+          </span>
+          <em>{apiKeyPreview}</em>
+        </section>
+        <section className="settings-line-section vertical secret-storage-location">
+          <strong>{t('settings.models.secretStorage', locale)}</strong>
+          <small>
+            {savedConfig?.apiKeyConfigured
+              ? `${savedConfig.secretStorage ?? t('settings.models.secretStorageUnknown', locale)} · ${
+                  savedConfig.secretLocation ?? t('settings.models.secretLocationHidden', locale)
+                }`
+              : t('settings.models.secretStorageEmpty', locale)}
+          </small>
+        </section>
+        <div className="settings-form-actions">
+          <Button type="submit" size="sm" disabled={saveState === 'saving' || saveState === 'loading'}>
+            {saveState === 'saving' ? t('settings.models.saving', locale) : t('settings.models.save', locale)}
+          </Button>
+          <span role="status">{statusMessage}</span>
+        </div>
+      </form>
+      <div className="settings-section-list model-provider-list">
         {s6SettingsFixture.models.map((model, index) => (
           <section className="settings-line-section" key={model.id}>
             <span>
@@ -272,6 +401,28 @@ function ModelSettings() {
       </div>
     </>
   );
+}
+
+function maskApiKey(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const suffix = trimmed.length > 4 ? trimmed.slice(-4) : '';
+  return `${'*'.repeat(8)}${suffix}`;
+}
+
+function readErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  return 'Unknown error';
 }
 
 function PermissionsSettings() {
