@@ -222,6 +222,30 @@ fn worktree_git_error(error: GitError) -> CommandError {
             "worktree.pathAlreadyExists",
             format!("Worktree path already exists: {}", path.to_string_lossy()),
         ),
+        GitError::EmptyCommitMessage => CommandError::new(
+            "worktree.mergeCommitMessageRequired",
+            "Merge commit message is required.",
+        ),
+        GitError::DirtyTarget(path) => CommandError::new(
+            "worktree.mergeTargetDirty",
+            format!(
+                "Target repository has uncommitted changes: {}",
+                path.to_string_lossy()
+            ),
+        ),
+        GitError::TargetBranchChanged {
+            path,
+            expected,
+            actual,
+        } => CommandError::new(
+            "worktree.mergeTargetBranchChanged",
+            format!(
+                "Target branch changed in {}: expected {}, got {}",
+                path.to_string_lossy(),
+                expected,
+                actual
+            ),
+        ),
     }
 }
 

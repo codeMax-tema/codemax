@@ -118,6 +118,40 @@ export interface GeneratedTaskDelivery {
   report: TaskDeliveryReport;
 }
 
+export type TaskMergeResultStatus = 'merged' | 'conflicted';
+
+export interface PreparedTaskMerge {
+  taskId: string;
+  targetBranch: string;
+  sourceBranch: string;
+  worktreePath: string;
+  targetDirty: boolean;
+  worktreeDirty: boolean;
+  validationStatus: DeliveryReportStatus;
+  validationRunCount: number;
+  validationSummary: string;
+  diffFileCount: number;
+  additions: number;
+  deletions: number;
+  diffPath?: string | null;
+  commitMessage: string;
+  blockers: string[];
+  canMerge: boolean;
+}
+
+export interface TaskMergeCommandResult {
+  taskId: string;
+  status: TaskMergeResultStatus;
+  targetBranch: string;
+  sourceBranch: string;
+  commitSha: string;
+  commitMessage: string;
+  conflictFiles: string[];
+  errorReason?: string | null;
+  mergeRecordPath?: string | null;
+  taskStatus: TaskStatus;
+}
+
 export interface WorktreeCleanupResult {
   taskId: string;
   worktreePath: string;

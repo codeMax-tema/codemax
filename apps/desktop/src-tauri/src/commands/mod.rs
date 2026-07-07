@@ -4,6 +4,7 @@ pub mod approvals;
 pub mod delivery;
 pub mod diff;
 pub mod exec;
+pub mod merge;
 pub mod models;
 pub mod repository;
 pub mod worktree;

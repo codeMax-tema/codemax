@@ -73,6 +73,25 @@ pub struct TaskDiffFile {
     pub patch: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskMergeStatus {
+    Merged,
+    Conflicted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskMergeResult {
+    pub status: TaskMergeStatus,
+    pub target_branch: String,
+    pub source_branch: String,
+    pub commit_sha: String,
+    pub commit_message: String,
+    pub conflict_files: Vec<String>,
+    pub error_reason: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("path does not exist: {0}")]
@@ -95,6 +114,16 @@ pub enum GitError {
     InvalidTaskId(String),
     #[error("worktree path already exists: {0}")]
     WorktreePathExists(PathBuf),
+    #[error("merge commit message is required")]
+    EmptyCommitMessage,
+    #[error("target repository has uncommitted changes: {0}")]
+    DirtyTarget(PathBuf),
+    #[error("target branch changed in {path}: expected {expected}, got {actual}")]
+    TargetBranchChanged {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
 }
 
 pub type GitResult<T> = Result<T, GitError>;
@@ -270,6 +299,85 @@ pub fn task_diff(
     })
 }
 
+pub fn merge_task_branch(
+    repository_path: impl AsRef<Path>,
+    worktree_path: impl AsRef<Path>,
+    target_branch: &str,
+    commit_message: &str,
+) -> GitResult<TaskMergeResult> {
+    let target_root = repository_root(repository_path.as_ref())?;
+    let worktree_root = repository_root(worktree_path.as_ref())?;
+    let target_branch = target_branch.trim();
+    let commit_message = commit_message.trim();
+
+    if commit_message.is_empty() {
+        return Err(GitError::EmptyCommitMessage);
+    }
+
+    let current_target_branch = current_branch_in_repository(&target_root)?;
+    if current_target_branch != target_branch {
+        return Err(GitError::TargetBranchChanged {
+            path: target_root,
+            expected: target_branch.to_string(),
+            actual: current_target_branch,
+        });
+    }
+
+    if is_dirty(&target_root)? {
+        return Err(GitError::DirtyTarget(target_root));
+    }
+
+    let source_branch = current_branch_in_repository(&worktree_root)?;
+    commit_worktree_changes(&worktree_root, commit_message)?;
+
+    let merge_output = run_git(
+        &target_root,
+        &[
+            "merge",
+            "--no-ff",
+            source_branch.as_str(),
+            "-m",
+            commit_message,
+        ],
+    )?;
+
+    if merge_output.status_success {
+        return Ok(TaskMergeResult {
+            status: TaskMergeStatus::Merged,
+            target_branch: target_branch.to_string(),
+            source_branch,
+            commit_sha: head_sha(&target_root)?,
+            commit_message: commit_message.to_string(),
+            conflict_files: Vec::new(),
+            error_reason: None,
+        });
+    }
+
+    let conflict_files = merge_conflict_files(&target_root)?;
+    if conflict_files.is_empty() {
+        return Err(GitError::CommandFailed {
+            path: target_root,
+            args: format!("merge --no-ff {source_branch} -m <message>"),
+            stderr: merge_output.stderr,
+        });
+    }
+
+    abort_merge(&target_root)?;
+    let error_reason = git_output_summary(&merge_output)
+        .filter(|message| !message.is_empty())
+        .or_else(|| Some("Git reported merge conflicts.".to_string()));
+
+    Ok(TaskMergeResult {
+        status: TaskMergeStatus::Conflicted,
+        target_branch: target_branch.to_string(),
+        source_branch,
+        commit_sha: String::new(),
+        commit_message: commit_message.to_string(),
+        conflict_files,
+        error_reason,
+    })
+}
+
 pub fn remove_task_worktree(
     repository_path: impl AsRef<Path>,
     worktree_path: impl AsRef<Path>,
@@ -432,6 +540,94 @@ fn diff_numstat(worktree_path: &Path, base_ref: &str) -> GitResult<HashMap<Strin
     }
 
     Ok(stats)
+}
+
+fn commit_worktree_changes(worktree_path: &Path, commit_message: &str) -> GitResult<()> {
+    if !is_dirty(worktree_path)? {
+        return Ok(());
+    }
+
+    let add_output = run_git(worktree_path, &["add", "--all"])?;
+    if !add_output.status_success {
+        return Err(GitError::CommandFailed {
+            path: worktree_path.to_path_buf(),
+            args: "add --all".to_string(),
+            stderr: add_output.stderr,
+        });
+    }
+
+    let commit_output = run_git(worktree_path, &["commit", "-m", commit_message])?;
+    if !commit_output.status_success {
+        return Err(GitError::CommandFailed {
+            path: worktree_path.to_path_buf(),
+            args: "commit -m <message>".to_string(),
+            stderr: commit_output.stderr,
+        });
+    }
+
+    Ok(())
+}
+
+fn head_sha(repository_path: &Path) -> GitResult<String> {
+    let output = run_git(repository_path, &["rev-parse", "--short", "HEAD"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_path.to_path_buf(),
+            args: "rev-parse --short HEAD".to_string(),
+            stderr: output.stderr,
+        });
+    }
+
+    Ok(output.stdout.trim().to_string())
+}
+
+fn merge_conflict_files(repository_path: &Path) -> GitResult<Vec<String>> {
+    let output = run_git(repository_path, &["diff", "--name-only", "--diff-filter=U"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_path.to_path_buf(),
+            args: "diff --name-only --diff-filter=U".to_string(),
+            stderr: output.stderr,
+        });
+    }
+
+    Ok(output
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn abort_merge(repository_path: &Path) -> GitResult<()> {
+    let output = run_git(repository_path, &["merge", "--abort"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_path.to_path_buf(),
+            args: "merge --abort".to_string(),
+            stderr: output.stderr,
+        });
+    }
+
+    Ok(())
+}
+
+fn git_output_summary(output: &GitCommandOutput) -> Option<String> {
+    let stderr = output.stderr.trim();
+    let stdout = output.stdout.trim();
+    let message = match (stderr.is_empty(), stdout.is_empty()) {
+        (false, false) => format!("{stderr}\n{stdout}"),
+        (false, true) => stderr.to_string(),
+        (true, false) => stdout.to_string(),
+        (true, true) => String::new(),
+    };
+
+    if message.is_empty() {
+        None
+    } else {
+        Some(message.chars().take(4000).collect())
+    }
 }
 
 fn parse_numstat_count(value: Option<&str>) -> u64 {
@@ -776,12 +972,10 @@ mod tests {
     #[test]
     fn validate_repository_rejects_non_git_directory() {
         let path = temp_path("non-git");
-        fs::create_dir_all(&path).expect("create temp directory");
 
-        let error = validate_repository(&path).expect_err("non-git directory should fail");
+        let error = validate_repository(&path).expect_err("missing directory should fail");
 
-        assert!(matches!(error, GitError::NotRepository { .. }));
-        fs::remove_dir_all(path).expect("clean temp directory");
+        assert!(matches!(error, GitError::PathNotFound(_)));
     }
 
     #[test]
@@ -961,6 +1155,81 @@ mod tests {
 
         assert!(!worktree_path.exists());
 
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean temp repository");
+    }
+
+    #[test]
+    fn merge_task_branch_commits_dirty_worktree_and_merges_into_target() {
+        let repository = committed_repository("git-merge-success");
+        let target_branch = current_branch(&repository).expect("read target branch");
+        let worktree_root = temp_path("merge-success-root");
+        let worktree = create_task_worktree(&repository, &worktree_root, "task-merge-success")
+            .expect("create task worktree");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        fs::write(worktree_path.join("modified.txt"), "after").expect("modify worktree file");
+
+        let result = merge_task_branch(
+            &repository,
+            &worktree_path,
+            &target_branch,
+            "feat: merge task worktree",
+        )
+        .expect("merge task branch");
+
+        assert_eq!(result.status, TaskMergeStatus::Merged);
+        assert_eq!(result.target_branch, target_branch);
+        assert_eq!(result.source_branch, "agent/task-merge-success");
+        assert!(result.conflict_files.is_empty());
+        assert!(!result.commit_sha.is_empty());
+        assert_eq!(
+            fs::read_to_string(repository.join("modified.txt")).expect("read merged file"),
+            "after"
+        );
+        assert!(!has_uncommitted_changes(&repository).expect("target repository remains clean"));
+
+        fs::remove_dir_all(worktree_path).expect("clean dirty worktree");
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean temp repository");
+    }
+
+    #[test]
+    fn merge_task_branch_reports_conflicts_and_aborts_target_merge() {
+        let repository = committed_repository("git-merge-conflict");
+        let target_branch = current_branch(&repository).expect("read target branch");
+        let worktree_root = temp_path("merge-conflict-root");
+        let worktree = create_task_worktree(&repository, &worktree_root, "task-merge-conflict")
+            .expect("create task worktree");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        fs::write(worktree_path.join("modified.txt"), "agent change")
+            .expect("modify worktree file");
+        fs::write(repository.join("modified.txt"), "target change").expect("modify target file");
+        run_test_git(&repository, &["add", "modified.txt"]);
+        run_test_git(&repository, &["commit", "-m", "target change"]);
+
+        let result = merge_task_branch(
+            &repository,
+            &worktree_path,
+            &target_branch,
+            "feat: merge conflicting task worktree",
+        )
+        .expect("conflict is returned as a merge result");
+
+        assert_eq!(result.status, TaskMergeStatus::Conflicted);
+        assert_eq!(result.conflict_files, vec!["modified.txt".to_string()]);
+        assert!(result
+            .error_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("modified.txt"));
+        assert!(result.commit_sha.is_empty());
+        assert_eq!(
+            fs::read_to_string(repository.join("modified.txt")).expect("read target file"),
+            "target change"
+        );
+        assert!(!has_uncommitted_changes(&repository).expect("merge abort leaves target clean"));
+
+        fs::remove_dir_all(worktree_path).expect("clean dirty worktree");
         fs::remove_dir_all(worktree_root).expect("clean worktree root");
         fs::remove_dir_all(repository).expect("clean temp repository");
     }

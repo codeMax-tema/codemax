@@ -47,6 +47,8 @@ pub fn run() {
             commands::exec::read_task_command_log,
             commands::exec::summarize_task_command_log,
             commands::exec::cleanup_expired_task_logs,
+            commands::merge::prepare_task_merge,
+            commands::merge::merge_task,
             commands::models::get_model_config,
             commands::models::save_model_config,
             commands::repository::select_repository_path,

@@ -198,6 +198,30 @@ fn diff_git_error(error: GitError) -> CommandError {
             "diff.worktreePathAlreadyExists",
             format!("Worktree path already exists: {}", path.to_string_lossy()),
         ),
+        GitError::EmptyCommitMessage => CommandError::new(
+            "diff.mergeCommitMessageRequired",
+            "Merge commit message is required.",
+        ),
+        GitError::DirtyTarget(path) => CommandError::new(
+            "diff.mergeTargetDirty",
+            format!(
+                "Target repository has uncommitted changes: {}",
+                path.to_string_lossy()
+            ),
+        ),
+        GitError::TargetBranchChanged {
+            path,
+            expected,
+            actual,
+        } => CommandError::new(
+            "diff.mergeTargetBranchChanged",
+            format!(
+                "Target branch changed in {}: expected {}, got {}",
+                path.to_string_lossy(),
+                expected,
+                actual
+            ),
+        ),
     }
 }
 

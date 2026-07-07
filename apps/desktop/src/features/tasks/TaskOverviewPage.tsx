@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DiffEditor, loader } from '@monaco-editor/react';
 import {
   AlertCircle,
@@ -12,6 +12,7 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  GitMerge,
   Github,
   Laptop,
   ListFilter,
@@ -26,15 +27,24 @@ import {
 } from 'lucide-react';
 import * as monaco from 'monaco-editor';
 
-import { generateTaskDelivery, generateTaskDiff } from '@/api/tauriClient';
+import { generateTaskDelivery, generateTaskDiff, mergeTask, prepareTaskMerge } from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
-import { t } from '@/i18n';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { t, type Locale } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
 import type {
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
+  PreparedTaskMerge,
   TaskDiffFile,
+  TaskMergeCommandResult,
   TaskValidationRunSummary,
 } from '@/types/domain';
 
@@ -192,17 +202,26 @@ export function TaskOverviewPage() {
   const locale = useAppStore((state) => state.locale);
   const selectedTaskId = useAppStore((state) => state.selectedTaskId);
   const setNewTaskDialogOpen = useAppStore((state) => state.setNewTaskDialogOpen);
+  const selectedTaskIdRef = useRef(selectedTaskId);
   const [generatedDiff, setGeneratedDiff] = useState<GeneratedTaskDiff | null>(null);
   const [generatedDelivery, setGeneratedDelivery] = useState<GeneratedTaskDelivery | null>(null);
+  const [preparedMerge, setPreparedMerge] = useState<PreparedTaskMerge | null>(null);
+  const [mergeResult, setMergeResult] = useState<TaskMergeCommandResult | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string>(demoDiff.files[0]?.path ?? '');
   const [isDiffLoading, setIsDiffLoading] = useState(false);
   const [isDeliveryLoading, setIsDeliveryLoading] = useState(false);
+  const [isMergePreparing, setIsMergePreparing] = useState(false);
+  const [isMergeLoading, setIsMergeLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
   const [largeDiffExpanded, setLargeDiffExpanded] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeCommitMessage, setMergeCommitMessage] = useState(demoDelivery.commitMessage);
 
   const visibleDiff = generatedDiff ?? demoDiff;
   const visibleDelivery = generatedDelivery ?? demoDelivery;
+  const visibleMerge = preparedMerge ?? buildPreparedMergePreview(visibleDiff, visibleDelivery);
   const selectedFile =
     visibleDiff.files.find((file) => file.path === selectedFilePath) ?? visibleDiff.files[0] ?? null;
   const selectedFileLarge = selectedFile ? isLargeDiffFile(selectedFile) : false;
@@ -217,28 +236,76 @@ export function TaskOverviewPage() {
     }
   }, [selectedFilePath, visibleDiff.files]);
 
-  async function handleGenerateDiff() {
-    if (!selectedTaskId) {
-      setDiffError(t('tasks.execution.diffNoTask', locale));
-      return;
+  useEffect(() => {
+    selectedTaskIdRef.current = selectedTaskId;
+    setGeneratedDiff(null);
+    setGeneratedDelivery(null);
+    setPreparedMerge(null);
+    setMergeResult(null);
+    setDiffError(null);
+    setDeliveryError(null);
+    setMergeError(null);
+    setMergeDialogOpen(false);
+    setLargeDiffExpanded(false);
+    setMergeCommitMessage(demoDelivery.commitMessage);
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (!mergeDialogOpen) {
+      setMergeCommitMessage(visibleMerge.commitMessage);
+    }
+  }, [mergeDialogOpen, visibleMerge.commitMessage]);
+
+  async function loadTaskDiff({ reportMergeError = false } = {}) {
+    const taskId = selectedTaskId;
+    if (!taskId) {
+      const message = t('tasks.execution.diffNoTask', locale);
+      setDiffError(message);
+      if (reportMergeError) {
+        setMergeError(message);
+      }
+      return null;
     }
 
     setIsDiffLoading(true);
     setDiffError(null);
+    if (reportMergeError) {
+      setMergeError(null);
+    }
     try {
-      const result = await generateTaskDiff({ taskId: selectedTaskId });
+      const result = await generateTaskDiff({ taskId });
+      if (selectedTaskIdRef.current !== taskId) {
+        return null;
+      }
       setGeneratedDiff(result);
+      setPreparedMerge(null);
+      setMergeResult(null);
       setSelectedFilePath(result.files[0]?.path ?? '');
       setLargeDiffExpanded(false);
+      return result;
     } catch (error) {
-      setDiffError(normalizeDiffError(error));
+      if (selectedTaskIdRef.current === taskId) {
+        const message = normalizeDiffError(error);
+        setDiffError(message);
+        if (reportMergeError) {
+          setMergeError(message);
+        }
+      }
+      return null;
     } finally {
-      setIsDiffLoading(false);
+      if (selectedTaskIdRef.current === taskId) {
+        setIsDiffLoading(false);
+      }
     }
   }
 
+  async function handleGenerateDiff() {
+    await loadTaskDiff();
+  }
+
   async function handleGenerateDelivery() {
-    if (!selectedTaskId) {
+    const taskId = selectedTaskId;
+    if (!taskId) {
       setDeliveryError(t('tasks.execution.deliveryNoTask', locale));
       return;
     }
@@ -246,12 +313,121 @@ export function TaskOverviewPage() {
     setIsDeliveryLoading(true);
     setDeliveryError(null);
     try {
-      const result = await generateTaskDelivery({ taskId: selectedTaskId });
+      const result = await generateTaskDelivery({ taskId });
+      if (selectedTaskIdRef.current !== taskId) {
+        return;
+      }
       setGeneratedDelivery(result);
+      setPreparedMerge(null);
+      setMergeResult(null);
     } catch (error) {
-      setDeliveryError(normalizeDiffError(error));
+      if (selectedTaskIdRef.current === taskId) {
+        setDeliveryError(normalizeDiffError(error));
+      }
     } finally {
-      setIsDeliveryLoading(false);
+      if (selectedTaskIdRef.current === taskId) {
+        setIsDeliveryLoading(false);
+      }
+    }
+  }
+
+  async function loadMergePreparation() {
+    const taskId = selectedTaskId;
+    if (!taskId) {
+      setMergeError(t('tasks.execution.mergeNoTask', locale));
+      return null;
+    }
+
+    setIsMergePreparing(true);
+    setMergeError(null);
+    try {
+      const result = await prepareTaskMerge({ taskId });
+      if (selectedTaskIdRef.current !== taskId) {
+        return null;
+      }
+      setPreparedMerge(result);
+      setMergeCommitMessage(result.commitMessage);
+      return result;
+    } catch (error) {
+      if (selectedTaskIdRef.current === taskId) {
+        setMergeError(normalizeDiffError(error));
+      }
+      return null;
+    } finally {
+      if (selectedTaskIdRef.current === taskId) {
+        setIsMergePreparing(false);
+      }
+    }
+  }
+
+  async function handlePrepareMerge() {
+    await loadMergePreparation();
+  }
+
+  async function handleOpenMergeDialog() {
+    const refreshedDiff = await loadTaskDiff({ reportMergeError: true });
+    if (!refreshedDiff) {
+      return;
+    }
+
+    const preparation = await loadMergePreparation();
+    if (!preparation) {
+      return;
+    }
+
+    if (!preparation.canMerge) {
+      setMergeError(t('tasks.execution.mergeBlocked', locale));
+      return;
+    }
+
+    setMergeDialogOpen(true);
+  }
+
+  async function handleConfirmMerge() {
+    const taskId = selectedTaskId;
+    if (!taskId) {
+      setMergeError(t('tasks.execution.mergeNoTask', locale));
+      return;
+    }
+    if (visibleMerge.taskId !== taskId) {
+      setMergeDialogOpen(false);
+      setMergeError(t('tasks.execution.mergeStale', locale));
+      return;
+    }
+
+    setIsMergeLoading(true);
+    setMergeError(null);
+    try {
+      const result = await mergeTask({
+        taskId,
+        targetBranch: visibleMerge.targetBranch,
+        commitMessage: mergeCommitMessage,
+        confirmed: true,
+      });
+      if (selectedTaskIdRef.current !== taskId) {
+        return;
+      }
+      setMergeResult(result);
+      setMergeDialogOpen(false);
+      setPreparedMerge((current) =>
+        current
+          ? {
+              ...current,
+              canMerge: false,
+              blockers:
+                result.status === 'merged'
+                  ? [t('tasks.execution.mergeAlreadyMerged', locale)]
+                  : [t('tasks.execution.mergeConflictSummary', locale)],
+            }
+          : current,
+      );
+      if (result.status === 'conflicted') {
+        setMergeError(t('tasks.execution.mergeConflictSummary', locale));
+      }
+    } catch (error) {
+      setMergeError(normalizeDiffError(error));
+    } finally {
+      setIsMergeLoading(false);
     }
   }
 
@@ -501,6 +677,190 @@ export function TaskOverviewPage() {
             </article>
           </div>
         </section>
+
+        <section className="merge-panel">
+          <div className="merge-heading">
+            <div>
+              <span>{t('tasks.execution.mergeTitle', locale)}</span>
+              <strong className={cn('merge-status-pill', visibleMerge.canMerge ? 'is-ready' : 'is-blocked')}>
+                {visibleMerge.canMerge
+                  ? t('tasks.execution.mergeReady', locale)
+                  : t('tasks.execution.mergeBlockedStatus', locale)}
+              </strong>
+            </div>
+            <div className="merge-actions">
+              <Button type="button" size="sm" variant="secondary" onClick={handlePrepareMerge}>
+                <RefreshCw className={cn('h-3.5 w-3.5', isMergePreparing && 'diff-spin')} aria-hidden="true" />
+                {isMergePreparing ? t('tasks.execution.mergePreparing', locale) : t('tasks.execution.mergePrecheck', locale)}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleOpenMergeDialog}
+                disabled={isMergeLoading}
+              >
+                <GitMerge className={cn('h-3.5 w-3.5', isMergeLoading && 'diff-spin')} aria-hidden="true" />
+                {isMergeLoading ? t('tasks.execution.merging', locale) : t('tasks.execution.mergeAction', locale)}
+              </Button>
+            </div>
+          </div>
+
+          <div className="merge-meta-strip">
+            <span>
+              {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge.targetBranch}</strong>
+            </span>
+            <span>
+              {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge.sourceBranch}</strong>
+            </span>
+            <span>
+              {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge.additions, visibleMerge.deletions)}</strong>
+            </span>
+            <span>
+              {t('tasks.execution.mergeValidation', locale)}{' '}
+              <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge.validationStatus}`, locale)}</strong>
+            </span>
+          </div>
+
+          {mergeError ? (
+            <div className="diff-error-banner" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{mergeError}</span>
+            </div>
+          ) : null}
+
+          {mergeResult?.status === 'merged' ? (
+            <div className="merge-success-banner" role="status">
+              <Check className="h-4 w-4" aria-hidden="true" />
+              <span>
+                {t('tasks.execution.mergeSuccess', locale)} <strong>{mergeResult.commitSha}</strong>
+              </span>
+              {mergeResult.mergeRecordPath ? <code>{mergeResult.mergeRecordPath}</code> : null}
+            </div>
+          ) : null}
+
+          {mergeResult?.status === 'conflicted' ? (
+            <div className="merge-conflict-box" role="alert">
+              <strong>{t('tasks.execution.mergeConflictFiles', locale)}</strong>
+              <div>
+                {mergeResult.conflictFiles.map((file) => (
+                  <code key={file}>{file}</code>
+                ))}
+              </div>
+              {mergeResult.errorReason ? (
+                <pre className="merge-conflict-reason">
+                  <strong>{t('tasks.execution.mergeConflictReason', locale)}</strong>
+                  <code>{mergeResult.errorReason}</code>
+                </pre>
+              ) : null}
+              {mergeResult.mergeRecordPath ? (
+                <code className="merge-record-path">
+                  {t('tasks.execution.mergeRecordPath', locale)} {mergeResult.mergeRecordPath}
+                </code>
+              ) : null}
+            </div>
+          ) : null}
+
+          {visibleMerge.blockers.length > 0 ? (
+            <div className="merge-blocker-list">
+              {visibleMerge.blockers.map((blocker) => (
+                <span key={blocker}>
+                  <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  {formatMergeBlocker(blocker, locale)}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="merge-check-grid">
+            <MergeCheckItem
+              label={t('tasks.execution.mergeTargetClean', locale)}
+              value={visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)}
+              good={!visibleMerge.targetDirty}
+            />
+            <MergeCheckItem
+              label={t('tasks.execution.mergeWorktreeChanges', locale)}
+              value={visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)}
+              good={visibleMerge.worktreeDirty}
+            />
+            <MergeCheckItem
+              label={t('tasks.execution.mergeEvidence', locale)}
+              value={`${visibleMerge.diffFileCount} ${t('tasks.execution.mergeFiles', locale)}`}
+              good={visibleMerge.diffFileCount > 0}
+            />
+            <MergeCheckItem
+              label={t('tasks.execution.mergeValidationSummary', locale)}
+              value={formatMergeValidationSummary(visibleMerge, locale)}
+              good={visibleMerge.validationStatus === 'passed'}
+            />
+          </div>
+
+          <div className="merge-commit-preview">
+            <span>{t('tasks.execution.mergeCommitMessage', locale)}</span>
+            <code>{visibleMerge.commitMessage}</code>
+          </div>
+
+          <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
+            <DialogContent className="merge-confirm-dialog">
+              <DialogHeader>
+                <DialogTitle>{t('tasks.execution.mergeConfirmTitle', locale)}</DialogTitle>
+                <DialogDescription>{t('tasks.execution.mergeConfirmBody', locale)}</DialogDescription>
+              </DialogHeader>
+              <div className="merge-confirm-summary">
+                <span>
+                  {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge.targetBranch}</strong>
+                </span>
+                <span>
+                  {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge.sourceBranch}</strong>
+                </span>
+                <span>
+                  {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge.additions, visibleMerge.deletions)}</strong>
+                </span>
+                <span>
+                  {t('tasks.execution.mergeTargetClean', locale)}{' '}
+                  <strong>{visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)}</strong>
+                </span>
+                <span>
+                  {t('tasks.execution.mergeValidation', locale)}{' '}
+                  <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge.validationStatus}`, locale)}</strong>
+                </span>
+              </div>
+              <div className="merge-confirm-check-grid">
+                <MergeCheckItem
+                  label={t('tasks.execution.mergeWorktreeChanges', locale)}
+                  value={visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)}
+                  good={visibleMerge.worktreeDirty}
+                />
+                <MergeCheckItem
+                  label={t('tasks.execution.mergeEvidence', locale)}
+                  value={`${visibleMerge.diffFileCount} ${t('tasks.execution.mergeFiles', locale)}`}
+                  good={visibleMerge.diffFileCount > 0}
+                />
+                <MergeCheckItem
+                  label={t('tasks.execution.mergeValidationSummary', locale)}
+                  value={formatMergeValidationSummary(visibleMerge, locale)}
+                  good={visibleMerge.validationStatus === 'passed'}
+                />
+              </div>
+              <label className="merge-message-field">
+                <span>{t('tasks.execution.mergeCommitMessage', locale)}</span>
+                <textarea
+                  value={mergeCommitMessage}
+                  onChange={(event) => setMergeCommitMessage(event.target.value)}
+                  rows={5}
+                />
+              </label>
+              <div className="merge-confirm-actions">
+                <Button type="button" variant="ghost" onClick={() => setMergeDialogOpen(false)}>
+                  {t('common.cancel', locale)}
+                </Button>
+                <Button type="button" onClick={handleConfirmMerge} disabled={isMergeLoading}>
+                  <GitMerge className={cn('h-4 w-4', isMergeLoading && 'diff-spin')} aria-hidden="true" />
+                  {isMergeLoading ? t('tasks.execution.merging', locale) : t('tasks.execution.mergeConfirmAction', locale)}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </section>
       </section>
 
       <aside className="environment-panel" aria-label={t('tasks.environment.title', locale)}>
@@ -541,6 +901,15 @@ export function TaskOverviewPage() {
           </Button>
         </div>
       </section>
+    </div>
+  );
+}
+
+function MergeCheckItem({ label, value, good }: { label: string; value: string; good: boolean }) {
+  return (
+    <div className={cn('merge-check-item', good ? 'is-good' : 'is-risk')}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -639,6 +1008,63 @@ function normalizeDiffError(error: unknown): string {
   }
 
   return String(error);
+}
+
+function buildPreparedMergePreview(
+  diff: GeneratedTaskDiff,
+  delivery: GeneratedTaskDelivery,
+): PreparedTaskMerge {
+  return {
+    taskId: diff.taskId,
+    targetBranch: diff.baseRef,
+    sourceBranch: diff.branchName,
+    worktreePath: diff.worktreePath,
+    targetDirty: false,
+    worktreeDirty: diff.files.length > 0,
+    validationStatus: delivery.report.overallStatus,
+    validationRunCount: delivery.report.commandCount,
+    validationSummary: delivery.report.summary,
+    diffFileCount: diff.files.length,
+    additions: diff.additions,
+    deletions: diff.deletions,
+    diffPath: diff.diffPath,
+    commitMessage: delivery.commitMessage,
+    blockers:
+      delivery.report.overallStatus === 'passed' && diff.files.length > 0
+        ? []
+        : ['validation has not passed'],
+    canMerge: delivery.report.overallStatus === 'passed' && diff.files.length > 0,
+  };
+}
+
+function formatMergeBlocker(blocker: string, locale: Locale) {
+  const normalized = blocker.toLowerCase();
+
+  if (normalized.includes('target')) {
+    return t('tasks.execution.mergeBlockerTargetDirty', locale);
+  }
+  if (normalized.includes('validation')) {
+    return t('tasks.execution.mergeBlockerValidation', locale);
+  }
+  if (normalized.includes('diff')) {
+    return t('tasks.execution.mergeBlockerDiff', locale);
+  }
+  if (normalized.includes('commit')) {
+    return t('tasks.execution.mergeBlockerCommit', locale);
+  }
+
+  return blocker;
+}
+
+function formatMergeValidationSummary(merge: PreparedTaskMerge, locale: Locale) {
+  if (merge.validationStatus === 'passed') {
+    return `${merge.validationRunCount} ${t('tasks.execution.mergeValidationPassed', locale)}`;
+  }
+  if (merge.validationStatus === 'failed') {
+    return t('tasks.execution.mergeValidationFailed', locale);
+  }
+
+  return t('tasks.execution.mergeValidationNotRun', locale);
 }
 
 function formatDiffStat(additions: number, deletions: number) {

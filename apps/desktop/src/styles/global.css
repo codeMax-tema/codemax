@@ -2301,6 +2301,338 @@ button:disabled {
   font-size: 13px;
 }
 
+.merge-panel {
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.merge-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #eeeeef;
+  padding: 14px 16px;
+}
+
+.merge-heading > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.merge-heading span {
+  color: #20242b;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.merge-actions {
+  justify-content: flex-end;
+}
+
+.merge-actions button {
+  gap: 6px;
+}
+
+.merge-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.merge-status-pill.is-ready {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.merge-status-pill.is-blocked {
+  background: #fff8e6;
+  color: #9a6700;
+}
+
+.merge-meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid #eeeeef;
+  background: #fbfbfc;
+  padding: 10px 16px;
+}
+
+.merge-meta-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  max-width: 100%;
+  border: 1px solid #e6e6e8;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 0 9px;
+  color: #73737c;
+  font-size: 12px;
+}
+
+.merge-meta-strip strong {
+  overflow: hidden;
+  max-width: 260px;
+  color: #20242b;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-success-banner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #d1fadf;
+  background: #f6fef9;
+  padding: 10px 16px;
+  color: #027a48;
+  font-size: 13px;
+}
+
+.merge-success-banner code {
+  overflow: hidden;
+  color: #05603a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-conflict-box {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid #fecdca;
+  background: #fff7f5;
+  padding: 12px 16px;
+}
+
+.merge-conflict-box strong {
+  color: #b42318;
+  font-size: 13px;
+}
+
+.merge-conflict-box div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.merge-conflict-box code {
+  border: 1px solid #fecdca;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 4px 8px;
+  color: #912018;
+  font-size: 12px;
+}
+
+.merge-conflict-reason {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.merge-conflict-reason code {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: #7a271a;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.merge-conflict-box .merge-record-path {
+  display: block;
+  overflow: hidden;
+  border-color: #fecdca;
+  border-radius: 8px;
+  color: #7a271a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-blocker-list {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #fdecc8;
+  background: #fffaf0;
+  padding: 12px 16px;
+}
+
+.merge-blocker-list span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8a5700;
+  font-size: 13px;
+}
+
+.merge-check-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.merge-check-item {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 82px;
+  border: 1px solid #eeeeef;
+  border-radius: 12px;
+  background: #fbfbfc;
+  padding: 12px;
+}
+
+.merge-check-item span {
+  color: #73737c;
+  font-size: 12px;
+}
+
+.merge-check-item strong {
+  overflow-wrap: anywhere;
+  color: #20242b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.merge-check-item.is-good {
+  border-color: #d1fadf;
+  background: #f6fef9;
+}
+
+.merge-check-item.is-risk {
+  border-color: #fdecc8;
+  background: #fffaf0;
+}
+
+.merge-commit-preview {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #eeeeef;
+  background: #fbfbfc;
+  padding: 14px 16px;
+}
+
+.merge-commit-preview span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.merge-commit-preview code {
+  overflow: auto;
+  max-height: 118px;
+  border: 1px solid #e6e6e8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  color: #3f3f46;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.merge-confirm-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.merge-confirm-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.merge-confirm-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid #e6e6e8;
+  border-radius: 999px;
+  background: #fbfbfc;
+  padding: 0 9px;
+  color: #73737c;
+  font-size: 12px;
+}
+
+.merge-confirm-summary strong {
+  overflow: hidden;
+  max-width: 180px;
+  color: #20242b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-confirm-check-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.merge-message-field {
+  display: grid;
+  gap: 8px;
+}
+
+.merge-message-field span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.merge-message-field textarea {
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid #d4d4d8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  color: #20242b;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.merge-message-field textarea:focus {
+  outline: 2px solid rgb(var(--primary) / 30%);
+  outline-offset: 2px;
+}
+
+.merge-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.merge-confirm-actions button {
+  gap: 6px;
+}
+
 .environment-panel {
   padding-top: 74px;
 }

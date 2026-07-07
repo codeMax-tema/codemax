@@ -15,10 +15,12 @@ import type {
   GeneratedTaskDiff,
   LogCleanupResult,
   ModelConfigView,
+  PreparedTaskMerge,
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
   TaskBranch,
+  TaskMergeCommandResult,
   TaskWorktree,
   WorktreeCleanupResult,
   WorktreeStatus,
@@ -249,6 +251,26 @@ export interface GenerateTaskDeliveryRequest {
 
 export function generateTaskDelivery(request: GenerateTaskDeliveryRequest) {
   return invokeCommand<GeneratedTaskDelivery>('generate_task_delivery', { request });
+}
+
+export interface PrepareTaskMergeRequest {
+  taskId: string;
+  targetBranch?: string | null;
+}
+
+export function prepareTaskMerge(request: PrepareTaskMergeRequest) {
+  return invokeCommand<PreparedTaskMerge>('prepare_task_merge', { request });
+}
+
+export interface MergeTaskRequest {
+  taskId: string;
+  targetBranch?: string | null;
+  commitMessage: string;
+  confirmed: boolean;
+}
+
+export function mergeTask(request: MergeTaskRequest) {
+  return invokeCommand<TaskMergeCommandResult>('merge_task', { request });
 }
 
 export function cleanupTaskWorktree(taskId: string, confirmed: boolean) {

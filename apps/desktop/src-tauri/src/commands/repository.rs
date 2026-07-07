@@ -117,6 +117,30 @@ fn repository_error(error: GitError) -> CommandError {
             "repository.worktreePathExists",
             format!("Worktree path already exists: {}", path.to_string_lossy()),
         ),
+        GitError::EmptyCommitMessage => CommandError::new(
+            "repository.mergeCommitMessageRequired",
+            "Merge commit message is required.",
+        ),
+        GitError::DirtyTarget(path) => CommandError::new(
+            "repository.mergeTargetDirty",
+            format!(
+                "Target repository has uncommitted changes: {}",
+                path.to_string_lossy()
+            ),
+        ),
+        GitError::TargetBranchChanged {
+            path,
+            expected,
+            actual,
+        } => CommandError::new(
+            "repository.mergeTargetBranchChanged",
+            format!(
+                "Target branch changed in {}: expected {}, got {}",
+                path.to_string_lossy(),
+                expected,
+                actual
+            ),
+        ),
     }
 }
 
