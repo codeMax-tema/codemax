@@ -1,0 +1,306 @@
+<style>
+  .codemax-note {
+    margin: 0 0 18px;
+    color: #64748b;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .glass-option-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .glass-card {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    background: #ffffff;
+    box-shadow: 0 16px 40px rgb(15 23 42 / 8%);
+  }
+
+  .glass-card.selected {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgb(15 118 110 / 18%), 0 20px 50px rgb(15 23 42 / 14%);
+  }
+
+  .preview-shell {
+    min-height: 360px;
+    padding: 14px;
+    background:
+      linear-gradient(135deg, rgb(248 250 252 / 94%), rgb(235 245 255 / 86%)),
+      repeating-linear-gradient(90deg, rgb(15 23 42 / 4%) 0 1px, transparent 1px 36px),
+      repeating-linear-gradient(0deg, rgb(15 23 42 / 3%) 0 1px, transparent 1px 36px);
+  }
+
+  .preview-window {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    min-height: 320px;
+    overflow: hidden;
+    border: 1px solid rgb(148 163 184 / 45%);
+    border-radius: 14px;
+    background: rgb(255 255 255 / 78%);
+  }
+
+  .preview-sidebar {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    border-right: 1px solid rgb(148 163 184 / 32%);
+    background: rgb(248 250 252 / 72%);
+    padding: 12px 9px;
+  }
+
+  .preview-sidebar span,
+  .preview-pill,
+  .preview-button {
+    display: block;
+    min-height: 22px;
+    border-radius: 8px;
+    background: #e2e8f0;
+  }
+
+  .preview-sidebar span:nth-child(1) {
+    background: #334155;
+  }
+
+  .preview-main {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .preview-topbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .preview-title {
+    width: 46%;
+    height: 18px;
+    border-radius: 999px;
+    background: #1f2937;
+  }
+
+  .preview-button {
+    width: 72px;
+    background: #cbd5e1;
+  }
+
+  .preview-chat {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+  }
+
+  .preview-line {
+    height: 12px;
+    border-radius: 999px;
+    background: #cbd5e1;
+  }
+
+  .preview-line.short {
+    width: 62%;
+  }
+
+  .preview-command {
+    height: 76px;
+    border-radius: 12px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+  }
+
+  .preview-floating {
+    align-self: end;
+    min-height: 54px;
+    border-radius: 18px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 14px 32px rgb(15 23 42 / 12%);
+  }
+
+  .glass-light .preview-floating,
+  .glass-light .preview-cardlet {
+    background: rgb(255 255 255 / 74%);
+    border-color: rgb(255 255 255 / 72%);
+    backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  .glass-liquid .preview-floating,
+  .glass-liquid .preview-cardlet,
+  .glass-liquid .preview-button {
+    background: linear-gradient(135deg, rgb(255 255 255 / 72%), rgb(255 255 255 / 42%));
+    border: 1px solid rgb(255 255 255 / 82%);
+    backdrop-filter: blur(18px) saturate(1.35);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 78%),
+      0 18px 42px rgb(15 23 42 / 16%);
+  }
+
+  .glass-immersive .preview-window {
+    background: rgb(255 255 255 / 48%);
+    backdrop-filter: blur(16px) saturate(1.25);
+  }
+
+  .glass-immersive .preview-sidebar,
+  .glass-immersive .preview-floating,
+  .glass-immersive .preview-command,
+  .glass-immersive .preview-cardlet {
+    background: linear-gradient(135deg, rgb(255 255 255 / 66%), rgb(255 255 255 / 34%));
+    border: 1px solid rgb(255 255 255 / 76%);
+    backdrop-filter: blur(22px) saturate(1.45);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 78%),
+      0 22px 52px rgb(15 23 42 / 18%);
+  }
+
+  .preview-cardlet {
+    height: 88px;
+    border-radius: 16px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+  }
+
+  .glass-body {
+    padding: 16px;
+  }
+
+  .glass-body h3 {
+    margin: 0 0 8px;
+    color: #0f172a;
+    font-size: 18px;
+  }
+
+  .glass-body p {
+    margin: 0;
+    color: #64748b;
+    line-height: 1.55;
+  }
+
+  .glass-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 12px;
+  }
+
+  .glass-tags span {
+    border: 1px solid #dbe4ee;
+    border-radius: 999px;
+    padding: 4px 8px;
+    color: #475569;
+    font-size: 12px;
+  }
+
+  .recommended {
+    color: #0f766e;
+    font-weight: 700;
+  }
+
+  @media (max-width: 1100px) {
+    .glass-option-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<h2>Codemax 的 Liquid Glass 风格放在哪里最合适？</h2>
+<p class="subtitle">默认简约风格保留不变。这里展示的是新增的可切换 glass 主题，重点比较视觉存在感、可读性和性能边界。</p>
+<p class="codemax-note">点选你更喜欢的方向也可以啦。我的推荐是 B：只在浮层、任务输入和右侧环境卡片使用真正的 Liquid Glass，日志和 Diff 保持朴素清晰。</p>
+
+<div class="glass-option-grid">
+  <article class="glass-card glass-light" data-choice="a-css-light" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-window">
+        <aside class="preview-sidebar">
+          <span></span><span></span><span></span><span></span>
+        </aside>
+        <main class="preview-main">
+          <div class="preview-topbar">
+            <div class="preview-title"></div>
+            <div class="preview-button"></div>
+          </div>
+          <div class="preview-chat">
+            <div class="preview-line"></div>
+            <div class="preview-line short"></div>
+            <div class="preview-command"></div>
+            <div class="preview-cardlet"></div>
+          </div>
+          <div class="preview-floating"></div>
+        </main>
+      </div>
+    </div>
+    <div class="glass-body">
+      <h3>A. 轻量玻璃</h3>
+      <p>主要用 CSS 的半透明、模糊和阴影。性能最稳，但不像真正 Liquid Glass 那么有折射和弹性感。</p>
+      <div class="glass-tags">
+        <span>最稳</span><span>低 GPU</span><span>视觉较克制</span>
+      </div>
+    </div>
+  </article>
+
+  <article class="glass-card glass-liquid" data-choice="b-liquid-focused" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-window">
+        <aside class="preview-sidebar">
+          <span></span><span></span><span></span><span></span>
+        </aside>
+        <main class="preview-main">
+          <div class="preview-topbar">
+            <div class="preview-title"></div>
+            <div class="preview-button"></div>
+          </div>
+          <div class="preview-chat">
+            <div class="preview-line"></div>
+            <div class="preview-line short"></div>
+            <div class="preview-command"></div>
+            <div class="preview-cardlet"></div>
+          </div>
+          <div class="preview-floating"></div>
+        </main>
+      </div>
+    </div>
+    <div class="glass-body">
+      <h3>B. 局部 Liquid Glass <span class="recommended">推荐</span></h3>
+      <p>升级 React 19 并接入 liquid-glass-react，只包裹弹窗、发送按钮、底部输入栏和环境卡片。漂亮，但不牺牲日志和 Diff 可读性。</p>
+      <div class="glass-tags">
+        <span>React 19</span><span>可切换主题</span><span>性能边界清楚</span>
+      </div>
+    </div>
+  </article>
+
+  <article class="glass-card glass-immersive" data-choice="c-liquid-immersive" onclick="toggleSelect(this)">
+    <div class="preview-shell">
+      <div class="preview-window">
+        <aside class="preview-sidebar">
+          <span></span><span></span><span></span><span></span>
+        </aside>
+        <main class="preview-main">
+          <div class="preview-topbar">
+            <div class="preview-title"></div>
+            <div class="preview-button"></div>
+          </div>
+          <div class="preview-chat">
+            <div class="preview-line"></div>
+            <div class="preview-line short"></div>
+            <div class="preview-command"></div>
+            <div class="preview-cardlet"></div>
+          </div>
+          <div class="preview-floating"></div>
+        </main>
+      </div>
+    </div>
+    <div class="glass-body">
+      <h3>C. 沉浸玻璃</h3>
+      <p>侧边栏、主面板和多数卡片都玻璃化。第一眼更惊艳，但长时间工作可能更累，也更容易吃显卡资源。</p>
+      <div class="glass-tags">
+        <span>最有冲击力</span><span>性能风险高</span><span>需更多 QA</span>
+      </div>
+    </div>
+  </article>
+</div>

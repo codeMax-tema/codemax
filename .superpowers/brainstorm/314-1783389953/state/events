@@ -1,0 +1,1 @@
+{"type":"click","text":"B. 局部 Liquid Glass 推荐\n      升级 React 19 并接入 liquid-glass-react，只包裹弹窗、发送按钮、底部输入栏和环境卡片。漂亮，但不牺牲日志和 Diff 可读性。\n      \n        React 19可切换主题性能边界清楚","choice":"b-liquid-focused","id":null,"timestamp":1783390195919}
