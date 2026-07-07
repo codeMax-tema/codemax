@@ -47,14 +47,19 @@ const requiredFiles = [
   'agent/app/graph/nodes.py',
   'agent/app/memory/service.py',
   'agent/app/providers/openai_compatible.py',
+  'agent/tests/test_s11_mvp_acceptance.py',
   'database/migrations/0001_initial.sql',
   'contracts/ipc.schema.json',
   'config/commands.allowlist.json',
   'config/commands.blocklist.json',
   'config/storage-policy.default.json',
+  'scripts/check-s11.mjs',
+  'apps/desktop/src-tauri/src/commands/s11_acceptance.rs',
   'docs/architecture/overview.md',
   'docs/architecture/runtime-boundaries.md',
   'docs/s2/local-data-model.md',
+  'docs/s11/mvp-acceptance.md',
+  'docs/superpowers/plans/2026-07-07-s11-mvp-acceptance.md',
 ];
 
 const requiredContent = [
@@ -79,6 +84,11 @@ const requiredContent = [
   ['apps/desktop/src/components/ui/toaster.tsx', 'ToastProvider'],
   ['agent/pyproject.toml', 'fastapi'],
   ['agent/app/main.py', 'create_app'],
+  ['agent/tests/test_s11_mvp_acceptance.py', 'CODEMAX_REPAIR'],
+  ['agent/tests/test_s11_mvp_acceptance.py', 'S11 Agent acceptance passed'],
+  ['package.json', '"check:s11"'],
+  ['scripts/check-s11.mjs', 'test_s11_mvp_acceptance.py'],
+  ['scripts/check-s11.mjs', 'cargo'],
   ['database/migrations/0001_initial.sql', 'CREATE TABLE IF NOT EXISTS tasks'],
   ['database/migrations/0001_initial.sql', 'CREATE TABLE IF NOT EXISTS memory_items'],
   ['apps/desktop/src-tauri/src/storage/mod.rs', 'schema_migrations'],
@@ -90,6 +100,10 @@ const requiredContent = [
   ['docs/architecture/runtime-boundaries.md', 'Worktree'],
   ['docs/s2/local-data-model.md', 'rusqlite'],
   ['docs/s2/local-data-model.md', 'CleanupGuard'],
+  ['apps/desktop/src-tauri/src/commands/s11_acceptance.rs', 's11_mvp_demo_repo_runs_from_worktree_to_local_merge'],
+  ['apps/desktop/src-tauri/src/commands/s11_acceptance.rs', 's11_acceptance_covers_repository_approval_and_memory_edges'],
+  ['docs/s11/mvp-acceptance.md', 'S11-T01'],
+  ['docs/s11/mvp-acceptance.md', 'check:s11'],
 ];
 
 const missingFiles = requiredFiles.filter((file) => !existsSync(path.join(root, file)));

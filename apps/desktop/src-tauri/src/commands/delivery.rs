@@ -73,6 +73,13 @@ pub fn generate_task_delivery(
     storage: State<'_, ManagedStorage>,
     request: GenerateTaskDeliveryRequest,
 ) -> AppResult<GeneratedTaskDelivery> {
+    generate_task_delivery_inner(&storage, request)
+}
+
+pub(crate) fn generate_task_delivery_inner(
+    storage: &ManagedStorage,
+    request: GenerateTaskDeliveryRequest,
+) -> AppResult<GeneratedTaskDelivery> {
     let task_id = request.task_id.trim().to_string();
     if task_id.is_empty() {
         return Err(CommandError::new(
@@ -81,7 +88,7 @@ pub fn generate_task_delivery(
         ));
     }
 
-    let (task, command_runs, artifacts) = load_delivery_inputs(&storage, &task_id)?;
+    let (task, command_runs, artifacts) = load_delivery_inputs(storage, &task_id)?;
     let paths = storage
         .roots
         .ensure_task_artifact_dirs(&task.id)
@@ -98,7 +105,7 @@ pub fn generate_task_delivery(
                 .then(|| paths.diff_path.to_string_lossy().to_string())
         });
     let changed_files = changed_files_from_artifacts(latest_diff_artifact);
-    let runs = command_runs
+    let runs = latest_validation_runs(command_runs)
         .into_iter()
         .map(validation_run_summary)
         .collect::<Vec<_>>();
@@ -139,7 +146,7 @@ pub fn generate_task_delivery(
         &commit_message,
     )?;
     record_delivery_artifact(
-        &storage,
+        storage,
         &task.id,
         &artifact_id,
         &changed_files,
@@ -210,6 +217,25 @@ fn changed_files_from_artifacts(artifact: Option<&ArtifactRecord>) -> Vec<String
     }
 
     files.into_iter().collect()
+}
+
+fn latest_validation_runs(runs: Vec<CommandRunRecord>) -> Vec<CommandRunRecord> {
+    let mut latest: Vec<CommandRunRecord> = Vec::new();
+
+    for run in runs {
+        let command = run.command.clone();
+        let cwd = run.cwd.clone();
+        if let Some(index) = latest
+            .iter()
+            .position(|existing| existing.command == command && existing.cwd == cwd)
+        {
+            latest[index] = run;
+        } else {
+            latest.push(run);
+        }
+    }
+
+    latest
 }
 
 fn validation_run_summary(run: CommandRunRecord) -> TaskValidationRunSummary {

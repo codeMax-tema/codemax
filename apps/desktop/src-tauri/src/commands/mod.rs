@@ -7,4 +7,6 @@ pub mod exec;
 pub mod merge;
 pub mod models;
 pub mod repository;
+#[cfg(test)]
+mod s11_acceptance;
 pub mod worktree;

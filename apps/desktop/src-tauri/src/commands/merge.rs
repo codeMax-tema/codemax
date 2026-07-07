@@ -100,7 +100,7 @@ pub fn merge_task(
     merge_task_inner(&storage, request)
 }
 
-fn merge_task_inner(
+pub(crate) fn merge_task_inner(
     storage: &ManagedStorage,
     request: MergeTaskRequest,
 ) -> AppResult<TaskMergeCommandResult> {
@@ -198,7 +198,7 @@ fn merge_task_inner(
     })
 }
 
-fn prepare_task_merge_inner(
+pub(crate) fn prepare_task_merge_inner(
     storage: &ManagedStorage,
     request: PrepareTaskMergeRequest,
 ) -> AppResult<PreparedTaskMerge> {

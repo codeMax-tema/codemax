@@ -40,6 +40,13 @@ pub fn generate_task_diff(
     storage: State<'_, ManagedStorage>,
     request: GenerateTaskDiffRequest,
 ) -> AppResult<GeneratedTaskDiff> {
+    generate_task_diff_inner(&storage, request)
+}
+
+pub(crate) fn generate_task_diff_inner(
+    storage: &ManagedStorage,
+    request: GenerateTaskDiffRequest,
+) -> AppResult<GeneratedTaskDiff> {
     let task_id = request.task_id.trim().to_string();
     if task_id.is_empty() {
         return Err(CommandError::new(
@@ -48,7 +55,7 @@ pub fn generate_task_diff(
         ));
     }
 
-    let task = load_task(&storage, &task_id)?;
+    let task = load_task(storage, &task_id)?;
     let worktree_path = task.worktree_path.clone().ok_or_else(|| {
         CommandError::new(
             "diff.worktreeMissing",
