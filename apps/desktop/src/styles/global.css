@@ -4168,6 +4168,205 @@ button:disabled {
   gap: 7px;
 }
 
+.s12-highlight-panel {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0 96px;
+  border: 1px solid #e4e4e7;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+}
+
+.s12-highlight-heading,
+.s12-highlight-heading > div,
+.s12-proof-pack,
+.s12-delivery-score,
+.s12-quality-gate,
+.s12-risk-radar,
+.s12-proposal-cards,
+.s12-screenshots-panel {
+  min-width: 0;
+}
+
+.s12-highlight-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #eeeeef;
+  padding-bottom: 12px;
+}
+
+.s12-highlight-heading span,
+.s12-proof-pack header,
+.s12-delivery-score header,
+.s12-quality-gate header,
+.s12-risk-radar header,
+.s12-proposal-cards header,
+.s12-screenshots-panel header {
+  color: #20242b;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.s12-highlight-heading p,
+.s12-delivery-score p,
+.s12-proposal-cards p {
+  margin: 4px 0 0;
+  color: #73737c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.s12-highlight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) 150px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.s12-secondary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.s12-proof-pack,
+.s12-delivery-score,
+.s12-quality-gate,
+.s12-risk-radar,
+.s12-proposal-cards,
+.s12-screenshots-panel {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  border: 1px solid #eeeeef;
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 10px;
+}
+
+.s12-proof-pack header,
+.s12-delivery-score header,
+.s12-quality-gate header,
+.s12-risk-radar header,
+.s12-proposal-cards header,
+.s12-screenshots-panel header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.s12-proof-pack svg,
+.s12-delivery-score svg,
+.s12-quality-gate svg,
+.s12-risk-radar svg,
+.s12-proposal-cards svg,
+.s12-screenshots-panel svg {
+  color: #5b5f68;
+}
+
+.s12-proof-pack code,
+.s12-screenshots-panel code {
+  display: block;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  background: #eeeeef;
+  padding: 7px 8px;
+  color: #343840;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.s12-proof-pack small,
+.s12-proposal-cards small,
+.s12-screenshots-panel small {
+  color: #8b8b94;
+  font-size: 11px;
+}
+
+.s12-delivery-score strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: #20242b;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.s12-delivery-score strong small {
+  color: #197151;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.s12-check-list,
+.s12-risk-list,
+.s12-proposal-cards > div,
+.s12-screenshots-panel > div {
+  display: grid;
+  gap: 7px;
+}
+
+.s12-status-pill,
+.s12-risk-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 8px;
+  color: #20242b;
+  font-size: 12px;
+}
+
+.s12-status-pill em,
+.s12-risk-pill em {
+  flex: 0 0 auto;
+  color: #73737c;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.s12-status-pill.is-passed em,
+.s12-risk-pill.risk-low em {
+  color: #197151;
+}
+
+.s12-status-pill.is-warning em,
+.s12-risk-pill.risk-medium em {
+  color: #8a5b00;
+}
+
+.s12-status-pill.is-blocked em,
+.s12-risk-pill.risk-high em {
+  color: #a33a3a;
+}
+
+.s12-proposal-cards section,
+.s12-screenshots-panel section {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #eeeeef;
+  border-radius: 9px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.s12-proposal-cards strong,
+.s12-screenshots-panel strong {
+  color: #20242b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 @media (max-width: 1440px) {
   .codex-app-body,
   .codex-settings-page {
@@ -4216,6 +4415,8 @@ button:disabled {
   .settings-form-field,
   .codex-model-drawer,
   .codex-contract-grid,
+  .s12-highlight-grid,
+  .s12-secondary-grid,
   .approval-detail-grid,
   .approval-metrics {
     grid-template-columns: 1fr;

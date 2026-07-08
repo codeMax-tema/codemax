@@ -1,4 +1,4 @@
-import type { TaskStatus, TaskSummary, TaskType } from '@/types/domain';
+import type { GeneratedTaskProofPack, TaskStatus, TaskSummary, TaskType } from '@/types/domain';
 
 export interface ModelOption {
   id: string;
@@ -86,6 +86,85 @@ export const s6SettingsFixture: SettingsFixture = {
     },
   ],
   validationCommands: ['npm run check', 'npm run build:desktop', 'cargo check'],
+};
+
+export const s12ProofPackFixture: GeneratedTaskProofPack = {
+  taskId: 'task-240707-01',
+  artifactId: 'demo-proof-pack-artifact',
+  generatedAt: '1783372800',
+  proofPackPath: 'app-data/tasks/task-240707-01/artifacts/proof-pack.json',
+  summaryKey: 'tasks.s12.summary',
+  deliveryScore: {
+    value: 92,
+    grade: 'A-',
+    summaryKey: 'tasks.s12.deliveryScore.summary',
+  },
+  proposals: [
+    {
+      id: 'proposal-minimal',
+      titleKey: 'tasks.s12.proposals.minimal.title',
+      summaryKey: 'tasks.s12.proposals.minimal.summary',
+      status: 'passed',
+      confidence: 94,
+    },
+    {
+      id: 'proposal-hardened',
+      titleKey: 'tasks.s12.proposals.hardened.title',
+      summaryKey: 'tasks.s12.proposals.hardened.summary',
+      status: 'warning',
+      confidence: 81,
+    },
+  ],
+  screenshots: [
+    {
+      id: 'screenshot-overview',
+      titleKey: 'tasks.s12.screenshots.overview',
+      path: 'app-data/tasks/task-240707-01/screenshots/overview.png',
+      capturedAt: '2026-07-07 09:18',
+      status: 'passed',
+    },
+    {
+      id: 'screenshot-mobile',
+      titleKey: 'tasks.s12.screenshots.mobile',
+      path: 'app-data/tasks/task-240707-01/screenshots/mobile.png',
+      capturedAt: '2026-07-07 09:20',
+      status: 'warning',
+    },
+  ],
+  qualityGates: [
+    {
+      id: 'gate-tests',
+      titleKey: 'tasks.s12.qualityGate.tests.title',
+      summaryKey: 'tasks.s12.qualityGate.tests.summary',
+      status: 'passed',
+    },
+    {
+      id: 'gate-proof',
+      titleKey: 'tasks.s12.qualityGate.proof.title',
+      summaryKey: 'tasks.s12.qualityGate.proof.summary',
+      status: 'passed',
+    },
+    {
+      id: 'gate-approval',
+      titleKey: 'tasks.s12.qualityGate.approval.title',
+      summaryKey: 'tasks.s12.qualityGate.approval.summary',
+      status: 'warning',
+    },
+  ],
+  risks: [
+    {
+      id: 'risk-backend',
+      titleKey: 'tasks.s12.riskRadar.backend.title',
+      summaryKey: 'tasks.s12.riskRadar.backend.summary',
+      level: 'medium',
+    },
+    {
+      id: 'risk-storage',
+      titleKey: 'tasks.s12.riskRadar.storage.title',
+      summaryKey: 'tasks.s12.riskRadar.storage.summary',
+      level: 'low',
+    },
+  ],
 };
 
 export function getTaskTypeLabelKey(type: TaskType) {

@@ -12,6 +12,9 @@ const DEFAULT_STORAGE_POLICY_ID: &str = "default";
 const DEFAULT_STORAGE_POLICY_SCOPE: &str = "global";
 const INITIAL_MIGRATION_VERSION: &str = "0001_initial";
 const INITIAL_MIGRATION: &str = include_str!("../../../../../database/migrations/0001_initial.sql");
+const S12_EVIDENCE_MIGRATION_VERSION: &str = "0002_s12_evidence";
+const S12_EVIDENCE_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0002_s12_evidence.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -68,25 +71,33 @@ impl SqliteStore {
             [],
         )?;
 
+        self.apply_migration(INITIAL_MIGRATION_VERSION, INITIAL_MIGRATION)?;
+        self.apply_migration(S12_EVIDENCE_MIGRATION_VERSION, S12_EVIDENCE_MIGRATION)?;
+
+        StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
+        Ok(())
+    }
+
+    fn apply_migration(&self, version: &str, sql: &str) -> StorageResult<()> {
         let applied = self
             .connection
             .query_row(
                 "SELECT 1 FROM schema_migrations WHERE version = ?1",
-                params![INITIAL_MIGRATION_VERSION],
+                params![version],
                 |row| row.get::<_, i64>(0),
             )
             .optional()?
             .is_some();
 
-        if !applied {
-            self.connection.execute_batch(INITIAL_MIGRATION)?;
-            self.connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                params![INITIAL_MIGRATION_VERSION, now_text()],
-            )?;
+        if applied {
+            return Ok(());
         }
 
-        StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
+        self.connection.execute_batch(sql)?;
+        self.connection.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![version, now_text()],
+        )?;
         Ok(())
     }
 
@@ -1670,6 +1681,9 @@ mod tests {
             "memory_items",
             "storage_policies",
             "artifact_files",
+            "quality_gate_results",
+            "proof_packs",
+            "delivery_scores",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
@@ -1683,6 +1697,52 @@ mod tests {
         assert_eq!(policy.temporary_context_retention_days, 7);
         assert!(policy.keep_final_diff_forever);
         assert!(policy.keep_approval_records_forever);
+    }
+
+    #[test]
+    fn migrates_legacy_0001_databases_to_s12_evidence_tables() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+        store
+            .connection()
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES ('0001_initial', '1783372800');
+                CREATE TABLE storage_policies (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    keep_recent_messages INTEGER NOT NULL DEFAULT 50,
+                    raw_log_retention_days INTEGER NOT NULL DEFAULT 30,
+                    screenshot_retention_days INTEGER NOT NULL DEFAULT 30,
+                    temporary_context_retention_days INTEGER NOT NULL DEFAULT 7,
+                    auto_cleanup_worktree_after_merge INTEGER NOT NULL DEFAULT 0,
+                    keep_final_diff_forever INTEGER NOT NULL DEFAULT 1,
+                    keep_approval_records_forever INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                );",
+            )
+            .expect("seed legacy 0001 database");
+
+        store.migrate().expect("run follow-up migrations");
+
+        let tables = store.table_names().expect("read table names");
+        for table in ["quality_gate_results", "proof_packs", "delivery_scores"] {
+            assert!(tables.contains(&table.to_string()), "missing {table}");
+        }
+        let has_s12_version = store
+            .connection()
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = '0002_s12_evidence'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .expect("query migration version")
+            .is_some();
+        assert!(has_s12_version);
     }
 
     #[test]

@@ -123,8 +123,16 @@ for (const marker of [
   'decide_approval',
   'save_model_config',
   'get_model_config',
+  'generateTaskProofPack',
+  'generate_task_proof_pack',
+  'recordQualityGateResult',
+  'record_quality_gate_result',
+  'overrideQualityGate',
+  'override_quality_gate',
   'ApprovalSummary',
   'ModelConfigView',
+  'GeneratedTaskProofPack',
+  'QualityGateRecord',
 ]) {
   assertIncludes('tauriClient.ts', tauriClient, marker);
 }
@@ -159,8 +167,25 @@ for (const marker of [
   '.approval-center-page',
   '.approval-card',
   '.approval-risk-pill',
+  '.s12-proposal-cards',
+  '.s12-screenshots-panel',
+  '.s12-proof-pack',
+  '.s12-quality-gate',
+  '.s12-delivery-score',
+  '.s12-risk-radar',
 ]) {
   assertIncludes('global.css', css, marker);
+}
+
+for (const marker of [
+  's12-proposal-cards',
+  's12-screenshots-panel',
+  's12-proof-pack',
+  's12-quality-gate',
+  's12-delivery-score',
+  's12-risk-radar',
+]) {
+  assertIncludes('TaskOverviewPage.tsx', taskOverview, marker);
 }
 
 for (const key of [
@@ -182,6 +207,13 @@ for (const key of [
   'approvals.reject',
   'approvals.revise',
   'approvals.pendingList',
+  'tasks.s12.title',
+  'tasks.s12.proposals.title',
+  'tasks.s12.screenshots.title',
+  'tasks.s12.proofPack.title',
+  'tasks.s12.qualityGate.title',
+  'tasks.s12.deliveryScore.title',
+  'tasks.s12.riskRadar.title',
 ]) {
   assertJsonKey('zh-CN', zhCN, key);
   assertJsonKey('en-US', enUS, key);

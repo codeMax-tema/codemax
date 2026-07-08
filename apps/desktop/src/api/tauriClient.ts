@@ -13,6 +13,9 @@ import type {
   CommandOutputStream,
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
+  GeneratedTaskProofPack,
+  QualityGateOverrideResult,
+  QualityGateRecord,
   LogCleanupResult,
   ModelConfigView,
   PreparedTaskMerge,
@@ -251,6 +254,36 @@ export interface GenerateTaskDeliveryRequest {
 
 export function generateTaskDelivery(request: GenerateTaskDeliveryRequest) {
   return invokeCommand<GeneratedTaskDelivery>('generate_task_delivery', { request });
+}
+
+export interface GenerateTaskProofPackRequest {
+  taskId: string;
+}
+
+export function generateTaskProofPack(request: GenerateTaskProofPackRequest) {
+  return invokeCommand<GeneratedTaskProofPack>('generate_task_proof_pack', { request });
+}
+
+export interface RecordQualityGateRequest {
+  taskId: string;
+  gateType: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+}
+
+export function recordQualityGateResult(request: RecordQualityGateRequest) {
+  return invokeCommand<QualityGateRecord>('record_quality_gate_result', { request });
+}
+
+export interface OverrideQualityGateRequest {
+  taskId: string;
+  gateType: string;
+  reason: string;
+}
+
+export function overrideQualityGate(request: OverrideQualityGateRequest) {
+  return invokeCommand<QualityGateOverrideResult>('override_quality_gate', { request });
 }
 
 export interface PrepareTaskMergeRequest {

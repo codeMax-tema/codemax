@@ -120,6 +120,19 @@ class AgentRepairPlan(AgentModel):
     next_actions: list[str] = Field(default_factory=list, alias="nextActions")
 
 
+class AgentProposalState(AgentModel):
+    id: str
+    title: str
+    summary: str
+    advantages: list[str] = Field(default_factory=list)
+    drawbacks: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    impact: str = "medium"
+    estimated_effort: str = Field(default="medium", alias="estimatedEffort")
+    recommended: bool = False
+    rationale: str = ""
+
+
 class ValidationCommandCandidate(AgentModel):
     language: str
     ecosystem: str
@@ -151,6 +164,8 @@ class AgentState(AgentModel):
     validation_result: ValidationResult | None = Field(default=None, alias="validationResult")
     file_edits: list[AgentFileEdit] = Field(default_factory=list, alias="fileEdits")
     repair_plan: AgentRepairPlan | None = Field(default=None, alias="repairPlan")
+    proposals: list[AgentProposalState] = Field(default_factory=list)
+    selected_proposal_id: str | None = Field(default=None, alias="selectedProposalId")
     repair_round: int = Field(default=0, alias="repairRound")
     max_repair_rounds: int = Field(default=5, alias="maxRepairRounds")
     checkpoint_index: int = Field(default=0, alias="checkpointIndex")

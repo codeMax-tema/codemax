@@ -15,6 +15,7 @@ from app.graph import (
     run_agent_graph,
 )
 from app.graph.state import (
+    AgentProposalState,
     ApprovalStatus,
     ValidationCommandCandidate,
     ValidationResult,
@@ -22,11 +23,15 @@ from app.graph.state import (
     utc_now,
 )
 from app.memory import MemoryService
+from app.proposals import ProposalService
+from app.scheduler import TaskScheduler
 from app.validation import detect_validation_candidates
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 _store = CheckpointStore()
 _memory = MemoryService()
+_proposal_service = ProposalService()
+_scheduler = TaskScheduler(max_concurrent_tasks=2)
 _tasks_lock = Lock()
 
 
@@ -129,6 +134,14 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 *validation_context_notes(validation_candidates),
             ],
         )
+        scheduled = _scheduler.submit(request.task_id)
+        state = state.model_copy(
+            update={
+                "proposals": proposal_states_for(request),
+                "updated_at": utc_now(),
+            }
+        )
+        state = append_log(state, f"Scheduler admitted task as {scheduled.status}.")
         state = _store.save(state)
 
     return CreateAgentTaskResponse(
@@ -150,8 +163,15 @@ def get_task_state(task_id: str) -> AgentState:
 def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
+        scheduled = scheduled_task_for(task_id)
+        if scheduled.status == "queued":
+            state = append_log(state, "Task is queued until a scheduler slot is available.")
+            state = _store.save(state)
+            return advance_response(state)
+
         state = apply_advance_request(state, request)
         state = run_agent_graph(state)
+        update_scheduler_from_state(state)
         state = _store.save(state)
 
     return advance_response(state)
@@ -182,6 +202,7 @@ def submit_validation_result(
         )
         state = append_log(state, "Validation result submitted to the Agent state machine.")
         state = run_agent_graph(state)
+        update_scheduler_from_state(state)
         state = _store.save(state)
 
     return advance_response(state)
@@ -225,6 +246,7 @@ def resume_approval(
         state = append_log(state, f"Approval {approval_id} resumed with decision: {decision}.")
         if decision == ApprovalStatus.APPROVED:
             state = run_agent_graph(state)
+        update_scheduler_from_state(state)
         state = _store.save(state)
 
     return ResumeApprovalResponse(
@@ -337,6 +359,40 @@ def validation_context_notes(candidates: list[ValidationCommandCandidate]) -> li
         for candidate in candidates[:8]
     )
     return [f"Validation command detection: {summary}."]
+
+
+def proposal_states_for(request: CreateAgentTaskRequest) -> list[AgentProposalState]:
+    proposals = _proposal_service.generate(request.title, request.description)
+    return [
+        AgentProposalState(
+            id=proposal.id,
+            title=proposal.title,
+            summary=proposal.summary,
+            advantages=proposal.advantages,
+            drawbacks=proposal.drawbacks,
+            risks=proposal.risks,
+            impact=proposal.impact,
+            estimatedEffort=proposal.estimated_effort,
+            recommended=proposal.recommended,
+            rationale=proposal.rationale,
+        )
+        for proposal in proposals
+    ]
+
+
+def scheduled_task_for(task_id: str):
+    try:
+        return _scheduler.status(task_id)
+    except KeyError:
+        return _scheduler.submit(task_id)
+
+
+def update_scheduler_from_state(state: AgentState) -> None:
+    scheduled_task_for(state.task_id)
+    if state.phase == AgentPhase.COMPLETED:
+        _scheduler.finish(state.task_id, success=True)
+    elif state.phase == AgentPhase.FAILED:
+        _scheduler.finish(state.task_id, success=False)
 
 
 def load_state_or_404(task_id: str) -> AgentState:
