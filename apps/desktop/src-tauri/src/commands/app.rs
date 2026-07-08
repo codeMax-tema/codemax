@@ -6,6 +6,7 @@ use std::{
 use tauri::{AppHandle, State};
 
 use crate::{
+    agent::{AgentService, AgentServiceStatus},
     core::error::{AppResult, CommandError},
     events,
     storage::{AppSettingsRepository, ManagedStorage, ModelConfigRepository, StorageError},
@@ -157,8 +158,12 @@ pub fn set_app_setting(
 }
 
 #[tauri::command]
-pub fn get_startup_health(storage: State<'_, ManagedStorage>) -> AppResult<StartupHealthResponse> {
-    get_startup_health_inner(storage.inner(), false)
+pub async fn get_startup_health(
+    storage: State<'_, ManagedStorage>,
+    agent: State<'_, AgentService>,
+) -> AppResult<StartupHealthResponse> {
+    let agent_status = agent.status().await.ok();
+    get_startup_health_inner(storage.inner(), agent_status.as_ref())
 }
 
 #[tauri::command]
@@ -192,7 +197,7 @@ fn set_app_setting_inner(storage: &ManagedStorage, key: &str, value: &str) -> Ap
 
 fn get_startup_health_inner(
     storage: &ManagedStorage,
-    agent_available: bool,
+    agent_status: Option<&AgentServiceStatus>,
 ) -> AppResult<StartupHealthResponse> {
     let mut items = Vec::new();
 
@@ -232,21 +237,7 @@ fn get_startup_health_inner(
         )
     });
 
-    items.push(if agent_available {
-        health_item(
-            "agent",
-            "ready",
-            "settings.health.agentReady",
-            None::<String>,
-        )
-    } else {
-        health_item(
-            "agent",
-            "warning",
-            "settings.health.agentNotChecked",
-            None::<String>,
-        )
-    });
+    items.push(agent_health_item(agent_status));
 
     let status = if items.iter().any(|item| item.status == "blocked") {
         "blocked"
@@ -262,12 +253,44 @@ fn get_startup_health_inner(
     })
 }
 
+fn agent_health_item(status: Option<&AgentServiceStatus>) -> StartupHealthItem {
+    let Some(status) = status else {
+        return health_item(
+            "agent",
+            "warning",
+            "settings.health.agentUnavailable",
+            None::<String>,
+        );
+    };
+
+    let detail = Some(format!(
+        "{} | {} | {}",
+        status.health_url, status.python_executable, status.agent_dir
+    ));
+
+    if !Path::new(&status.agent_dir).is_dir() {
+        return health_item(
+            "agent",
+            "blocked",
+            "settings.health.agentDirectoryMissing",
+            detail,
+        );
+    }
+
+    if status.running {
+        health_item("agent", "ready", "settings.health.agentReady", detail)
+    } else {
+        health_item("agent", "warning", "settings.health.agentStopped", detail)
+    }
+}
+
 fn get_storage_usage_inner(storage: &ManagedStorage) -> AppResult<StorageUsageResponse> {
     let database_path = storage.roots.database_path();
     let database_bytes = file_size_if_present(&database_path).map_err(storage_error)?;
     let artifact_bytes = directory_size(&storage.roots.artifact_root).map_err(storage_error)?;
     let worktree_bytes = directory_size(&storage.roots.worktree_root).map_err(storage_error)?;
-    let logs_bytes = named_directory_size(&storage.roots.artifact_root, "logs").map_err(storage_error)?;
+    let logs_bytes =
+        named_directory_size(&storage.roots.artifact_root, "logs").map_err(storage_error)?;
     let screenshots_bytes =
         named_directory_size(&storage.roots.artifact_root, "screenshots").map_err(storage_error)?;
     let temporary_context_bytes =
@@ -318,7 +341,9 @@ fn cleanup_storage_inner(
     for file in files {
         let bytes = file_size_if_present(&file).map_err(storage_error)?;
         if !request.dry_run {
-            fs::remove_file(&file).map_err(StorageError::Io).map_err(storage_error)?;
+            fs::remove_file(&file)
+                .map_err(StorageError::Io)
+                .map_err(storage_error)?;
         }
         deleted_files += 1;
         deleted_bytes += bytes;
@@ -373,9 +398,9 @@ fn health_item(
 fn normalize_setting_key(value: &str) -> AppResult<&str> {
     let value = value.trim();
     let valid = !value.is_empty()
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'));
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        });
 
     if valid {
         Ok(value)
@@ -475,7 +500,11 @@ fn collect_files_in_named_dirs(
     Ok(())
 }
 
-fn collect_named_dirs(root: &Path, name: &str, dirs: &mut Vec<PathBuf>) -> Result<(), StorageError> {
+fn collect_named_dirs(
+    root: &Path,
+    name: &str,
+    dirs: &mut Vec<PathBuf>,
+) -> Result<(), StorageError> {
     if !root.exists() {
         return Ok(());
     }
@@ -556,13 +585,75 @@ mod tests {
     fn startup_health_reports_missing_model_as_degraded() {
         let (storage, root) = test_storage();
 
-        let health = get_startup_health_inner(&storage, false).expect("health");
+        let health = get_startup_health_inner(&storage, None).expect("health");
 
         assert_eq!(health.status, "degraded");
         assert!(health
             .items
             .iter()
             .any(|item| item.key == "model" && item.status == "warning"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_health_reports_existing_agent_runtime_as_stopped_warning() {
+        let (storage, root) = test_storage();
+        let agent_dir = root.join("agent-runtime");
+        std::fs::create_dir_all(&agent_dir).expect("create agent dir");
+        let status = AgentServiceStatus {
+            running: false,
+            pid: None,
+            host: "127.0.0.1".to_string(),
+            port: 8765,
+            health_url: "http://127.0.0.1:8765/health".to_string(),
+            agent_dir: agent_dir.to_string_lossy().to_string(),
+            python_executable: "python".to_string(),
+            health: None,
+        };
+
+        let health = get_startup_health_inner(&storage, Some(&status)).expect("health");
+        let agent = health
+            .items
+            .iter()
+            .find(|item| item.key == "agent")
+            .expect("agent health item");
+
+        assert_eq!(agent.status, "warning");
+        assert_eq!(agent.message_key, "settings.health.agentStopped");
+        assert!(agent
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("127.0.0.1:8765") && detail.contains("python")));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_health_reports_running_agent_runtime_as_ready() {
+        let (storage, root) = test_storage();
+        let agent_dir = root.join("agent-runtime");
+        std::fs::create_dir_all(&agent_dir).expect("create agent dir");
+        let status = AgentServiceStatus {
+            running: true,
+            pid: Some(1234),
+            host: "127.0.0.1".to_string(),
+            port: 8765,
+            health_url: "http://127.0.0.1:8765/health".to_string(),
+            agent_dir: agent_dir.to_string_lossy().to_string(),
+            python_executable: "python".to_string(),
+            health: None,
+        };
+
+        let health = get_startup_health_inner(&storage, Some(&status)).expect("health");
+        let agent = health
+            .items
+            .iter()
+            .find(|item| item.key == "agent")
+            .expect("agent health item");
+
+        assert_eq!(agent.status, "ready");
+        assert_eq!(agent.message_key, "settings.health.agentReady");
 
         let _ = std::fs::remove_dir_all(root);
     }
