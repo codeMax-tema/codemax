@@ -14,7 +14,8 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { s6SettingsFixture } from '@/features/tasks/taskFixtures';
+import { createAgentTask, createTaskRecord } from '@/api/tauriClient';
+import { taskModelOptions, validationCommandPresets } from '@/features/tasks/taskDefaults';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
@@ -66,19 +67,20 @@ export function NewTaskDialog() {
   const setSelectedTaskId = useAppStore((state) => state.setSelectedTaskId);
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<RunMode>('AGENT');
-  const [modelId, setModelId] = useState(s6SettingsFixture.models[0].id);
+  const [modelId, setModelId] = useState(taskModelOptions[0].id);
   const [modelStrength, setModelStrength] = useState<ModelStrength>('balanced');
-  const [validationCommand, setValidationCommand] = useState(s6SettingsFixture.validationCommands[0] ?? '');
+  const [validationCommand, setValidationCommand] = useState(validationCommandPresets[0] ?? '');
   const [enabledPermissions, setEnabledPermissions] = useState<Record<string, boolean>>({
     'workspace-write': true,
     'command-execution': true,
     'network-access': false,
   });
   const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
-  const selectedModel = s6SettingsFixture.models.find((model) => model.id === modelId) ?? s6SettingsFixture.models[0];
+  const selectedModel = taskModelOptions.find((model) => model.id === modelId) ?? taskModelOptions[0];
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!currentRepository) {
@@ -92,9 +94,37 @@ export function NewTaskDialog() {
     }
 
     setError(null);
-    setSelectedTaskId('task-240707-01');
-    setCurrentRoute('tasks');
-    setOpen(false);
+    setIsCreating(true);
+
+    try {
+      const task = await createTaskRecord({
+        repositoryPath: currentRepository.path,
+        description,
+        modelId,
+        taskType: 'custom',
+        validationCommand: validationCommand.trim() || null,
+      });
+      setSelectedTaskId(task.id);
+      setCurrentRoute('tasks');
+      if (!task.worktreePath) {
+        throw new Error(t('tasks.new.errorWorktreeMissing', locale));
+      }
+      await createAgentTask({
+        taskId: task.id,
+        repositoryPath: task.repositoryPath,
+        worktreePath: task.worktreePath,
+        title: task.title,
+        description: task.description,
+        modelId,
+        validationCommand: validationCommand.trim() || null,
+      });
+      setDescription('');
+      setOpen(false);
+    } catch (error) {
+      setError(normalizeTaskCreateError(error));
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   function togglePermission(permissionId: string) {
@@ -144,7 +174,7 @@ export function NewTaskDialog() {
               />
             </div>
             <div className="codex-validation-presets" aria-label={t('tasks.new.validationPresets', locale)}>
-              {s6SettingsFixture.validationCommands.map((command) => (
+              {validationCommandPresets.map((command) => (
                 <button
                   key={command}
                   type="button"
@@ -216,8 +246,14 @@ export function NewTaskDialog() {
               ))}
             </div>
 
-            <Button type="submit" size="icon" className="codex-send-button" aria-label={t('tasks.new.submit', locale)}>
-              <SendHorizontal className="h-4 w-4" aria-hidden="true" />
+            <Button
+              type="submit"
+              size="icon"
+              className="codex-send-button"
+              aria-label={t('tasks.new.submit', locale)}
+              disabled={isCreating}
+            >
+              <SendHorizontal className={cn('h-4 w-4', isCreating && 'diff-spin')} aria-hidden="true" />
             </Button>
           </div>
 
@@ -241,7 +277,7 @@ export function NewTaskDialog() {
           </div>
 
           <div className="codex-model-drawer" aria-label={t('tasks.new.model.title', locale)}>
-            {s6SettingsFixture.models.map((model) => (
+            {taskModelOptions.map((model) => (
               <button
                 key={model.id}
                 type="button"
@@ -267,4 +303,16 @@ export function NewTaskDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+function normalizeTaskCreateError(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'title' in error) {
+    return String((error as { title: unknown }).title);
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }

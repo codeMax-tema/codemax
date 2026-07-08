@@ -7,6 +7,7 @@ use std::{
 
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -18,9 +19,10 @@ use crate::{
     },
     safety::{self, RiskAssessment},
     storage::{
-        ApprovalRecord, ApprovalRepository, CommandRunRecord, CommandRunRepository, ManagedStorage,
-        NewApproval, NewCommandRun, StorageError, StoragePolicyRepository, TaskRecord,
-        TaskRepository,
+        AgentEventRepository, ApprovalRecord, ApprovalRepository, CommandRunRecord,
+        CommandRunRepository, ManagedStorage, NewAgentEvent, NewApproval, NewCommandRun,
+        NewValidationRound, StorageError, StoragePolicyRepository, TaskRecord, TaskRepository,
+        ValidationRoundRepository,
     },
 };
 
@@ -118,6 +120,23 @@ pub(crate) async fn run_task_command(
         .as_deref()
         .expect("run id is assigned")
         .to_string();
+    let is_validation = is_validation_run(&run_id);
+    let command_stage = if is_validation { "validating" } else { "editing" };
+    record_agent_event(
+        storage,
+        &task.id,
+        "command.started",
+        command_stage,
+        "Command execution started.",
+        json!({
+            "run_id": &run_id,
+            "command": &request.command,
+            "cwd": &request.cwd,
+        }),
+    )?;
+    if is_validation {
+        update_task_status(storage, &task.id, "validating")?;
+    }
     let log_paths = command_log_paths(storage, &request.task_id, &run_id)?;
     let sink_app = app.clone();
     let output_sink: CommandOutputSink = std::sync::Arc::new(move |event| {
@@ -136,6 +155,37 @@ pub(crate) async fn run_task_command(
         .map_err(command_execution_error)?;
 
     record_command_result(storage, &result)?;
+    record_agent_event(
+        storage,
+        &task.id,
+        "command.output",
+        command_stage,
+        "Command output was captured to task log files.",
+        json!({
+            "run_id": &result.run_id,
+            "stdout_path": &result.stdout_path,
+            "stderr_path": &result.stderr_path,
+            "status": &result.status,
+        }),
+    )?;
+    record_agent_event(
+        storage,
+        &task.id,
+        "command.finished",
+        command_stage,
+        "Command execution finished.",
+        json!({
+            "run_id": &result.run_id,
+            "status": &result.status,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "timed_out": result.timed_out,
+            "cancelled": result.cancelled,
+        }),
+    )?;
+    if is_validation {
+        record_validation_round(storage, &task.id, &result)?;
+    }
     events::emit_command_finished(app, result.clone()).map_err(event_error)?;
 
     Ok(result)
@@ -400,8 +450,20 @@ fn enforce_command_safety(
 
     let approval = create_command_approval(&approvals, &task.id, &content, &assessment)?;
     TaskRepository::new(connection)
-        .update_status(&task.id, "waitingApproval", None)
+        .update_status(&task.id, "awaitingApproval", None)
         .map_err(storage_error)?;
+    record_agent_event_with_connection(
+        connection,
+        &task.id,
+        "approval.requested",
+        "awaitingApproval",
+        "Command requires approval before execution.",
+        json!({
+            "approval_id": &approval.id,
+            "risk_level": &approval.risk_level,
+            "content": &approval.content,
+        }),
+    )?;
 
     Err(CommandError::new(
         "approval.required",
@@ -546,6 +608,7 @@ fn record_command_result(
         .record(NewCommandRun {
             id: &result.run_id,
             task_id: &result.task_id,
+            purpose: command_run_purpose(&result.run_id),
             command: &result.command,
             cwd: &result.cwd,
             status: &result.status,
@@ -556,6 +619,188 @@ fn record_command_result(
         })
         .map_err(storage_error)?;
     Ok(())
+}
+
+fn record_validation_round(
+    storage: &ManagedStorage,
+    task_id: &str,
+    result: &CommandExecutionResult,
+) -> AppResult<()> {
+    let status = validation_round_status(result);
+    let passed = status == "passed";
+    let analysis = validation_round_analysis(status, result);
+    let repair_summary = if passed {
+        "Validation passed; no repair is pending."
+    } else if status == "cancelled" {
+        "Validation was cancelled; awaiting user direction before repair."
+    } else {
+        "Awaiting Agent repair analysis."
+    };
+    let validation_summary = format!(
+        "{} in {} (exit code {:?}, stdout {}, stderr {})",
+        result.command, result.cwd, result.exit_code, result.stdout_path, result.stderr_path
+    );
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+
+    if !passed {
+        record_agent_event_with_connection(
+            connection,
+            task_id,
+            "validation.failed",
+            validation_failure_stage(status),
+            "Validation did not pass and requires follow-up.",
+            json!({
+                "run_id": &result.run_id,
+                "command": &result.command,
+                "cwd": &result.cwd,
+                "status": &result.status,
+                "round_status": status,
+                "exit_code": result.exit_code,
+                "stdout_path": &result.stdout_path,
+                "stderr_path": &result.stderr_path,
+            }),
+        )?;
+    }
+    ValidationRoundRepository::new(connection)
+        .record(NewValidationRound {
+            id: &format!("validation-round-{}", uuid::Uuid::new_v4()),
+            task_id,
+            round_index: next_validation_round_index(connection, task_id)?,
+            status,
+            command_run_id: Some(&result.run_id),
+            analysis: &analysis,
+            repair_summary,
+            validation_summary: &validation_summary,
+        })
+        .map_err(storage_error)?;
+    let next_status = if passed {
+        "readyToMerge"
+    } else if status == "cancelled" {
+        "needsIntervention"
+    } else {
+        "repairing"
+    };
+    TaskRepository::new(connection)
+        .update_status(task_id, next_status, None)
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn validation_round_status(result: &CommandExecutionResult) -> &'static str {
+    if result.cancelled || result.status == "cancelled" {
+        "cancelled"
+    } else if result.timed_out || result.status == "timedOut" {
+        "timedOut"
+    } else if result.status == "passed" && result.exit_code.unwrap_or(1) == 0 {
+        "passed"
+    } else {
+        "failed"
+    }
+}
+
+fn validation_round_analysis(status: &str, result: &CommandExecutionResult) -> String {
+    match status {
+        "passed" => format!(
+            "Validation command passed with exit code {:?}.",
+            result.exit_code
+        ),
+        "cancelled" => "Validation command was cancelled before completion.".to_string(),
+        "timedOut" => format!(
+            "Validation command timed out after running with exit code {:?}.",
+            result.exit_code
+        ),
+        _ => format!(
+            "Validation command failed with status {} and exit code {:?}.",
+            result.status, result.exit_code
+        ),
+    }
+}
+
+fn validation_failure_stage(status: &str) -> &'static str {
+    if status == "cancelled" {
+        "needsIntervention"
+    } else {
+        "repairing"
+    }
+}
+
+fn next_validation_round_index(connection: &rusqlite::Connection, task_id: &str) -> AppResult<i64> {
+    connection
+        .query_row(
+            "SELECT COALESCE(MAX(round_index), 0) + 1 FROM validation_rounds WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(StorageError::from)
+        .map_err(storage_error)
+}
+
+fn update_task_status(storage: &ManagedStorage, task_id: &str, status: &str) -> AppResult<()> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    TaskRepository::new(store.connection())
+        .update_status(task_id, status, None)
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn record_agent_event(
+    storage: &ManagedStorage,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    record_agent_event_with_connection(
+        store.connection(),
+        task_id,
+        event_type,
+        stage,
+        message,
+        payload,
+    )
+}
+
+fn record_agent_event_with_connection(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let event_id = format!("event-{}", uuid::Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(|error| {
+        CommandError::new(
+            "event.invalidPayload",
+            format!("Unable to encode event payload: {error}"),
+        )
+    })?;
+    AgentEventRepository::new(connection)
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn is_validation_run(run_id: &str) -> bool {
+    run_id.starts_with("validation-")
+}
+
+fn command_run_purpose(run_id: &str) -> &'static str {
+    if is_validation_run(run_id) {
+        "validation"
+    } else {
+        "diagnostic"
+    }
 }
 
 fn stored_secret_redactor(storage: &ManagedStorage) -> LogRedactor {
@@ -1092,7 +1337,7 @@ mod tests {
                 .get_required("task-001")
                 .expect("load task")
                 .status,
-            "waitingApproval"
+            "awaitingApproval"
         );
     }
 

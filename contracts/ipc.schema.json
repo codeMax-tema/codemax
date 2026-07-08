@@ -16,6 +16,15 @@
           },
           "required": ["response"]
         },
+        "get_storage_roots": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/StorageRootsResponse"
+            }
+          },
+          "required": ["response"]
+        },
         "select_repository_path": {
           "type": "object",
           "properties": {
@@ -100,6 +109,57 @@
             },
             "response": {
               "$ref": "#/$defs/WorktreeStatus"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "create_task_record": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CreateTaskRecordRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "list_tasks": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ListTasksRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TaskSummary"
+              }
+            }
+          },
+          "required": ["response"]
+        },
+        "get_task_record": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_task_detail": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskDetail"
             }
           },
           "required": ["request", "response"]
@@ -339,6 +399,7 @@
       },
       "required": [
         "health",
+        "get_storage_roots",
         "select_repository_path",
         "validate_repository_path",
         "get_repository_current_branch",
@@ -346,6 +407,10 @@
         "create_task_branch",
         "create_task_worktree",
         "get_task_worktree_status",
+        "create_task_record",
+        "list_tasks",
+        "get_task_record",
+        "get_task_detail",
         "cleanup_task_worktree",
         "execute_task_command",
         "cancel_task_command",
@@ -458,6 +523,24 @@
       },
       "required": ["path"]
     },
+    "StorageRootsResponse": {
+      "type": "object",
+      "properties": {
+        "appDataDir": {
+          "type": "string"
+        },
+        "artifactRoot": {
+          "type": "string"
+        },
+        "worktreeRoot": {
+          "type": "string"
+        },
+        "databasePath": {
+          "type": "string"
+        }
+      },
+      "required": ["appDataDir", "artifactRoot", "worktreeRoot", "databasePath"]
+    },
     "RepositoryPathSelection": {
       "type": "object",
       "properties": {
@@ -511,6 +594,238 @@
         }
       },
       "required": ["taskId"]
+    },
+    "CreateTaskRecordRequest": {
+      "type": "object",
+      "properties": {
+        "repositoryPath": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "title": {
+          "type": ["string", "null"]
+        },
+        "taskType": {
+          "enum": ["bugfix", "test", "refactor", "explain", "custom", null]
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "validationCommand": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["repositoryPath", "description"]
+    },
+    "ListTasksRequest": {
+      "type": "object",
+      "properties": {
+        "repositoryPath": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": ["string", "null"]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "TaskSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "taskStatus": {
+          "type": "string"
+        },
+        "repositoryId": {
+          "type": "string"
+        },
+        "repositoryPath": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": ["string", "null"]
+        },
+        "branchName": {
+          "type": ["string", "null"]
+        },
+        "taskBranch": {
+          "type": ["string", "null"]
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "agentStage": {
+          "type": "string"
+        },
+        "latestValidationStatus": {
+          "type": "string"
+        },
+        "latestDiffSummary": {
+          "type": "string"
+        },
+        "mergePreview": {
+          "$ref": "#/$defs/MergePreview"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "type",
+        "status",
+        "taskStatus",
+        "repositoryId",
+        "repositoryPath",
+        "worktreePath",
+        "branchName",
+        "taskBranch",
+        "targetBranch",
+        "agentStage",
+        "latestValidationStatus",
+        "latestDiffSummary",
+        "mergePreview",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MergePreview": {
+      "type": "object",
+      "properties": {
+        "targetBranch": {
+          "type": "string"
+        },
+        "sourceBranch": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": "string"
+        },
+        "canMerge": {
+          "type": "boolean"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recordPath": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["targetBranch", "sourceBranch", "status", "canMerge", "blockers", "recordPath"]
+    },
+    "TaskDetail": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/TaskSummary"
+        },
+        "todos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "commandRuns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "artifactFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "agentSession": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "validationRounds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "mergeRecords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "task",
+        "todos",
+        "commandRuns",
+        "approvals",
+        "artifacts",
+        "artifactFiles",
+        "agentSession",
+        "timeline",
+        "validationRounds",
+        "mergeRecords"
+      ]
     },
     "AgentTaskCreateRequest": {
       "type": "object",

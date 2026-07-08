@@ -23,7 +23,10 @@ import type {
   RepositoryDirtyStatus,
   RepositorySummary,
   TaskBranch,
+  TaskDetail,
   TaskMergeCommandResult,
+  TaskSummary,
+  TaskType,
   TaskWorktree,
   WorktreeCleanupResult,
   WorktreeStatus,
@@ -58,6 +61,17 @@ export interface PingResponse {
 
 export function pingDesktop() {
   return invokeCommand<PingResponse>('ping');
+}
+
+export interface StorageRootsResponse {
+  appDataDir: string;
+  artifactRoot: string;
+  worktreeRoot: string;
+  databasePath: string;
+}
+
+export function getStorageRoots() {
+  return invokeCommand<StorageRootsResponse>('get_storage_roots');
 }
 
 export function emitAppReady() {
@@ -225,6 +239,37 @@ export function getRepositoryCurrentBranch(path: string) {
 
 export function getRepositoryDirtyStatus(path: string) {
   return invokeCommand<RepositoryDirtyStatus>('get_repository_dirty_status', { path });
+}
+
+export interface CreateTaskRecordRequest {
+  repositoryPath: string;
+  description: string;
+  title?: string | null;
+  taskType?: TaskType | null;
+  modelId?: string | null;
+  validationCommand?: string | null;
+}
+
+export function createTaskRecord(request: CreateTaskRecordRequest) {
+  return invokeCommand<TaskSummary>('create_task_record', { request });
+}
+
+export interface ListTasksRequest {
+  repositoryPath?: string | null;
+  status?: string | null;
+  limit?: number;
+}
+
+export function listTasks(request: ListTasksRequest = {}) {
+  return invokeCommand<TaskSummary[]>('list_tasks', { request });
+}
+
+export function getTaskRecord(taskId: string) {
+  return invokeCommand<TaskSummary>('get_task_record', { taskId });
+}
+
+export function getTaskDetail(taskId: string) {
+  return invokeCommand<TaskDetail>('get_task_detail', { taskId });
 }
 
 export function createTaskBranch(repositoryPath: string, taskId: string) {

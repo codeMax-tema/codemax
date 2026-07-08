@@ -9,6 +9,7 @@
     "check": "npm run check:architecture && npm run check:frontend",
     "check:architecture": "node tests/architecture/verify-architecture.mjs",
     "check:frontend": "node tests/frontend/verify-s6-ui.mjs",
+    "check:a-line": "node scripts/check-a-line.mjs",
     "check:s11": "node scripts/check-s11.mjs",
     "check:tauri": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "build:desktop": "npm --workspace @codemax/desktop run build",

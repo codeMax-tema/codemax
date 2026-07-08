@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
 
@@ -13,8 +13,9 @@ use crate::{
     core::error::{AppResult, CommandError},
     git::{self, GitError, TaskMergeStatus},
     storage::{
-        ArtifactRecord, ArtifactRepository, CommandRunRecord, CommandRunRepository, ManagedStorage,
-        NewArtifact, NewArtifactFile, StorageError, TaskRecord, TaskRepository,
+        AgentEventRepository, ArtifactRecord, ArtifactRepository, CommandRunRecord,
+        CommandRunRepository, ManagedStorage, MergeRecordRepository, NewAgentEvent, NewArtifact,
+        NewArtifactFile, NewMergeRecord, StorageError, TaskRecord, TaskRepository,
     },
 };
 
@@ -137,7 +138,19 @@ pub(crate) fn merge_task_inner(
         ));
     }
 
-    set_task_status(&storage, &task_id, "merging", None)?;
+    record_merge_event(
+        &storage,
+        &task_id,
+        "merge.started",
+        "readyToMerge",
+        "Local merge started.",
+        json!({
+            "target_branch": &prepared.target_branch,
+            "source_branch": &prepared.source_branch,
+            "worktree_path": &prepared.worktree_path,
+        }),
+    )?;
+    set_task_status(&storage, &task_id, "readyToMerge", None)?;
     let merge_result = match git::merge_task_branch(
         load_task(&storage, &task_id)?.repository_path,
         &prepared.worktree_path,
@@ -158,6 +171,18 @@ pub(crate) fn merge_task_inner(
                     ),
                 ));
             }
+            let _ = record_merge_event(
+                &storage,
+                &task_id,
+                "merge.finished",
+                "needsIntervention",
+                "Local merge failed before Git produced a merge record.",
+                json!({
+                    "target_branch": &prepared.target_branch,
+                    "source_branch": &prepared.source_branch,
+                    "error": &merge_error.message,
+                }),
+            );
             return Err(merge_error);
         }
     };
@@ -185,6 +210,24 @@ pub(crate) fn merge_task_inner(
         }
     };
     set_task_status(&storage, &task_id, task_status, completed_at.as_deref())?;
+    record_merge_event(
+        &storage,
+        &task_id,
+        "merge.finished",
+        task_status,
+        match merge_result.status {
+            TaskMergeStatus::Merged => "Local merge finished successfully.",
+            TaskMergeStatus::Conflicted => "Local merge finished with conflicts.",
+        },
+        json!({
+            "status": &merge_result.status,
+            "target_branch": &merge_result.target_branch,
+            "source_branch": &merge_result.source_branch,
+            "commit_sha": &merge_result.commit_sha,
+            "conflict_files": &merge_result.conflict_files,
+            "record_path": &merge_record_path,
+        }),
+    )?;
 
     Ok(TaskMergeCommandResult {
         task_id,
@@ -278,7 +321,7 @@ fn require_merge_confirmation(confirmed: bool) -> AppResult<()> {
 fn latest_validation_runs(runs: &[CommandRunRecord]) -> Vec<&CommandRunRecord> {
     let mut latest: Vec<&CommandRunRecord> = Vec::new();
 
-    for run in runs {
+    for run in runs.iter().filter(|run| run.purpose == "validation") {
         let key = (run.command.as_str(), run.cwd.as_str());
         if let Some(existing) = latest
             .iter_mut()
@@ -477,6 +520,24 @@ fn record_merge_result(
             expires_at: None,
         })
         .map_err(storage_error)?;
+    let conflict_files = serde_json::to_string(&result.conflict_files).map_err(json_error)?;
+    MergeRecordRepository::new(store.connection())
+        .record(NewMergeRecord {
+            id: &format!("merge-record-{task_id}-{}", Uuid::new_v4()),
+            task_id,
+            status: match result.status {
+                TaskMergeStatus::Merged => "merged",
+                TaskMergeStatus::Conflicted => "conflicted",
+            },
+            target_branch: &result.target_branch,
+            source_branch: &result.source_branch,
+            commit_sha: &result.commit_sha,
+            commit_message: &result.commit_message,
+            conflict_files: &conflict_files,
+            error_reason: result.error_reason.as_deref(),
+            record_path: Some(&record_path_text),
+        })
+        .map_err(storage_error)?;
 
     Ok(record_path_text)
 }
@@ -628,6 +689,30 @@ fn json_error(error: serde_json::Error) -> CommandError {
     )
 }
 
+fn record_merge_event(
+    storage: &ManagedStorage,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let event_id = format!("event-{}", Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(json_error)?;
+    AgentEventRepository::new(store.connection())
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +725,7 @@ mod tests {
         CommandRunRecord {
             id: format!("run-{status}"),
             task_id: "task-001".to_string(),
+            purpose: "validation".to_string(),
             command: "npm test".to_string(),
             cwd: "D:/codemax".to_string(),
             status: status.to_string(),
@@ -760,6 +846,7 @@ mod tests {
                 .record(NewCommandRun {
                     id: "run-merge-passed",
                     task_id: "task-merge-error",
+                    purpose: "validation",
                     command: "cargo test",
                     cwd: &worktree_path.to_string_lossy(),
                     status: "passed",

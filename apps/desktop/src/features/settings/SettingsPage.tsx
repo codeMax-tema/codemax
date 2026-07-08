@@ -21,9 +21,9 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { getModelConfig, saveModelConfig } from '@/api/tauriClient';
+import { getModelConfig, getStorageRoots, saveModelConfig, type StorageRootsResponse } from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
-import { s6SettingsFixture } from '@/features/tasks/taskFixtures';
+import { settingsDefaults } from '@/features/tasks/taskDefaults';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
@@ -385,7 +385,7 @@ function ModelSettings() {
         </div>
       </form>
       <div className="settings-section-list model-provider-list">
-        {s6SettingsFixture.models.map((model, index) => (
+        {settingsDefaults.models.map((model, index) => (
           <section className="settings-line-section" key={model.id}>
             <span>
               <strong>{model.model}</strong>
@@ -455,22 +455,62 @@ function ModeSettings() {
 
 function StorageSettings() {
   const locale = useAppStore((state) => state.locale);
+  const [roots, setRoots] = useState<StorageRootsResponse | null>(null);
+  const [rootsError, setRootsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRoots() {
+      try {
+        const result = await getStorageRoots();
+        if (!cancelled) {
+          setRoots(result);
+          setRootsError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setRootsError(readErrorMessage(error));
+        }
+      }
+    }
+
+    void loadRoots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
       <SettingsPaneHeader titleKey="settings.storage.title" bodyKey="settings.storage.body" />
       <div className="settings-section-list">
+        {rootsError ? (
+          <section className="settings-line-section vertical">
+            <strong>{t('settings.storage.pathError', locale)}</strong>
+            <code>{rootsError}</code>
+          </section>
+        ) : null}
         <section className="settings-line-section vertical">
           <strong>{t('settings.storage.appData', locale)}</strong>
-          <code>{s6SettingsFixture.appDataPath}</code>
+          <code>{roots?.appDataDir ?? t('settings.storage.loading', locale)}</code>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.storage.database', locale)}</strong>
+          <code>{roots?.databasePath ?? t('settings.storage.loading', locale)}</code>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.storage.artifactRoot', locale)}</strong>
+          <code>{roots?.artifactRoot ?? t('settings.storage.loading', locale)}</code>
         </section>
         <section className="settings-line-section vertical">
           <strong>{t('settings.storage.worktreeRoot', locale)}</strong>
-          <code>{s6SettingsFixture.worktreeRoot}</code>
+          <code>{roots?.worktreeRoot ?? t('settings.storage.loading', locale)}</code>
         </section>
-        <PolicyLine titleKey="settings.storage.recentMessages" value={`${s6SettingsFixture.recentMessages}`} />
-        <PolicyLine titleKey="settings.storage.logs" value={`${s6SettingsFixture.logRetentionDays}d`} />
-        <PolicyLine titleKey="settings.storage.screenshots" value={`${s6SettingsFixture.screenshotRetentionDays}d`} />
+        <PolicyLine titleKey="settings.storage.recentMessages" value={`${settingsDefaults.recentMessages}`} />
+        <PolicyLine titleKey="settings.storage.logs" value={`${settingsDefaults.logRetentionDays}d`} />
+        <PolicyLine titleKey="settings.storage.screenshots" value={`${settingsDefaults.screenshotRetentionDays}d`} />
       </div>
     </>
   );
@@ -569,7 +609,7 @@ function PlaceholderSettings({ category }: { category: SettingsCategory }) {
       <SettingsPaneHeader titleKey={`settings.categories.${category}`} bodyKey="settings.placeholder.body" />
       <div className="settings-section-list">
         <PolicyLine titleKey="settings.permissions.approvals" valueKey="settings.permissions.approvalsValue" />
-        <PolicyLine titleKey="settings.storage.worktreeRoot" value={s6SettingsFixture.worktreeRoot} />
+        <PolicyLine titleKey="settings.storage.worktreeRoot" valueKey="settings.storage.runtimeManaged" />
       </div>
     </>
   );

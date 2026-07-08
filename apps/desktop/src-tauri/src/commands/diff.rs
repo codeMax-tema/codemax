@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
 
@@ -8,8 +9,8 @@ use crate::{
     core::error::{AppResult, CommandError},
     git::{self, GitError},
     storage::{
-        ArtifactRepository, ManagedStorage, NewArtifact, NewArtifactFile, StorageError, TaskRecord,
-        TaskRepository,
+        AgentEventRepository, ArtifactRepository, ManagedStorage, NewAgentEvent, NewArtifact,
+        NewArtifactFile, StorageError, TaskRecord, TaskRepository,
     },
 };
 
@@ -108,6 +109,24 @@ pub(crate) fn generate_task_diff_inner(
                 expires_at: None,
             })
             .map_err(storage_error)?;
+        TaskRepository::new(store.connection())
+            .update_status(&task.id, "awaitingReview", None)
+            .map_err(storage_error)?;
+        record_agent_event_with_connection(
+            store.connection(),
+            &task.id,
+            "diff.updated",
+            "awaitingReview",
+            "Task diff was generated and persisted.",
+            json!({
+                "artifact_id": &artifact_id,
+                "diff_path": &diff_path,
+                "base_ref": &diff.base_ref,
+                "file_count": diff.files.len(),
+                "additions": diff.additions,
+                "deletions": diff.deletions,
+            }),
+        )?;
     }
 
     Ok(GeneratedTaskDiff {
@@ -246,4 +265,27 @@ fn json_error(error: serde_json::Error) -> CommandError {
         "diff.invalidJson",
         format!("Unable to encode changed files for artifact storage: {error}"),
     )
+}
+
+fn record_agent_event_with_connection(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let event_id = format!("event-{}", Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(json_error)?;
+    AgentEventRepository::new(connection)
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
 }

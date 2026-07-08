@@ -15,6 +15,12 @@ const INITIAL_MIGRATION: &str = include_str!("../../../../../database/migrations
 const S12_EVIDENCE_MIGRATION_VERSION: &str = "0002_s12_evidence";
 const S12_EVIDENCE_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0002_s12_evidence.sql");
+const A_TASK_CHAIN_MIGRATION_VERSION: &str = "0003_a_task_chain";
+const A_TASK_CHAIN_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0003_a_task_chain.sql");
+const COMMAND_RUN_PURPOSE_MIGRATION_VERSION: &str = "0004_command_run_purpose";
+const COMMAND_RUN_PURPOSE_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0004_command_run_purpose.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -62,6 +68,10 @@ impl SqliteStore {
         &self.connection
     }
 
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
     pub fn migrate(&self) -> StorageResult<()> {
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -73,6 +83,11 @@ impl SqliteStore {
 
         self.apply_migration(INITIAL_MIGRATION_VERSION, INITIAL_MIGRATION)?;
         self.apply_migration(S12_EVIDENCE_MIGRATION_VERSION, S12_EVIDENCE_MIGRATION)?;
+        self.apply_migration(A_TASK_CHAIN_MIGRATION_VERSION, A_TASK_CHAIN_MIGRATION)?;
+        self.apply_migration(
+            COMMAND_RUN_PURPOSE_MIGRATION_VERSION,
+            COMMAND_RUN_PURPOSE_MIGRATION,
+        )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
         Ok(())
@@ -372,6 +387,65 @@ impl<'conn> TaskRepository<'conn> {
             .ok_or_else(|| StorageError::NotFound(format!("task {task_id}")))
     }
 
+    pub fn list_recent(
+        &self,
+        repository_path: Option<&str>,
+        status: Option<&str>,
+        limit: usize,
+    ) -> StorageResult<Vec<TaskRecord>> {
+        let limit = limit.clamp(1, 200) as i64;
+
+        match (repository_path, status) {
+            (Some(repository_path), Some(status)) => {
+                let mut statement = self.connection.prepare(
+                    "SELECT id, title, description, type, status, repository_path, worktree_path,
+                        branch_name, model_id, created_at, updated_at, completed_at
+                     FROM tasks
+                     WHERE repository_path = ?1 AND status = ?2
+                     ORDER BY updated_at DESC, created_at DESC
+                     LIMIT ?3",
+                )?;
+                let rows = statement.query(params![repository_path, status, limit])?;
+                collect_task_rows(rows)
+            }
+            (Some(repository_path), None) => {
+                let mut statement = self.connection.prepare(
+                    "SELECT id, title, description, type, status, repository_path, worktree_path,
+                        branch_name, model_id, created_at, updated_at, completed_at
+                     FROM tasks
+                     WHERE repository_path = ?1
+                     ORDER BY updated_at DESC, created_at DESC
+                     LIMIT ?2",
+                )?;
+                let rows = statement.query(params![repository_path, limit])?;
+                collect_task_rows(rows)
+            }
+            (None, Some(status)) => {
+                let mut statement = self.connection.prepare(
+                    "SELECT id, title, description, type, status, repository_path, worktree_path,
+                        branch_name, model_id, created_at, updated_at, completed_at
+                     FROM tasks
+                     WHERE status = ?1
+                     ORDER BY updated_at DESC, created_at DESC
+                     LIMIT ?2",
+                )?;
+                let rows = statement.query(params![status, limit])?;
+                collect_task_rows(rows)
+            }
+            (None, None) => {
+                let mut statement = self.connection.prepare(
+                    "SELECT id, title, description, type, status, repository_path, worktree_path,
+                        branch_name, model_id, created_at, updated_at, completed_at
+                     FROM tasks
+                     ORDER BY updated_at DESC, created_at DESC
+                     LIMIT ?1",
+                )?;
+                let rows = statement.query(params![limit])?;
+                collect_task_rows(rows)
+            }
+        }
+    }
+
     pub fn update_status(
         &self,
         task_id: &str,
@@ -423,6 +497,14 @@ impl<'conn> TaskRepository<'conn> {
     }
 }
 
+fn collect_task_rows(mut rows: rusqlite::Rows<'_>) -> StorageResult<Vec<TaskRecord>> {
+    let mut tasks = Vec::new();
+    while let Some(row) = rows.next()? {
+        tasks.push(map_task_record(row)?);
+    }
+    Ok(tasks)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoRecord {
     pub id: String,
@@ -463,6 +545,42 @@ impl<'conn> TodoRepository<'conn> {
                 todo.title,
                 todo.description,
                 todo.status,
+            ],
+        )?;
+
+        self.get_required(todo.id)
+    }
+
+    pub fn upsert(&self, todo: NewTodo<'_>) -> StorageResult<TodoRecord> {
+        let timestamp = now_text();
+        self.connection.execute(
+            "INSERT INTO todos (
+                id, task_id, title, description, status, started_at, completed_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                CASE WHEN ?5 = 'in_progress' THEN ?6 ELSE NULL END,
+                CASE WHEN ?5 IN ('completed', 'failed', 'skipped') THEN ?6 ELSE NULL END
+             )
+             ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                description = excluded.description,
+                status = excluded.status,
+                started_at = CASE
+                    WHEN excluded.status = 'in_progress' AND todos.started_at IS NULL THEN ?6
+                    ELSE todos.started_at
+                END,
+                completed_at = CASE
+                    WHEN excluded.status IN ('completed', 'failed', 'skipped') THEN ?6
+                    ELSE todos.completed_at
+                END,
+                error_message = NULL",
+            params![
+                todo.id,
+                todo.task_id,
+                todo.title,
+                todo.description,
+                todo.status,
+                timestamp,
             ],
         )?;
 
@@ -522,6 +640,7 @@ impl<'conn> TodoRepository<'conn> {
 pub struct CommandRunRecord {
     pub id: String,
     pub task_id: String,
+    pub purpose: String,
     pub command: String,
     pub cwd: String,
     pub status: String,
@@ -536,6 +655,7 @@ pub struct CommandRunRecord {
 pub struct NewCommandRun<'a> {
     pub id: &'a str,
     pub task_id: &'a str,
+    pub purpose: &'a str,
     pub command: &'a str,
     pub cwd: &'a str,
     pub status: &'a str,
@@ -557,12 +677,13 @@ impl<'conn> CommandRunRepository<'conn> {
     pub fn record(&self, run: NewCommandRun<'_>) -> StorageResult<CommandRunRecord> {
         self.connection.execute(
             "INSERT INTO command_runs (
-                id, task_id, command, cwd, status, stdout_path, stderr_path,
+                id, task_id, purpose, command, cwd, status, stdout_path, stderr_path,
                 exit_code, duration_ms, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 run.id,
                 run.task_id,
+                run.purpose,
                 run.command,
                 run.cwd,
                 run.status,
@@ -580,7 +701,7 @@ impl<'conn> CommandRunRepository<'conn> {
     pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<CommandRunRecord>> {
         let mut statement = self.connection.prepare(
             "SELECT id, task_id, command, cwd, status, stdout_path, stderr_path,
-                exit_code, duration_ms, created_at
+                exit_code, duration_ms, created_at, purpose
              FROM command_runs
              WHERE task_id = ?1
              ORDER BY created_at, id",
@@ -599,7 +720,7 @@ impl<'conn> CommandRunRepository<'conn> {
         self.connection
             .query_row(
                 "SELECT id, task_id, command, cwd, status, stdout_path, stderr_path,
-                    exit_code, duration_ms, created_at
+                    exit_code, duration_ms, created_at, purpose
                  FROM command_runs WHERE task_id = ?1 AND id = ?2",
                 params![task_id, run_id],
                 map_command_run_record,
@@ -612,7 +733,7 @@ impl<'conn> CommandRunRepository<'conn> {
         self.connection
             .query_row(
                 "SELECT id, task_id, command, cwd, status, stdout_path, stderr_path,
-                    exit_code, duration_ms, created_at
+                    exit_code, duration_ms, created_at, purpose
                  FROM command_runs WHERE id = ?1",
                 params![run_id],
                 map_command_run_record,
@@ -1338,6 +1459,369 @@ impl<'conn> ArtifactRepository<'conn> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionRecord {
+    pub id: String,
+    pub task_id: String,
+    pub status: String,
+    pub stage: String,
+    pub checkpoint_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewAgentSession<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub status: &'a str,
+    pub stage: &'a str,
+    pub checkpoint_id: Option<&'a str>,
+}
+
+pub struct AgentSessionRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> AgentSessionRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn create(&self, session: NewAgentSession<'_>) -> StorageResult<AgentSessionRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO agent_sessions (
+                id, task_id, status, stage, checkpoint_id, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![
+                session.id,
+                session.task_id,
+                session.status,
+                session.stage,
+                session.checkpoint_id,
+                now,
+            ],
+        )?;
+
+        self.get_required(session.id)
+    }
+
+    pub fn upsert(&self, session: NewAgentSession<'_>) -> StorageResult<AgentSessionRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO agent_sessions (
+                id, task_id, status, stage, checkpoint_id, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                stage = excluded.stage,
+                checkpoint_id = excluded.checkpoint_id,
+                updated_at = ?6",
+            params![
+                session.id,
+                session.task_id,
+                session.status,
+                session.stage,
+                session.checkpoint_id,
+                now,
+            ],
+        )?;
+
+        self.get_required(session.id)
+    }
+
+    pub fn get_for_task(&self, task_id: &str) -> StorageResult<Option<AgentSessionRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, status, stage, checkpoint_id, created_at, updated_at
+                 FROM agent_sessions
+                 WHERE task_id = ?1
+                 ORDER BY updated_at DESC, id DESC
+                 LIMIT 1",
+                params![task_id],
+                map_agent_session_record,
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    fn get_required(&self, session_id: &str) -> StorageResult<AgentSessionRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, status, stage, checkpoint_id, created_at, updated_at
+                 FROM agent_sessions WHERE id = ?1",
+                params![session_id],
+                map_agent_session_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("agent session {session_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEventRecord {
+    pub event_id: String,
+    pub task_id: String,
+    pub event_type: String,
+    pub stage: String,
+    pub message: String,
+    pub created_at: String,
+    pub payload: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewAgentEvent<'a> {
+    pub event_id: &'a str,
+    pub task_id: &'a str,
+    pub event_type: &'a str,
+    pub stage: &'a str,
+    pub message: &'a str,
+    pub payload: &'a str,
+}
+
+pub struct AgentEventRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> AgentEventRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn create(&self, event: NewAgentEvent<'_>) -> StorageResult<AgentEventRecord> {
+        self.connection.execute(
+            "INSERT INTO agent_events (
+                event_id, task_id, event_type, stage, message, created_at, payload
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event.event_id,
+                event.task_id,
+                event.event_type,
+                event.stage,
+                event.message,
+                now_text(),
+                event.payload,
+            ],
+        )?;
+
+        self.get_required(event.event_id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<AgentEventRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, task_id, event_type, stage, message, created_at, payload
+             FROM agent_events
+             WHERE task_id = ?1
+             ORDER BY created_at, event_id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_agent_event_record)?;
+        let mut events = Vec::new();
+
+        for row in rows {
+            events.push(row?);
+        }
+
+        Ok(events)
+    }
+
+    fn get_required(&self, event_id: &str) -> StorageResult<AgentEventRecord> {
+        self.connection
+            .query_row(
+                "SELECT event_id, task_id, event_type, stage, message, created_at, payload
+                 FROM agent_events WHERE event_id = ?1",
+                params![event_id],
+                map_agent_event_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("agent event {event_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationRoundRecord {
+    pub id: String,
+    pub task_id: String,
+    pub round_index: i64,
+    pub status: String,
+    pub command_run_id: Option<String>,
+    pub analysis: String,
+    pub repair_summary: String,
+    pub validation_summary: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewValidationRound<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub round_index: i64,
+    pub status: &'a str,
+    pub command_run_id: Option<&'a str>,
+    pub analysis: &'a str,
+    pub repair_summary: &'a str,
+    pub validation_summary: &'a str,
+}
+
+pub struct ValidationRoundRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> ValidationRoundRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(&self, round: NewValidationRound<'_>) -> StorageResult<ValidationRoundRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO validation_rounds (
+                id, task_id, round_index, status, command_run_id, analysis,
+                repair_summary, validation_summary, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            params![
+                round.id,
+                round.task_id,
+                round.round_index,
+                round.status,
+                round.command_run_id,
+                round.analysis,
+                round.repair_summary,
+                round.validation_summary,
+                now,
+            ],
+        )?;
+
+        self.get_required(round.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ValidationRoundRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, round_index, status, command_run_id, analysis,
+                repair_summary, validation_summary, created_at, updated_at
+             FROM validation_rounds
+             WHERE task_id = ?1
+             ORDER BY round_index, created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_validation_round_record)?;
+        let mut rounds = Vec::new();
+
+        for row in rows {
+            rounds.push(row?);
+        }
+
+        Ok(rounds)
+    }
+
+    fn get_required(&self, round_id: &str) -> StorageResult<ValidationRoundRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, round_index, status, command_run_id, analysis,
+                    repair_summary, validation_summary, created_at, updated_at
+                 FROM validation_rounds WHERE id = ?1",
+                params![round_id],
+                map_validation_round_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("validation round {round_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeRecord {
+    pub id: String,
+    pub task_id: String,
+    pub status: String,
+    pub target_branch: String,
+    pub source_branch: String,
+    pub commit_sha: String,
+    pub commit_message: String,
+    pub conflict_files: String,
+    pub error_reason: Option<String>,
+    pub record_path: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewMergeRecord<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub status: &'a str,
+    pub target_branch: &'a str,
+    pub source_branch: &'a str,
+    pub commit_sha: &'a str,
+    pub commit_message: &'a str,
+    pub conflict_files: &'a str,
+    pub error_reason: Option<&'a str>,
+    pub record_path: Option<&'a str>,
+}
+
+pub struct MergeRecordRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> MergeRecordRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(&self, record: NewMergeRecord<'_>) -> StorageResult<MergeRecord> {
+        self.connection.execute(
+            "INSERT INTO merge_records (
+                id, task_id, status, target_branch, source_branch, commit_sha,
+                commit_message, conflict_files, error_reason, record_path, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                record.id,
+                record.task_id,
+                record.status,
+                record.target_branch,
+                record.source_branch,
+                record.commit_sha,
+                record.commit_message,
+                record.conflict_files,
+                record.error_reason,
+                record.record_path,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(record.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<MergeRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, status, target_branch, source_branch, commit_sha,
+                commit_message, conflict_files, error_reason, record_path, created_at
+             FROM merge_records
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_merge_record)?;
+        let mut records = Vec::new();
+
+        for row in rows {
+            records.push(row?);
+        }
+
+        Ok(records)
+    }
+
+    fn get_required(&self, record_id: &str) -> StorageResult<MergeRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, status, target_branch, source_branch, commit_sha,
+                    commit_message, conflict_files, error_reason, record_path, created_at
+                 FROM merge_records WHERE id = ?1",
+                params![record_id],
+                map_merge_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("merge record {record_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupReadiness {
     pub task_id: String,
     pub final_diff_preserved: bool,
@@ -1513,6 +1997,7 @@ fn map_command_run_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandRu
     Ok(CommandRunRecord {
         id: row.get(0)?,
         task_id: row.get(1)?,
+        purpose: row.get(10)?,
         command: row.get(2)?,
         cwd: row.get(3)?,
         status: row.get(4)?,
@@ -1635,6 +2120,63 @@ fn map_artifact_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifac
     })
 }
 
+fn map_agent_session_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSessionRecord> {
+    Ok(AgentSessionRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        status: row.get(2)?,
+        stage: row.get(3)?,
+        checkpoint_id: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn map_agent_event_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentEventRecord> {
+    Ok(AgentEventRecord {
+        event_id: row.get(0)?,
+        task_id: row.get(1)?,
+        event_type: row.get(2)?,
+        stage: row.get(3)?,
+        message: row.get(4)?,
+        created_at: row.get(5)?,
+        payload: row.get(6)?,
+    })
+}
+
+fn map_validation_round_record(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ValidationRoundRecord> {
+    Ok(ValidationRoundRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        round_index: row.get(2)?,
+        status: row.get(3)?,
+        command_run_id: row.get(4)?,
+        analysis: row.get(5)?,
+        repair_summary: row.get(6)?,
+        validation_summary: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+fn map_merge_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MergeRecord> {
+    Ok(MergeRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        status: row.get(2)?,
+        target_branch: row.get(3)?,
+        source_branch: row.get(4)?,
+        commit_sha: row.get(5)?,
+        commit_message: row.get(6)?,
+        conflict_files: row.get(7)?,
+        error_reason: row.get(8)?,
+        record_path: row.get(9)?,
+        created_at: row.get(10)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1684,6 +2226,10 @@ mod tests {
             "quality_gate_results",
             "proof_packs",
             "delivery_scores",
+            "agent_sessions",
+            "agent_events",
+            "validation_rounds",
+            "merge_records",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
@@ -1729,7 +2275,15 @@ mod tests {
         store.migrate().expect("run follow-up migrations");
 
         let tables = store.table_names().expect("read table names");
-        for table in ["quality_gate_results", "proof_packs", "delivery_scores"] {
+        for table in [
+            "quality_gate_results",
+            "proof_packs",
+            "delivery_scores",
+            "agent_sessions",
+            "agent_events",
+            "validation_rounds",
+            "merge_records",
+        ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
         let has_s12_version = store
@@ -1743,6 +2297,17 @@ mod tests {
             .expect("query migration version")
             .is_some();
         assert!(has_s12_version);
+        let has_a_chain_version = store
+            .connection()
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = '0003_a_task_chain'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .expect("query task chain migration version")
+            .is_some();
+        assert!(has_a_chain_version);
     }
 
     #[test]
@@ -1828,6 +2393,7 @@ mod tests {
             .record(NewCommandRun {
                 id: "command-001",
                 task_id: "task-001",
+                purpose: "validation",
                 command: "npm test",
                 cwd: "D:/projects/demo",
                 status: "passed",

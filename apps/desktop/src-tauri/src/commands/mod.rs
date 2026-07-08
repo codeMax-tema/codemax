@@ -10,4 +10,5 @@ pub mod repository;
 #[cfg(test)]
 mod s11_acceptance;
 pub mod s12_evidence;
+pub mod tasks;
 pub mod worktree;

@@ -34,11 +34,14 @@ import {
 import * as monaco from 'monaco-editor';
 
 import {
+  getTaskDetail,
   generateTaskDelivery,
   generateTaskDiff,
   generateTaskProofPack,
   mergeTask,
   prepareTaskMerge,
+  readTaskCommandLog,
+  runAgentValidationCycle,
 } from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
 import {
@@ -51,12 +54,16 @@ import {
 import { t, type Locale } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
-import { s12ProofPackFixture } from '@/features/tasks/taskFixtures';
 import type {
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
+  AgentValidationCycleResult,
+  CommandLogPage,
+  CommandOutputStream,
   PreparedTaskMerge,
+  TaskCommandRun,
+  TaskDetail,
   TaskDiffFile,
   TaskMergeCommandResult,
   TaskValidationRunSummary,
@@ -66,163 +73,23 @@ loader.config({ monaco });
 
 const largeDiffLineThreshold = 420;
 const largeDiffCharThreshold = 32000;
-
-const commandRuns = [
-  {
-    id: 'branch',
-    label: 'git branch --show-current',
-    command: 'git branch --show-current',
-    output: 'codex/s8-diff-review',
-  },
-  {
-    id: 'status',
-    label: 'git status --short',
-    command: 'git status --short',
-    output:
-      ' M apps/desktop/src-tauri/src/git/mod.rs\n M apps/desktop/src/features/tasks/TaskOverviewPage.tsx\n?? apps/desktop/src-tauri/src/commands/diff.rs',
-  },
-  {
-    id: 'check',
-    label: 'npm run build:desktop',
-    command: 'npm run build:desktop',
-    output: 'TypeScript and Vite build verify the S8 Diff review surface.',
-  },
-];
-
-const demoDiffFiles: TaskDiffFile[] = [
-  {
-    path: 'apps/desktop/src-tauri/src/commands/diff.rs',
-    status: 'added',
-    additions: 91,
-    deletions: 0,
-    patch: `diff --git a/apps/desktop/src-tauri/src/commands/diff.rs b/apps/desktop/src-tauri/src/commands/diff.rs
-new file mode 100644
-index 0000000..1111111
---- /dev/null
-+++ b/apps/desktop/src-tauri/src/commands/diff.rs
-@@ -0,0 +1,12 @@
-+use tauri::State;
-+
-+use crate::{
-+    core::error::AppResult,
-+    git,
-+    storage::ManagedStorage,
-+};
-+
-+#[tauri::command]
-+pub fn generate_task_diff(storage: State<'_, ManagedStorage>, task_id: String) -> AppResult<()> {
-+    Ok(())
-+}`,
-  },
-  {
-    path: 'apps/desktop/src/features/tasks/TaskOverviewPage.tsx',
-    status: 'modified',
-    additions: 156,
-    deletions: 24,
-    patch: `diff --git a/apps/desktop/src/features/tasks/TaskOverviewPage.tsx b/apps/desktop/src/features/tasks/TaskOverviewPage.tsx
-index 2222222..3333333 100644
---- a/apps/desktop/src/features/tasks/TaskOverviewPage.tsx
-+++ b/apps/desktop/src/features/tasks/TaskOverviewPage.tsx
-@@ -1,7 +1,12 @@
--import { Check, Code2 } from 'lucide-react';
-+import { useMemo, useState } from 'react';
-+import { DiffEditor } from '@monaco-editor/react';
-+import { Check, Code2, RefreshCw } from 'lucide-react';
-+
-+import { generateTaskDiff } from '@/api/tauriClient';
- import { Button } from '@/components/ui/button';
- import { t } from '@/i18n';
-
-+const largeDiffLineThreshold = 420;
- export function TaskOverviewPage() {
-   const locale = useAppStore((state) => state.locale);
-+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-   return <section className="code-change-panel" />;
- }`,
-  },
-  {
-    path: 'apps/desktop/src/styles/global.css',
-    status: 'modified',
-    additions: 52,
-    deletions: 8,
-    patch: `diff --git a/apps/desktop/src/styles/global.css b/apps/desktop/src/styles/global.css
-index 4444444..5555555 100644
---- a/apps/desktop/src/styles/global.css
-+++ b/apps/desktop/src/styles/global.css
-@@ -1810,7 +1810,10 @@
- .diff-file-list {
-   display: grid;
-+  max-height: 280px;
-+  overflow: auto;
- }
-
- .diff-file-row {
-+  border: 0;
-   border-bottom: 1px solid #eeeeef;
- }`,
-  },
-];
-
-const demoDiff: GeneratedTaskDiff = {
-  taskId: 'task-240707-01',
-  baseRef: 'main',
-  worktreePath: 'D:\\codemax\\.worktrees\\task-240707-01',
-  branchName: 'codex/s8-diff-review',
-  artifactId: 'demo-diff-artifact',
-  diffPath: 'app-data/tasks/task-240707-01/diff.patch',
-  files: demoDiffFiles,
-  additions: demoDiffFiles.reduce((total, file) => total + file.additions, 0),
-  deletions: demoDiffFiles.reduce((total, file) => total + file.deletions, 0),
-  patch: demoDiffFiles.map((file) => file.patch).join('\n'),
-};
-
-const demoDelivery: GeneratedTaskDelivery = {
-  taskId: demoDiff.taskId,
-  artifactId: 'demo-delivery-artifact',
-  reportPath: 'app-data/tasks/task-240707-01/report.json',
-  deliveryPath: 'app-data/tasks/task-240707-01/artifacts/delivery.md',
-  diffPath: demoDiff.diffPath,
-  summary:
-    '## 问题\nS8-E02 需要把验证结果、交付说明和建议提交信息汇总为可审查交付物。\n\n## 修改点\n新增交付报告生成与展示入口，保留 Diff、测试报告和说明的可追溯路径。\n\n## 文件\n- apps/desktop/src-tauri/src/commands/delivery.rs\n- apps/desktop/src/features/tasks/TaskOverviewPage.tsx\n\n## 验证\n验证通过：共 3 条命令，3 条通过。\n\n## 风险\n演示数据仅用于空状态预览，真实任务需点击生成交付说明读取本地 artifact。',
-  commitMessage:
-    'feat(desktop): add task delivery report\n\n- Generate S8-E02 validation summary and delivery artifact.\n- Verification: 验证通过：共 3 条命令，3 条通过。\n- Risk: 未发现失败验证命令；合入前仍建议按项目规范复跑关键验证。',
-  report: {
-    taskId: demoDiff.taskId,
-    artifactId: 'demo-delivery-artifact',
-    taskTitle: 'S8-E02 测试报告与交付说明',
-    generatedAt: '1783372800',
-    overallStatus: 'passed',
-    summary: '验证通过：共 3 条命令，3 条通过。',
-    commandCount: 3,
-    passedCount: 3,
-    failedCount: 0,
-    changedFiles: demoDiff.files.map((file) => file.path),
-    diffPath: demoDiff.diffPath,
-    deliveryPath: 'app-data/tasks/task-240707-01/artifacts/delivery.md',
-    runs: commandRuns.map((run, index) => ({
-      runId: `demo-run-${index + 1}`,
-      command: run.command,
-      cwd: 'D:\\codemax-1',
-      status: 'passed',
-      exitCode: 0,
-      durationMs: 1200 + index * 310,
-      createdAt: '1783372800',
-    })),
-    risk: '未发现失败验证命令；合入前仍建议按项目规范复跑关键验证。',
-  },
-};
+const commandLogPageBytes = 32 * 1024;
+type CommandRunLike = TaskValidationRunSummary | TaskCommandRun;
 
 export function TaskOverviewPage() {
   const locale = useAppStore((state) => state.locale);
   const selectedTaskId = useAppStore((state) => state.selectedTaskId);
   const setNewTaskDialogOpen = useAppStore((state) => state.setNewTaskDialogOpen);
   const selectedTaskIdRef = useRef(selectedTaskId);
+  const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
   const [generatedDiff, setGeneratedDiff] = useState<GeneratedTaskDiff | null>(null);
   const [generatedDelivery, setGeneratedDelivery] = useState<GeneratedTaskDelivery | null>(null);
   const [generatedProofPack, setGeneratedProofPack] = useState<GeneratedTaskProofPack | null>(null);
   const [preparedMerge, setPreparedMerge] = useState<PreparedTaskMerge | null>(null);
   const [mergeResult, setMergeResult] = useState<TaskMergeCommandResult | null>(null);
-  const [selectedFilePath, setSelectedFilePath] = useState<string>(demoDiff.files[0]?.path ?? '');
+  const [agentCycleResult, setAgentCycleResult] = useState<AgentValidationCycleResult | null>(null);
+  const [selectedFilePath, setSelectedFilePath] = useState<string>('');
   const [isDiffLoading, setIsDiffLoading] = useState(false);
   const [isDeliveryLoading, setIsDeliveryLoading] = useState(false);
   const [isProofPackLoading, setIsProofPackLoading] = useState(false);
@@ -232,16 +99,28 @@ export function TaskOverviewPage() {
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const [proofPackError, setProofPackError] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [agentCycleError, setAgentCycleError] = useState<string | null>(null);
   const [largeDiffExpanded, setLargeDiffExpanded] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
-  const [mergeCommitMessage, setMergeCommitMessage] = useState(demoDelivery.commitMessage);
+  const [mergeCommitMessage, setMergeCommitMessage] = useState('');
+  const [isAgentCycleRunning, setIsAgentCycleRunning] = useState(false);
 
-  const visibleDiff = generatedDiff ?? demoDiff;
-  const visibleDelivery = generatedDelivery ?? demoDelivery;
-  const visibleProofPack = generatedProofPack ?? s12ProofPackFixture;
-  const visibleMerge = preparedMerge ?? buildPreparedMergePreview(visibleDiff, visibleDelivery);
+  const visibleDiff = generatedDiff;
+  const visibleDelivery = generatedDelivery;
+  const visibleProofPack = generatedProofPack;
+  const visibleMerge = preparedMerge;
+  const taskRecord = taskDetail?.task ?? null;
+  const visibleCommandRuns = taskDetail?.commandRuns ?? visibleDelivery?.report.runs ?? [];
+  const visibleTodos = taskDetail?.todos ?? [];
+  const visibleTimeline = taskDetail?.timeline ?? [];
+  const visibleValidationRounds = taskDetail?.validationRounds ?? [];
+  const deliveryStatus = visibleDelivery?.report.overallStatus ?? 'notRun';
+  const taskTitle = taskRecord?.title ?? t('tasks.execution.noTaskTitle', locale);
+  const taskSubtitle = taskRecord
+    ? `${formatTaskStatus(taskRecord.status, locale)} · ${taskRecord.repositoryPath}`
+    : t('tasks.execution.noTaskBody', locale);
   const selectedFile =
-    visibleDiff.files.find((file) => file.path === selectedFilePath) ?? visibleDiff.files[0] ?? null;
+    visibleDiff?.files.find((file) => file.path === selectedFilePath) ?? visibleDiff?.files[0] ?? null;
   const selectedFileLarge = selectedFile ? isLargeDiffFile(selectedFile) : false;
   const diffModels = useMemo(
     () => (selectedFile ? buildDiffModels(selectedFile.patch) : { original: '', modified: '' }),
@@ -249,32 +128,66 @@ export function TaskOverviewPage() {
   );
 
   useEffect(() => {
-    if (!visibleDiff.files.some((file) => file.path === selectedFilePath)) {
-      setSelectedFilePath(visibleDiff.files[0]?.path ?? '');
+    if (!visibleDiff?.files.some((file) => file.path === selectedFilePath)) {
+      setSelectedFilePath(visibleDiff?.files[0]?.path ?? '');
     }
-  }, [selectedFilePath, visibleDiff.files]);
+  }, [selectedFilePath, visibleDiff?.files]);
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId;
+    setTaskDetail(null);
+    setTaskError(null);
     setGeneratedDiff(null);
     setGeneratedDelivery(null);
     setGeneratedProofPack(null);
     setPreparedMerge(null);
     setMergeResult(null);
+    setAgentCycleResult(null);
     setDiffError(null);
     setDeliveryError(null);
     setProofPackError(null);
     setMergeError(null);
+    setAgentCycleError(null);
     setMergeDialogOpen(false);
     setLargeDiffExpanded(false);
-    setMergeCommitMessage(demoDelivery.commitMessage);
+    setMergeCommitMessage('');
   }, [selectedTaskId]);
 
   useEffect(() => {
-    if (!mergeDialogOpen) {
+    if (!selectedTaskId) {
+      return;
+    }
+
+    const taskId = selectedTaskId;
+    let cancelled = false;
+
+    async function loadTaskRecord() {
+      try {
+        const detail = await getTaskDetail(taskId);
+        if (!cancelled && selectedTaskIdRef.current === taskId) {
+          setTaskDetail(detail);
+          setTaskError(null);
+        }
+      } catch (error) {
+        if (!cancelled && selectedTaskIdRef.current === taskId) {
+          setTaskDetail(null);
+          setTaskError(normalizeDiffError(error));
+        }
+      }
+    }
+
+    void loadTaskRecord();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (!mergeDialogOpen && visibleMerge) {
       setMergeCommitMessage(visibleMerge.commitMessage);
     }
-  }, [mergeDialogOpen, visibleMerge.commitMessage]);
+  }, [mergeDialogOpen, visibleMerge]);
 
   async function loadTaskDiff({ reportMergeError = false } = {}) {
     const taskId = selectedTaskId;
@@ -377,6 +290,44 @@ export function TaskOverviewPage() {
     }
   }
 
+  async function refreshSelectedTaskDetail(taskId: string) {
+    const detail = await getTaskDetail(taskId);
+    if (selectedTaskIdRef.current === taskId) {
+      setTaskDetail(detail);
+      setTaskError(null);
+    }
+  }
+
+  async function handleRunAgentValidationCycle() {
+    const taskId = selectedTaskId;
+    if (!taskId) {
+      setAgentCycleError(t('tasks.execution.agentNoTask', locale));
+      return;
+    }
+
+    setIsAgentCycleRunning(true);
+    setAgentCycleError(null);
+    try {
+      const result = await runAgentValidationCycle({
+        taskId,
+        reason: 'User started or continued the Agent validation cycle from task detail.',
+      });
+      if (selectedTaskIdRef.current !== taskId) {
+        return;
+      }
+      setAgentCycleResult(result);
+      await refreshSelectedTaskDetail(taskId);
+    } catch (error) {
+      if (selectedTaskIdRef.current === taskId) {
+        setAgentCycleError(normalizeDiffError(error));
+      }
+    } finally {
+      if (selectedTaskIdRef.current === taskId) {
+        setIsAgentCycleRunning(false);
+      }
+    }
+  }
+
   async function loadMergePreparation() {
     const taskId = selectedTaskId;
     if (!taskId) {
@@ -435,6 +386,11 @@ export function TaskOverviewPage() {
       setMergeError(t('tasks.execution.mergeNoTask', locale));
       return;
     }
+    if (!visibleMerge) {
+      setMergeDialogOpen(false);
+      setMergeError(t('tasks.execution.mergePrecheckRequired', locale));
+      return;
+    }
     if (visibleMerge.taskId !== taskId) {
       setMergeDialogOpen(false);
       setMergeError(t('tasks.execution.mergeStale', locale));
@@ -482,7 +438,7 @@ export function TaskOverviewPage() {
       <header className="execution-topbar">
         <div className="execution-topbar-title">
           <TerminalSquare className="h-4 w-4" aria-hidden="true" />
-          <h3>{t('tasks.execution.title', locale)}</h3>
+          <h3>{taskTitle}</h3>
           <button type="button" aria-label={t('tasks.execution.more', locale)}>
             <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -508,8 +464,8 @@ export function TaskOverviewPage() {
       <section className="codex-run-transcript" aria-label={t('tasks.chat.thread', locale)}>
         <header className="execution-thread-header">
           <div>
-            <h3>{t('tasks.execution.title', locale)}</h3>
-            <p>{t('tasks.execution.subtitle', locale)}</p>
+            <h3>{taskTitle}</h3>
+            <p>{taskSubtitle}</p>
           </div>
           <button type="button" aria-label={t('tasks.execution.more', locale)}>
             <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
@@ -517,8 +473,142 @@ export function TaskOverviewPage() {
         </header>
 
         <article className="execution-message">
-          <p>{t('tasks.execution.lead', locale)}</p>
+          <p>{taskRecord?.description ?? t('tasks.execution.noTaskBody', locale)}</p>
+          {taskError ? (
+            <div className="diff-error-banner" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{taskError}</span>
+            </div>
+          ) : null}
+          {taskRecord ? (
+            <div className="diff-meta-strip">
+              <span>
+                {t('tasks.execution.taskId', locale)} <strong>{taskRecord.id}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.taskStatus', locale)} <strong>{formatTaskStatus(taskRecord.status, locale)}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.repositoryPath', locale)} <strong>{taskRecord.repositoryPath}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.worktreePath', locale)} <strong>{taskRecord.worktreePath ?? '-'}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.taskBranch', locale)} <strong>{taskRecord.branchName ?? '-'}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.repositoryId', locale)} <strong>{taskRecord.repositoryId}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.targetBranch', locale)} <strong>{taskRecord.targetBranch || '-'}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.agentStage', locale)} <strong>{formatTaskStatus(taskRecord.agentStage, locale)}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.latestValidation', locale)} <strong>{taskRecord.latestValidationStatus}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.latestDiff', locale)} <strong>{taskRecord.latestDiffSummary || '-'}</strong>
+              </span>
+            </div>
+          ) : null}
+          {taskRecord ? (
+            <section className="agent-cycle-panel" aria-label={t('tasks.execution.agentCycle', locale)}>
+              <div className="agent-cycle-heading">
+                <span>
+                  <CircleDot className="h-4 w-4" aria-hidden="true" />
+                  {t('tasks.execution.agentCycle', locale)}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleRunAgentValidationCycle}
+                  disabled={isAgentCycleRunning}
+                >
+                  <RefreshCw className={cn('h-3.5 w-3.5', isAgentCycleRunning && 'diff-spin')} aria-hidden="true" />
+                  {isAgentCycleRunning
+                    ? t('tasks.execution.agentCycleRunning', locale)
+                    : t('tasks.execution.agentCycleRun', locale)}
+                </Button>
+              </div>
+              <div className="agent-cycle-grid">
+                <MetricPill label={t('tasks.execution.agentStage', locale)} value={formatTaskStatus(taskRecord.agentStage, locale)} />
+                <MetricPill
+                  label={t('tasks.execution.agentPhase', locale)}
+                  value={agentCycleResult?.phase ?? taskDetail?.agentSession?.status ?? '-'}
+                />
+                <MetricPill
+                  label={t('tasks.execution.agentIterations', locale)}
+                  value={(agentCycleResult?.iterations ?? 0).toString()}
+                />
+                <MetricPill
+                  label={t('tasks.execution.agentRepairRound', locale)}
+                  value={formatRepairRound(agentCycleResult?.state.repairRound, agentCycleResult?.state.maxRepairRounds)}
+                />
+              </div>
+              <div className="agent-validation-request">
+                <span>{t('tasks.execution.agentValidationRequest', locale)}</span>
+                <code>{formatValidationRequest(agentCycleResult?.state.validationRequest)}</code>
+              </div>
+              {agentCycleError ? (
+                <div className="diff-error-banner" role="alert">
+                  <AlertCircle className="h-4 w-4" aria-hidden="true" />
+                  <span>{agentCycleError}</span>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
         </article>
+
+        <section className="execution-section">
+          <button type="button" className="execution-collapse">
+            <ClipboardCheck className="h-4 w-4" aria-hidden="true" />
+            {t('tasks.execution.todos', locale)}
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <div className="task-truth-list">
+            {visibleTodos.length > 0 ? (
+              visibleTodos.map((todo) => (
+                <article key={todo.id} className="task-truth-row">
+                  <span className={cn('task-truth-dot', `status-${todo.status}`)} />
+                  <div>
+                    <strong>{todo.title}</strong>
+                    <small>{todo.description}</small>
+                  </div>
+                  <em>{todo.status}</em>
+                </article>
+              ))
+            ) : (
+              <div className="delivery-empty-state">{t('tasks.execution.noTodos', locale)}</div>
+            )}
+          </div>
+        </section>
+
+        <section className="execution-section">
+          <button type="button" className="execution-collapse">
+            <CircleDot className="h-4 w-4" aria-hidden="true" />
+            {t('tasks.execution.timeline', locale)}
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <div className="task-timeline-list">
+            {visibleTimeline.length > 0 ? (
+              visibleTimeline.map((event) => (
+                <article key={event.eventId} className="task-timeline-row">
+                  <span>{event.eventType}</span>
+                  <div>
+                    <strong>{event.message}</strong>
+                    <small>{formatTaskStatus(event.stage, locale)} · {formatTaskTime(event.createdAt)}</small>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <div className="delivery-empty-state">{t('tasks.execution.noTimeline', locale)}</div>
+            )}
+          </div>
+        </section>
 
         <section className="execution-section">
           <button type="button" className="execution-collapse">
@@ -527,9 +617,13 @@ export function TaskOverviewPage() {
             <ChevronDown className="h-4 w-4" aria-hidden="true" />
           </button>
           <div className="command-run-list">
-            {commandRuns.map((run) => (
-              <CommandRunCard key={run.id} label={run.label} command={run.command} output={run.output} />
-            ))}
+            {visibleCommandRuns.length > 0 ? (
+              visibleCommandRuns.map((run) => (
+                <CommandRunCard key={run.runId} run={run} taskId={taskRecord?.id ?? selectedTaskId ?? ''} />
+              ))
+            ) : (
+              <div className="delivery-empty-state">{t('tasks.execution.noValidationRuns', locale)}</div>
+            )}
           </div>
         </section>
 
@@ -537,7 +631,7 @@ export function TaskOverviewPage() {
           <div className="code-change-heading">
             <div>
               <span>{t('tasks.execution.codeChanges', locale)}</span>
-              <strong>{formatDiffStat(visibleDiff.additions, visibleDiff.deletions)}</strong>
+              <strong>{formatDiffStat(visibleDiff?.additions ?? 0, visibleDiff?.deletions ?? 0)}</strong>
             </div>
             <Button type="button" size="sm" variant="secondary" onClick={handleGenerateDiff}>
               <RefreshCw className={cn('h-3.5 w-3.5', isDiffLoading && 'diff-spin')} aria-hidden="true" />
@@ -547,13 +641,13 @@ export function TaskOverviewPage() {
 
           <div className="diff-meta-strip">
             <span>
-              {t('tasks.execution.diffBase', locale)} <strong>{visibleDiff.baseRef}</strong>
+              {t('tasks.execution.diffBase', locale)} <strong>{visibleDiff?.baseRef ?? '-'}</strong>
             </span>
             <span>
-              {t('tasks.execution.diffFileCount', locale)} <strong>{visibleDiff.files.length}</strong>
+              {t('tasks.execution.diffFileCount', locale)} <strong>{visibleDiff?.files.length ?? 0}</strong>
             </span>
             <span>
-              {t('tasks.execution.diffArtifactPath', locale)} <strong>{visibleDiff.diffPath}</strong>
+              {t('tasks.execution.diffArtifactPath', locale)} <strong>{visibleDiff?.diffPath ?? '-'}</strong>
             </span>
           </div>
 
@@ -566,7 +660,7 @@ export function TaskOverviewPage() {
 
           <div className="diff-review-layout">
             <div className="diff-file-list" aria-label={t('tasks.execution.diffFileTree', locale)}>
-              {visibleDiff.files.length > 0 ? (
+              {visibleDiff && visibleDiff.files.length > 0 ? (
                 visibleDiff.files.map((file) => (
                   <button
                     type="button"
@@ -658,8 +752,8 @@ export function TaskOverviewPage() {
           <div className="delivery-heading">
             <div>
               <span>{t('tasks.execution.deliveryTitle', locale)}</span>
-              <strong className={cn('delivery-status-pill', `is-${visibleDelivery.report.overallStatus}`)}>
-                {t(`tasks.execution.deliveryStatus.${visibleDelivery.report.overallStatus}`, locale)}
+              <strong className={cn('delivery-status-pill', `is-${deliveryStatus}`)}>
+                {t(`tasks.execution.deliveryStatus.${deliveryStatus}`, locale)}
               </strong>
             </div>
             <Button type="button" size="sm" variant="secondary" onClick={handleGenerateDelivery}>
@@ -670,13 +764,13 @@ export function TaskOverviewPage() {
 
           <div className="delivery-meta-strip">
             <span>
-              {t('tasks.execution.reportFile', locale)} <strong>{visibleDelivery.reportPath}</strong>
+              {t('tasks.execution.reportFile', locale)} <strong>{visibleDelivery?.reportPath ?? '-'}</strong>
             </span>
             <span>
-              {t('tasks.execution.deliveryFile', locale)} <strong>{visibleDelivery.deliveryPath}</strong>
+              {t('tasks.execution.deliveryFile', locale)} <strong>{visibleDelivery?.deliveryPath ?? '-'}</strong>
             </span>
             <span>
-              {t('tasks.execution.deliveryArtifact', locale)} <strong>{visibleDelivery.artifactId}</strong>
+              {t('tasks.execution.deliveryArtifact', locale)} <strong>{visibleDelivery?.artifactId ?? '-'}</strong>
             </span>
           </div>
 
@@ -693,17 +787,32 @@ export function TaskOverviewPage() {
                 <FileText className="h-4 w-4" aria-hidden="true" />
                 <span>{t('tasks.execution.testReport', locale)}</span>
               </header>
-              <p>{visibleDelivery.report.summary}</p>
+              <p>{visibleDelivery?.report.summary ?? t('tasks.execution.deliveryEmpty', locale)}</p>
               <div className="test-report-stats">
-                <MetricPill label={t('tasks.execution.reportCommands', locale)} value={visibleDelivery.report.commandCount.toString()} />
-                <MetricPill label={t('tasks.execution.reportPassed', locale)} value={visibleDelivery.report.passedCount.toString()} />
-                <MetricPill label={t('tasks.execution.reportFailed', locale)} value={visibleDelivery.report.failedCount.toString()} />
+                <MetricPill label={t('tasks.execution.reportCommands', locale)} value={(visibleDelivery?.report.commandCount ?? 0).toString()} />
+                <MetricPill label={t('tasks.execution.reportPassed', locale)} value={(visibleDelivery?.report.passedCount ?? 0).toString()} />
+                <MetricPill label={t('tasks.execution.reportFailed', locale)} value={(visibleDelivery?.report.failedCount ?? 0).toString()} />
               </div>
               <div className="validation-run-table" aria-label={t('tasks.execution.validationRuns', locale)}>
-                {visibleDelivery.report.runs.length > 0 ? (
-                  visibleDelivery.report.runs.map((run) => <ValidationRunRow key={run.runId} run={run} />)
+                {visibleCommandRuns.length > 0 ? (
+                  visibleCommandRuns.map((run) => <ValidationRunRow key={run.runId} run={run} />)
                 ) : (
                   <div className="delivery-empty-state">{t('tasks.execution.noValidationRuns', locale)}</div>
+                )}
+              </div>
+              <div className="validation-round-list" aria-label={t('tasks.execution.validationRounds', locale)}>
+                {visibleValidationRounds.length > 0 ? (
+                  visibleValidationRounds.map((round) => (
+                    <article key={round.id} className="validation-round-row">
+                      <strong>
+                        {t('tasks.execution.validationRound', locale)} {round.roundIndex} · {round.status}
+                      </strong>
+                      <span>{round.analysis || round.validationSummary}</span>
+                      <small>{round.repairSummary || '-'}</small>
+                    </article>
+                  ))
+                ) : (
+                  <div className="delivery-empty-state">{t('tasks.execution.noValidationRounds', locale)}</div>
                 )}
               </div>
             </article>
@@ -714,11 +823,11 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.execution.agentDelivery', locale)}</span>
               </header>
               <pre className="delivery-summary-block">
-                <code>{visibleDelivery.summary}</code>
+                <code>{visibleDelivery?.summary ?? t('tasks.execution.deliveryEmpty', locale)}</code>
               </pre>
               <div className="commit-message-box">
                 <span>{t('tasks.execution.commitMessage', locale)}</span>
-                <code>{visibleDelivery.commitMessage}</code>
+                <code>{visibleDelivery?.commitMessage ?? '-'}</code>
               </div>
             </article>
           </div>
@@ -728,7 +837,7 @@ export function TaskOverviewPage() {
           <div className="s12-highlight-heading">
             <div>
               <span>{t('tasks.s12.title', locale)}</span>
-              <p>{t(visibleProofPack.summaryKey, locale)}</p>
+              <p>{visibleProofPack ? t(visibleProofPack.summaryKey, locale) : t('tasks.s12.empty', locale)}</p>
             </div>
             <Button type="button" size="sm" variant="secondary" onClick={handleGenerateProofPack}>
               <PackageCheck className={cn('h-3.5 w-3.5', isProofPackLoading && 'diff-spin')} aria-hidden="true" />
@@ -749,8 +858,8 @@ export function TaskOverviewPage() {
                 <PackageCheck className="h-4 w-4" aria-hidden="true" />
                 <span>{t('tasks.s12.proofPack.title', locale)}</span>
               </header>
-              <code>{visibleProofPack.proofPackPath}</code>
-              <small>{visibleProofPack.artifactId}</small>
+              <code>{visibleProofPack?.proofPackPath ?? '-'}</code>
+              <small>{visibleProofPack?.artifactId ?? t('tasks.s12.empty', locale)}</small>
             </article>
 
             <article className="s12-delivery-score">
@@ -758,11 +867,17 @@ export function TaskOverviewPage() {
                 <Gauge className="h-4 w-4" aria-hidden="true" />
                 <span>{t('tasks.s12.deliveryScore.title', locale)}</span>
               </header>
-              <strong>
-                {visibleProofPack.deliveryScore.value}
-                <small>{visibleProofPack.deliveryScore.grade}</small>
-              </strong>
-              <p>{t(visibleProofPack.deliveryScore.summaryKey, locale)}</p>
+              {visibleProofPack ? (
+                <>
+                  <strong>
+                    {visibleProofPack.deliveryScore.value}
+                    <small>{visibleProofPack.deliveryScore.grade}</small>
+                  </strong>
+                  <p>{t(visibleProofPack.deliveryScore.summaryKey, locale)}</p>
+                </>
+              ) : (
+                <p>{t('tasks.s12.empty', locale)}</p>
+              )}
             </article>
 
             <article className="s12-quality-gate">
@@ -771,12 +886,12 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.qualityGate.title', locale)}</span>
               </header>
               <div className="s12-check-list">
-                {visibleProofPack.qualityGates.map((gate) => (
+                {visibleProofPack ? visibleProofPack.qualityGates.map((gate) => (
                   <span key={gate.id} className={cn('s12-status-pill', `is-${gate.status}`)}>
                     {t(gate.titleKey, locale)}
                     <em>{t(`tasks.s12.status.${gate.status}`, locale)}</em>
                   </span>
-                ))}
+                )) : <span>{t('tasks.s12.empty', locale)}</span>}
               </div>
             </article>
 
@@ -786,12 +901,12 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.riskRadar.title', locale)}</span>
               </header>
               <div className="s12-risk-list">
-                {visibleProofPack.risks.map((risk) => (
+                {visibleProofPack ? visibleProofPack.risks.map((risk) => (
                   <span key={risk.id} className={cn('s12-risk-pill', `risk-${risk.level}`)}>
                     {t(risk.titleKey, locale)}
                     <em>{t(`approvals.risk.${risk.level}`, locale)}</em>
                   </span>
-                ))}
+                )) : <span>{t('tasks.s12.empty', locale)}</span>}
               </div>
             </article>
           </div>
@@ -803,7 +918,7 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.proposals.title', locale)}</span>
               </header>
               <div>
-                {visibleProofPack.proposals.map((proposal) => (
+                {visibleProofPack ? visibleProofPack.proposals.map((proposal) => (
                   <section key={proposal.id}>
                     <strong>{t(proposal.titleKey, locale)}</strong>
                     <p>{t(proposal.summaryKey, locale)}</p>
@@ -811,7 +926,7 @@ export function TaskOverviewPage() {
                       {t(`tasks.s12.status.${proposal.status}`, locale)} / {proposal.confidence}%
                     </small>
                   </section>
-                ))}
+                )) : <section>{t('tasks.s12.empty', locale)}</section>}
               </div>
             </article>
 
@@ -821,7 +936,7 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.screenshots.title', locale)}</span>
               </header>
               <div>
-                {visibleProofPack.screenshots.map((screenshot) => (
+                {visibleProofPack ? visibleProofPack.screenshots.map((screenshot) => (
                   <section key={screenshot.id}>
                     <strong>{t(screenshot.titleKey, locale)}</strong>
                     <code>{screenshot.path}</code>
@@ -829,7 +944,7 @@ export function TaskOverviewPage() {
                       {screenshot.capturedAt} / {t(`tasks.s12.status.${screenshot.status}`, locale)}
                     </small>
                   </section>
-                ))}
+                )) : <section>{t('tasks.s12.empty', locale)}</section>}
               </div>
             </article>
           </div>
@@ -839,8 +954,8 @@ export function TaskOverviewPage() {
           <div className="merge-heading">
             <div>
               <span>{t('tasks.execution.mergeTitle', locale)}</span>
-              <strong className={cn('merge-status-pill', visibleMerge.canMerge ? 'is-ready' : 'is-blocked')}>
-                {visibleMerge.canMerge
+              <strong className={cn('merge-status-pill', visibleMerge?.canMerge ? 'is-ready' : 'is-blocked')}>
+                {visibleMerge?.canMerge
                   ? t('tasks.execution.mergeReady', locale)
                   : t('tasks.execution.mergeBlockedStatus', locale)}
               </strong>
@@ -864,17 +979,17 @@ export function TaskOverviewPage() {
 
           <div className="merge-meta-strip">
             <span>
-              {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge.targetBranch}</strong>
+              {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge?.targetBranch ?? '-'}</strong>
             </span>
             <span>
-              {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge.sourceBranch}</strong>
+              {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge?.sourceBranch ?? '-'}</strong>
             </span>
             <span>
-              {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge.additions, visibleMerge.deletions)}</strong>
+              {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge?.additions ?? 0, visibleMerge?.deletions ?? 0)}</strong>
             </span>
             <span>
               {t('tasks.execution.mergeValidation', locale)}{' '}
-              <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge.validationStatus}`, locale)}</strong>
+              <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge?.validationStatus ?? 'notRun'}`, locale)}</strong>
             </span>
           </div>
 
@@ -917,7 +1032,7 @@ export function TaskOverviewPage() {
             </div>
           ) : null}
 
-          {visibleMerge.blockers.length > 0 ? (
+          {visibleMerge?.blockers.length ? (
             <div className="merge-blocker-list">
               {visibleMerge.blockers.map((blocker) => (
                 <span key={blocker}>
@@ -931,29 +1046,29 @@ export function TaskOverviewPage() {
           <div className="merge-check-grid">
             <MergeCheckItem
               label={t('tasks.execution.mergeTargetClean', locale)}
-              value={visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)}
-              good={!visibleMerge.targetDirty}
+              value={visibleMerge ? (visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)) : '-'}
+              good={visibleMerge ? !visibleMerge.targetDirty : false}
             />
             <MergeCheckItem
               label={t('tasks.execution.mergeWorktreeChanges', locale)}
-              value={visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)}
-              good={visibleMerge.worktreeDirty}
+              value={visibleMerge ? (visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)) : '-'}
+              good={visibleMerge ? visibleMerge.worktreeDirty : false}
             />
             <MergeCheckItem
               label={t('tasks.execution.mergeEvidence', locale)}
-              value={`${visibleMerge.diffFileCount} ${t('tasks.execution.mergeFiles', locale)}`}
-              good={visibleMerge.diffFileCount > 0}
+              value={`${visibleMerge?.diffFileCount ?? 0} ${t('tasks.execution.mergeFiles', locale)}`}
+              good={(visibleMerge?.diffFileCount ?? 0) > 0}
             />
             <MergeCheckItem
               label={t('tasks.execution.mergeValidationSummary', locale)}
-              value={formatMergeValidationSummary(visibleMerge, locale)}
-              good={visibleMerge.validationStatus === 'passed'}
+              value={visibleMerge ? formatMergeValidationSummary(visibleMerge, locale) : t('tasks.execution.mergePrecheckRequired', locale)}
+              good={visibleMerge?.validationStatus === 'passed'}
             />
           </div>
 
           <div className="merge-commit-preview">
             <span>{t('tasks.execution.mergeCommitMessage', locale)}</span>
-            <code>{visibleMerge.commitMessage}</code>
+            <code>{visibleMerge?.commitMessage ?? '-'}</code>
           </div>
 
           <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
@@ -964,38 +1079,38 @@ export function TaskOverviewPage() {
               </DialogHeader>
               <div className="merge-confirm-summary">
                 <span>
-                  {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge.targetBranch}</strong>
+                  {t('tasks.execution.mergeTarget', locale)} <strong>{visibleMerge?.targetBranch ?? '-'}</strong>
                 </span>
                 <span>
-                  {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge.sourceBranch}</strong>
+                  {t('tasks.execution.mergeSource', locale)} <strong>{visibleMerge?.sourceBranch ?? '-'}</strong>
                 </span>
                 <span>
-                  {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge.additions, visibleMerge.deletions)}</strong>
+                  {t('tasks.execution.mergeDiff', locale)} <strong>{formatDiffStat(visibleMerge?.additions ?? 0, visibleMerge?.deletions ?? 0)}</strong>
                 </span>
                 <span>
                   {t('tasks.execution.mergeTargetClean', locale)}{' '}
-                  <strong>{visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)}</strong>
+                  <strong>{visibleMerge ? (visibleMerge.targetDirty ? t('tasks.execution.mergeDirty', locale) : t('tasks.execution.mergeClean', locale)) : '-'}</strong>
                 </span>
                 <span>
                   {t('tasks.execution.mergeValidation', locale)}{' '}
-                  <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge.validationStatus}`, locale)}</strong>
+                  <strong>{t(`tasks.execution.deliveryStatus.${visibleMerge?.validationStatus ?? 'notRun'}`, locale)}</strong>
                 </span>
               </div>
               <div className="merge-confirm-check-grid">
                 <MergeCheckItem
                   label={t('tasks.execution.mergeWorktreeChanges', locale)}
-                  value={visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)}
-                  good={visibleMerge.worktreeDirty}
+                  value={visibleMerge ? (visibleMerge.worktreeDirty ? t('tasks.execution.mergeHasChanges', locale) : t('tasks.execution.mergeNoChanges', locale)) : '-'}
+                  good={visibleMerge ? visibleMerge.worktreeDirty : false}
                 />
                 <MergeCheckItem
                   label={t('tasks.execution.mergeEvidence', locale)}
-                  value={`${visibleMerge.diffFileCount} ${t('tasks.execution.mergeFiles', locale)}`}
-                  good={visibleMerge.diffFileCount > 0}
+                  value={`${visibleMerge?.diffFileCount ?? 0} ${t('tasks.execution.mergeFiles', locale)}`}
+                  good={(visibleMerge?.diffFileCount ?? 0) > 0}
                 />
                 <MergeCheckItem
                   label={t('tasks.execution.mergeValidationSummary', locale)}
-                  value={formatMergeValidationSummary(visibleMerge, locale)}
-                  good={visibleMerge.validationStatus === 'passed'}
+                  value={visibleMerge ? formatMergeValidationSummary(visibleMerge, locale) : t('tasks.execution.mergePrecheckRequired', locale)}
+                  good={visibleMerge?.validationStatus === 'passed'}
                 />
               </div>
               <label className="merge-message-field">
@@ -1029,15 +1144,15 @@ export function TaskOverviewPage() {
             </button>
           </header>
           <div className="environment-list">
-            <EnvironmentRow icon={Code2} labelKey="tasks.environment.changes" value={formatDiffStat(visibleDiff.additions, visibleDiff.deletions)} accent />
+            <EnvironmentRow icon={Code2} labelKey="tasks.environment.changes" value={formatDiffStat(visibleDiff?.additions ?? 0, visibleDiff?.deletions ?? 0)} accent />
             <EnvironmentRow icon={Laptop} labelKey="tasks.environment.local" value={t('tasks.environment.localMode', locale)} />
-            <EnvironmentRow icon={GitBranch} labelKey="tasks.environment.branch" value={visibleDiff.branchName} />
+            <EnvironmentRow icon={GitBranch} labelKey="tasks.environment.branch" value={visibleDiff?.branchName ?? taskRecord?.branchName ?? '-'} />
             <EnvironmentRow icon={CircleDot} labelKey="tasks.environment.commit" value={t('tasks.environment.commitValue', locale)} />
             <EnvironmentRow icon={Github} labelKey="tasks.environment.github" value={t('tasks.environment.githubValue', locale)} muted />
           </div>
           <div className="environment-source">
             <strong>{t('tasks.environment.sources', locale)}</strong>
-            <span>{generatedDiff ? visibleDiff.diffPath : t('tasks.execution.diffDemoSource', locale)}</span>
+            <span>{visibleDiff?.diffPath ?? taskRecord?.worktreePath ?? taskRecord?.repositoryPath ?? t('tasks.execution.diffNoSource', locale)}</span>
           </div>
         </div>
       </aside>
@@ -1098,25 +1213,162 @@ function ValidationRunRow({ run }: { run: TaskValidationRunSummary }) {
   );
 }
 
-function CommandRunCard({ label, command, output }: { label: string; command: string; output: string }) {
+function CommandRunCard({ run, taskId }: { run: CommandRunLike; taskId: string }) {
   const locale = useAppStore((state) => state.locale);
+  const statusKey = `tasks.execution.commandStatus.${run.status}`;
+  const [expanded, setExpanded] = useState(false);
+  const [stdout, setStdout] = useState<CommandLogPage | null>(null);
+  const [stderr, setStderr] = useState<CommandLogPage | null>(null);
+  const [loadingStream, setLoadingStream] = useState<CommandOutputStream | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
+
+  async function loadLogPage(stream: CommandOutputStream, append = false) {
+    if (!taskId) {
+      setLogError(t('tasks.execution.commandLogNoTask', locale));
+      return;
+    }
+
+    const current = stream === 'stdout' ? stdout : stderr;
+    const offsetBytes = append ? current?.nextOffsetBytes ?? 0 : 0;
+
+    setLoadingStream(stream);
+    setLogError(null);
+    try {
+      const page = await readTaskCommandLog({
+        taskId,
+        runId: run.runId,
+        stream,
+        offsetBytes,
+        maxBytes: commandLogPageBytes,
+      });
+      const nextPage =
+        append && current
+          ? {
+              ...page,
+              content: `${current.content}${page.content}`,
+              offsetBytes: current.offsetBytes,
+            }
+          : page;
+      if (stream === 'stdout') {
+        setStdout(nextPage);
+      } else {
+        setStderr(nextPage);
+      }
+    } catch (error) {
+      setLogError(normalizeDiffError(error));
+    } finally {
+      setLoadingStream(null);
+    }
+  }
+
+  async function toggleExpanded() {
+    const nextExpanded = !expanded;
+    setExpanded(nextExpanded);
+    if (nextExpanded && !stdout && !stderr) {
+      await Promise.all([loadLogPage('stdout'), loadLogPage('stderr')]);
+    }
+  }
 
   return (
     <article className="command-run-card">
-      <button type="button" className="command-run-summary">
+      <button type="button" className="command-run-summary" onClick={toggleExpanded}>
         <Command className="h-4 w-4" aria-hidden="true" />
-        {t('tasks.execution.ran', locale)} {label}
+        {t('tasks.execution.ran', locale)} {run.command}
         <ChevronDown className="h-4 w-4" aria-hidden="true" />
       </button>
       <pre className="command-output-block">
-        <code>{`$ ${command}\n\n${output}`}</code>
+        <code>{`$ ${run.command}\n${run.cwd}\n${t(statusKey, locale)} · ${run.exitCode ?? '-'} · ${commandRunPurposeLabel(run, locale)}`}</code>
       </pre>
+      {expanded ? (
+        <div className="command-log-streams">
+          <CommandLogStream
+            stream="stdout"
+            page={stdout}
+            path={commandRunLogPath(run, 'stdout')}
+            loading={loadingStream === 'stdout'}
+            onLoadMore={() => loadLogPage('stdout', true)}
+          />
+          <CommandLogStream
+            stream="stderr"
+            page={stderr}
+            path={commandRunLogPath(run, 'stderr')}
+            loading={loadingStream === 'stderr'}
+            onLoadMore={() => loadLogPage('stderr', true)}
+          />
+          {logError ? (
+            <div className="diff-error-banner" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{logError}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="command-success">
         <Check className="h-4 w-4" aria-hidden="true" />
-        {t('tasks.execution.success', locale)}
+        {t(statusKey, locale)}
       </div>
     </article>
   );
+}
+
+function CommandLogStream({
+  stream,
+  page,
+  path,
+  loading,
+  onLoadMore,
+}: {
+  stream: CommandOutputStream;
+  page: CommandLogPage | null;
+  path?: string | null;
+  loading: boolean;
+  onLoadMore: () => void;
+}) {
+  const locale = useAppStore((state) => state.locale);
+  const titleKey =
+    stream === 'stdout' ? 'tasks.execution.commandStdout' : 'tasks.execution.commandStderr';
+
+  return (
+    <section className="command-log-stream">
+      <header>
+        <strong>{t(titleKey, locale)}</strong>
+        <span>
+          {t('tasks.execution.commandLogPath', locale)} <code>{path || '-'}</code>
+        </span>
+      </header>
+      <pre>
+        <code>{page?.content || t('tasks.execution.commandLogEmpty', locale)}</code>
+      </pre>
+      <footer>
+        <span>
+          {page?.compressed ? t('tasks.execution.commandLogCompressed', locale) : t('tasks.execution.commandLogPlain', locale)}
+          {' · '}
+          {page?.eof ? t('tasks.execution.commandLogEof', locale) : t('tasks.execution.commandLogMore', locale)}
+        </span>
+        {page && !page.eof ? (
+          <Button type="button" size="sm" variant="ghost" onClick={onLoadMore} disabled={loading}>
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'diff-spin')} aria-hidden="true" />
+            {loading ? t('tasks.execution.commandLogLoading', locale) : t('tasks.execution.commandLogLoadMore', locale)}
+          </Button>
+        ) : null}
+      </footer>
+    </section>
+  );
+}
+
+function commandRunPurposeLabel(run: CommandRunLike, locale: Locale) {
+  const purpose = 'purpose' in run ? run.purpose : 'validation';
+  const key = `tasks.execution.commandPurpose.${purpose ?? 'validation'}`;
+  const label = t(key, locale);
+  return label === key ? purpose ?? 'validation' : label;
+}
+
+function commandRunLogPath(run: CommandRunLike, stream: CommandOutputStream) {
+  if (!('stdoutPath' in run)) {
+    return null;
+  }
+
+  return stream === 'stdout' ? run.stdoutPath : run.stderrPath;
 }
 
 function EnvironmentRow({
@@ -1155,6 +1407,32 @@ function formatDuration(durationMs?: number | null) {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+function formatRepairRound(repairRound?: number | null, maxRepairRounds?: number | null) {
+  if (repairRound === null || repairRound === undefined) {
+    return '-';
+  }
+
+  if (maxRepairRounds === null || maxRepairRounds === undefined) {
+    return repairRound.toString();
+  }
+
+  return `${repairRound}/${maxRepairRounds}`;
+}
+
+function formatValidationRequest(
+  request?: { command: string; cwd: string; reason?: string; status?: string } | null,
+) {
+  if (!request) {
+    return '-';
+  }
+
+  return `${request.command} · ${request.cwd}`;
+}
+
+function formatTaskTime(value: string) {
+  return value.replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '');
+}
+
 function normalizeDiffError(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'title' in error) {
     return String((error as { title: unknown }).title);
@@ -1167,31 +1445,10 @@ function normalizeDiffError(error: unknown): string {
   return String(error);
 }
 
-function buildPreparedMergePreview(
-  diff: GeneratedTaskDiff,
-  delivery: GeneratedTaskDelivery,
-): PreparedTaskMerge {
-  return {
-    taskId: diff.taskId,
-    targetBranch: diff.baseRef,
-    sourceBranch: diff.branchName,
-    worktreePath: diff.worktreePath,
-    targetDirty: false,
-    worktreeDirty: diff.files.length > 0,
-    validationStatus: delivery.report.overallStatus,
-    validationRunCount: delivery.report.commandCount,
-    validationSummary: delivery.report.summary,
-    diffFileCount: diff.files.length,
-    additions: diff.additions,
-    deletions: diff.deletions,
-    diffPath: diff.diffPath,
-    commitMessage: delivery.commitMessage,
-    blockers:
-      delivery.report.overallStatus === 'passed' && diff.files.length > 0
-        ? []
-        : ['validation has not passed'],
-    canMerge: delivery.report.overallStatus === 'passed' && diff.files.length > 0,
-  };
+function formatTaskStatus(status: string, locale: Locale) {
+  const statusKey = `status.${status}`;
+  const label = t(statusKey, locale);
+  return label === statusKey ? status : label;
 }
 
 function formatMergeBlocker(blocker: string, locale: Locale) {

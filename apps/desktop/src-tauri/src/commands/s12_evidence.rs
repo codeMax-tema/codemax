@@ -593,7 +593,10 @@ fn validation_status_for_commands(storage: &ManagedStorage, task_id: &str) -> Ap
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let runs = CommandRunRepository::new(store.connection())
         .list_for_task(task_id)
-        .map_err(storage_error)?;
+        .map_err(storage_error)?
+        .into_iter()
+        .filter(|run| run.purpose == "validation")
+        .collect::<Vec<_>>();
     if runs.is_empty() {
         return Ok("notRun".to_string());
     }
@@ -1070,6 +1073,7 @@ mod tests {
             .record(NewCommandRun {
                 id: "run-s12-proof",
                 task_id: "task-s12-proof",
+                purpose: "validation",
                 command: "npm run check",
                 cwd: "D:/codemax",
                 status: "passed",

@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::State;
+use uuid::Uuid;
 
 use crate::{
     core::error::{AppResult, CommandError},
-    storage::{ApprovalRecord, ApprovalRepository, ManagedStorage, StorageError, TaskRepository},
+    storage::{
+        AgentEventRepository, ApprovalRecord, ApprovalRepository, ManagedStorage, NewAgentEvent,
+        StorageError, TaskRepository,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +102,22 @@ pub fn decide_approval(
             .update_status(&decided.task_id, "needsIntervention", None)
             .map_err(storage_error)?;
     }
+    record_agent_event_with_connection(
+        connection,
+        &decided.task_id,
+        "approval.resolved",
+        if decision == "approved" {
+            "editing"
+        } else {
+            "needsIntervention"
+        },
+        "Approval decision was recorded.",
+        json!({
+            "approval_id": &decided.id,
+            "decision": decision,
+            "comment": &decided.comment,
+        }),
+    )?;
 
     Ok(ApprovalResponse::from(decided))
 }
@@ -156,6 +177,34 @@ fn storage_error(error: StorageError) -> CommandError {
             format!("Filesystem error: {error}"),
         ),
     }
+}
+
+fn record_agent_event_with_connection(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let event_id = format!("event-{}", Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(|error| {
+        CommandError::new(
+            "event.invalidPayload",
+            format!("Unable to encode event payload: {error}"),
+        )
+    })?;
+    AgentEventRepository::new(connection)
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 #[cfg(test)]

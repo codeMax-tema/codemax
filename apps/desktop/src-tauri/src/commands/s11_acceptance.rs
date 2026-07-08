@@ -282,6 +282,7 @@ async fn run_validation(
         .record(NewCommandRun {
             id: &result.run_id,
             task_id: &result.task_id,
+            purpose: "validation",
             command: &result.command,
             cwd: &result.cwd,
             status: &result.status,

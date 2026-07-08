@@ -6,15 +6,16 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
 
 use crate::{
     core::error::{AppResult, CommandError},
     storage::{
-        ArtifactRecord, ArtifactRepository, CommandRunRecord, CommandRunRepository, ManagedStorage,
-        NewArtifact, NewArtifactFile, StorageError, TaskRecord, TaskRepository,
+        AgentEventRepository, ArtifactRecord, ArtifactRepository, CommandRunRecord,
+        CommandRunRepository, ManagedStorage, NewAgentEvent, NewArtifact, NewArtifactFile,
+        StorageError, TaskRecord, TaskRepository,
     },
 };
 
@@ -60,6 +61,7 @@ pub struct TaskDeliveryReport {
 #[serde(rename_all = "camelCase")]
 pub struct TaskValidationRunSummary {
     pub run_id: String,
+    pub purpose: String,
     pub command: String,
     pub cwd: String,
     pub status: String,
@@ -155,6 +157,7 @@ pub(crate) fn generate_task_delivery_inner(
         &delivery_path,
         &summary,
         &commit_message,
+        &report.overall_status,
     )?;
 
     Ok(GeneratedTaskDelivery {
@@ -222,7 +225,10 @@ fn changed_files_from_artifacts(artifact: Option<&ArtifactRecord>) -> Vec<String
 fn latest_validation_runs(runs: Vec<CommandRunRecord>) -> Vec<CommandRunRecord> {
     let mut latest: Vec<CommandRunRecord> = Vec::new();
 
-    for run in runs {
+    for run in runs
+        .into_iter()
+        .filter(|run| run.purpose == "validation")
+    {
         let command = run.command.clone();
         let cwd = run.cwd.clone();
         if let Some(index) = latest
@@ -241,6 +247,7 @@ fn latest_validation_runs(runs: Vec<CommandRunRecord>) -> Vec<CommandRunRecord> 
 fn validation_run_summary(run: CommandRunRecord) -> TaskValidationRunSummary {
     TaskValidationRunSummary {
         run_id: run.id,
+        purpose: run.purpose,
         command: run.command,
         cwd: run.cwd,
         status: run.status,
@@ -381,6 +388,7 @@ fn record_delivery_artifact(
     delivery_path: &str,
     summary: &str,
     commit_message: &str,
+    overall_status: &str,
 ) -> AppResult<()> {
     let changed_files = serde_json::to_string(changed_files).map_err(json_error)?;
     let report_size = file_size(Path::new(report_path)).map_err(storage_error)?;
@@ -428,6 +436,34 @@ fn record_delivery_artifact(
             expires_at: None,
         })
         .map_err(storage_error)?;
+    TaskRepository::new(store.connection())
+        .update_status(
+            task_id,
+            if overall_status == "passed" {
+                "readyToMerge"
+            } else {
+                "awaitingReview"
+            },
+            None,
+        )
+        .map_err(storage_error)?;
+    record_agent_event_with_connection(
+        store.connection(),
+        task_id,
+        "delivery.ready",
+        if overall_status == "passed" {
+            "readyToMerge"
+        } else {
+            "awaitingReview"
+        },
+        "Delivery report was generated from task evidence.",
+        json!({
+            "artifact_id": artifact_id,
+            "report_path": report_path,
+            "delivery_path": delivery_path,
+            "overall_status": overall_status,
+        }),
+    )?;
 
     Ok(())
 }
@@ -477,4 +513,27 @@ fn json_error(error: serde_json::Error) -> CommandError {
         "delivery.invalidJson",
         format!("Unable to encode delivery report: {error}"),
     )
+}
+
+fn record_agent_event_with_connection(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let event_id = format!("event-{}", Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(json_error)?;
+    AgentEventRepository::new(connection)
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
 }

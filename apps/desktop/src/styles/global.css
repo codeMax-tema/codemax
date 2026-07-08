@@ -1074,6 +1074,32 @@ button:disabled {
   overflow: auto;
 }
 
+.codex-task-filter {
+  display: grid;
+  gap: 5px;
+  padding: 2px 0 6px;
+  color: #71717a;
+  font-size: 11px;
+}
+
+.codex-task-filter select {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #27272a;
+  border-radius: 7px;
+  background: #0f0f11;
+  color: #d4d4d8;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.codex-thread-empty {
+  padding: 8px;
+  color: #71717a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .codex-thread-item {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -1774,6 +1800,116 @@ button:disabled {
   z-index: 1;
 }
 
+.agent-cycle-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  padding: 12px;
+}
+
+.agent-cycle-heading,
+.command-log-stream header,
+.command-log-stream footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-cycle-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.agent-cycle-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agent-cycle-grid > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px;
+}
+
+.agent-cycle-grid small {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.agent-cycle-grid strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-validation-request {
+  display: grid;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.agent-validation-request code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.command-log-streams {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.command-log-stream {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  padding: 10px;
+}
+
+.command-log-stream header {
+  font-size: 12px;
+}
+
+.command-log-stream header span,
+.command-log-stream footer {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.command-log-stream code {
+  overflow-wrap: anywhere;
+}
+
+.command-log-stream pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 8px;
+  background: #f1f2f4;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .code-change-panel {
   margin-top: 18px;
   border: 1px solid #e4e4e7;
@@ -2299,6 +2435,89 @@ button:disabled {
   padding: 14px 12px;
   color: #73737c;
   font-size: 13px;
+}
+
+.task-truth-list,
+.task-timeline-list,
+.validation-round-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-truth-row,
+.task-timeline-row,
+.validation-round-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #eeeeef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.task-truth-row {
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+}
+
+.task-timeline-row {
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+
+.validation-round-row {
+  align-items: start;
+}
+
+.task-truth-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #a1a1aa;
+}
+
+.task-truth-dot.status-completed {
+  background: #12b76a;
+}
+
+.task-truth-dot.status-in_progress {
+  background: #2e90fa;
+}
+
+.task-truth-dot.status-failed {
+  background: #f04438;
+}
+
+.task-truth-row strong,
+.task-timeline-row strong,
+.validation-round-row strong {
+  display: block;
+  overflow: hidden;
+  color: #20242b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-truth-row small,
+.task-timeline-row small,
+.validation-round-row small,
+.validation-round-row span {
+  display: block;
+  margin-top: 3px;
+  color: #73737c;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-truth-row em,
+.task-timeline-row > span {
+  border-radius: 999px;
+  background: #f4f4f5;
+  color: #52525b;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
 }
 
 .merge-panel {
@@ -3087,6 +3306,13 @@ button:disabled {
   gap: 2px;
   margin: 0;
   padding: 0;
+}
+
+.codex-thread-empty {
+  padding: 8px 10px;
+  color: #85858d;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .codex-thread-item span,

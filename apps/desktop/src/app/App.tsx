@@ -16,7 +16,9 @@ import {
   SquarePen,
   X,
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
+import { listTasks } from '@/api/tauriClient';
 import { ApprovalsPage } from '@/features/approvals/ApprovalsPage';
 import { RepositoryPage } from '@/features/repositories/RepositoryPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -25,6 +27,7 @@ import { TaskOverviewPage } from '@/features/tasks/TaskOverviewPage';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { AppRouteId, useAppStore } from '@/state/appStore';
+import type { TaskStatus, TaskSummary } from '@/types/domain';
 
 const navItems: Array<{
   id: AppRouteId;
@@ -37,31 +40,79 @@ const navItems: Array<{
   { id: 'settings', icon: Settings, labelKey: 'nav.settings' },
 ];
 
-const projectThreads = [
-  { title: '清理D盘空间', age: '3 天' },
-  { title: '整理D盘工具分类', age: '2 周' },
-  { title: '制定纯前端桌面APP方案', age: '3 周' },
-  { title: '制作 Codex 桌面宠物', age: '3 周' },
-  { title: '新对话', age: '3 周' },
-];
-
-const projectRoots = ['codemax', 'LYC', 'C:', '面试题', 'Blog'];
-
-const conversations = [
-  { title: '你好', age: '23 小时' },
-  { title: '个人博客网站需要后端吗', age: '1 周' },
-  { title: '分析自我介绍不足', age: '2 周' },
+const taskStatusFilters: Array<{ id: 'all' | TaskStatus; labelKey: string }> = [
+  { id: 'all', labelKey: 'tasks.list.filterAll' },
+  { id: 'queued', labelKey: 'status.queued' },
+  { id: 'planning', labelKey: 'status.planning' },
+  { id: 'editing', labelKey: 'status.editing' },
+  { id: 'validating', labelKey: 'status.validating' },
+  { id: 'repairing', labelKey: 'status.repairing' },
+  { id: 'awaitingApproval', labelKey: 'status.awaitingApproval' },
+  { id: 'awaitingReview', labelKey: 'status.awaitingReview' },
+  { id: 'readyToMerge', labelKey: 'status.readyToMerge' },
+  { id: 'needsIntervention', labelKey: 'status.needsIntervention' },
+  { id: 'merged', labelKey: 'status.merged' },
+  { id: 'failed', labelKey: 'status.failed' },
+  { id: 'cancelled', labelKey: 'status.cancelled' },
 ];
 
 export function App() {
   const locale = useAppStore((state) => state.locale);
   const currentRoute = useAppStore((state) => state.currentRoute);
   const currentRepository = useAppStore((state) => state.currentRepository);
+  const selectedTaskId = useAppStore((state) => state.selectedTaskId);
   const setCurrentRoute = useAppStore((state) => state.setCurrentRoute);
+  const setSelectedTaskId = useAppStore((state) => state.setSelectedTaskId);
   const setNewTaskDialogOpen = useAppStore((state) => state.setNewTaskDialogOpen);
+  const newTaskDialogOpen = useAppStore((state) => state.newTaskDialogOpen);
   const theme = useAppStore((state) => state.theme);
   const compactMode = useAppStore((state) => state.compactMode);
   const highContrastMode = useAppStore((state) => state.highContrastMode);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | TaskStatus>('all');
+  const [taskListError, setTaskListError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTasks() {
+      try {
+        const taskList = await listTasks({
+          repositoryPath: currentRepository?.path ?? null,
+          status: taskStatusFilter === 'all' ? null : taskStatusFilter,
+          limit: 50,
+        });
+        if (cancelled) {
+          return;
+        }
+
+        setTasks(taskList);
+        setTaskListError(null);
+
+        if (taskList.length === 0) {
+          if (selectedTaskId) {
+            setSelectedTaskId(null);
+          }
+          return;
+        }
+
+        if (!selectedTaskId || !taskList.some((task) => task.id === selectedTaskId)) {
+          setSelectedTaskId(taskList[0].id);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTasks([]);
+          setTaskListError(normalizeTaskListError(error));
+        }
+      }
+    }
+
+    void loadTasks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRepository?.path, newTaskDialogOpen, selectedTaskId, setSelectedTaskId, taskStatusFilter]);
 
   return (
     <main
@@ -129,21 +180,43 @@ export function App() {
             <p className="codex-section-label">{t('sidebar.projects', locale)}</p>
             <button type="button" className="codex-project-root">
               <HardDrive className="h-4 w-4" aria-hidden="true" />
-              <span>D:</span>
+              <span>{currentRepository?.name ?? t('repository.emptyShort', locale)}</span>
             </button>
+            <label className="codex-task-filter">
+              <span>{t('tasks.list.statusFilter', locale)}</span>
+              <select
+                value={taskStatusFilter}
+                onChange={(event) => setTaskStatusFilter(event.target.value as 'all' | TaskStatus)}
+              >
+                {taskStatusFilters.map((filter) => (
+                  <option key={filter.id} value={filter.id}>
+                    {t(filter.labelKey, locale)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="codex-thread-list" aria-label={t('tasks.list.title', locale)}>
-              {projectThreads.map((thread, index) => (
-                <button
-                  key={thread.title}
-                  type="button"
-                  className={cn('codex-thread-item', index === 0 && 'active')}
-                  onClick={() => setCurrentRoute('tasks')}
-                >
-                  <MessageSquareText className="h-4 w-4" aria-hidden="true" />
-                  <span>{thread.title}</span>
-                  <time>{thread.age}</time>
-                </button>
-              ))}
+              {taskListError ? (
+                <div className="codex-thread-empty" role="alert">{taskListError}</div>
+              ) : tasks.length > 0 ? (
+                tasks.map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    className={cn('codex-thread-item', selectedTaskId === task.id && 'active')}
+                    onClick={() => {
+                      setSelectedTaskId(task.id);
+                      setCurrentRoute('tasks');
+                    }}
+                  >
+                    <MessageSquareText className="h-4 w-4" aria-hidden="true" />
+                    <span>{task.title}</span>
+                    <time>{formatTaskTime(task.updatedAt)}</time>
+                  </button>
+                ))
+              ) : (
+                <div className="codex-thread-empty">{t('tasks.list.empty', locale)}</div>
+              )}
             </div>
             <button type="button" className="codex-sidebar-link">
               {t('sidebar.showMore', locale)}
@@ -151,23 +224,17 @@ export function App() {
           </section>
 
           <section className="codex-sidebar-section codex-project-roots">
-            {projectRoots.map((project) => (
-              <button key={project} type="button" className="codex-sidebar-action" onClick={() => setCurrentRoute('repositories')}>
+            {currentRepository ? (
+              <button type="button" className="codex-sidebar-action" onClick={() => setCurrentRoute('repositories')}>
                 <FolderGit2 className="h-4 w-4" aria-hidden="true" />
-                <span>{project}</span>
+                <span>{currentRepository.path}</span>
               </button>
-            ))}
+            ) : null}
           </section>
 
           <section className="codex-sidebar-section">
             <p className="codex-section-label">{t('sidebar.conversations', locale)}</p>
-            {conversations.map((conversation) => (
-              <button key={conversation.title} type="button" className="codex-thread-item compact">
-                <MessageSquareText className="h-4 w-4" aria-hidden="true" />
-                <span>{conversation.title}</span>
-                <time>{conversation.age}</time>
-              </button>
-            ))}
+            <div className="codex-thread-empty">{t('tasks.list.emptyConversations', locale)}</div>
           </section>
 
           <nav className="app-nav codex-sidebar-nav" aria-label={t('app.sidebar', locale)}>
@@ -250,4 +317,20 @@ function routeEyebrow(route: AppRouteId) {
     approvals: 'nav.approvals',
     settings: 'nav.settings',
   }[route];
+}
+
+function formatTaskTime(value: string) {
+  return value.replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '');
+}
+
+function normalizeTaskListError(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'title' in error) {
+    return String((error as { title: unknown }).title);
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }

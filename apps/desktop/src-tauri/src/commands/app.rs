@@ -1,7 +1,7 @@
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
-use crate::events;
+use crate::{events, storage::ManagedStorage};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +29,25 @@ pub struct PingResponse {
 #[tauri::command]
 pub fn ping() -> PingResponse {
     PingResponse { message: "pong" }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRootsResponse {
+    pub app_data_dir: String,
+    pub artifact_root: String,
+    pub worktree_root: String,
+    pub database_path: String,
+}
+
+#[tauri::command]
+pub fn get_storage_roots(storage: State<'_, ManagedStorage>) -> StorageRootsResponse {
+    StorageRootsResponse {
+        app_data_dir: storage.roots.app_data_dir.to_string_lossy().to_string(),
+        artifact_root: storage.roots.artifact_root.to_string_lossy().to_string(),
+        worktree_root: storage.roots.worktree_root.to_string_lossy().to_string(),
+        database_path: storage.roots.database_path().to_string_lossy().to_string(),
+    }
 }
 
 #[tauri::command]

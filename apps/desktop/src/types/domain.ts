@@ -1,14 +1,13 @@
 export type TaskStatus =
-  | 'created'
-  | 'analyzing'
+  | 'queued'
   | 'planning'
-  | 'running'
+  | 'editing'
   | 'validating'
   | 'repairing'
-  | 'waitingApproval'
+  | 'awaitingApproval'
+  | 'awaitingReview'
+  | 'readyToMerge'
   | 'needsIntervention'
-  | 'completed'
-  | 'merging'
   | 'merged'
   | 'cancelled'
   | 'failed';
@@ -82,6 +81,7 @@ export type DeliveryReportStatus = 'passed' | 'failed' | 'notRun';
 
 export interface TaskValidationRunSummary {
   runId: string;
+  purpose?: CommandRunPurpose;
   command: string;
   cwd: string;
   status: CommandRunStatus;
@@ -208,6 +208,15 @@ export interface PreparedTaskMerge {
   canMerge: boolean;
 }
 
+export interface MergePreview {
+  targetBranch: string;
+  sourceBranch?: string | null;
+  status: string;
+  canMerge: boolean;
+  blockers: string[];
+  recordPath?: string | null;
+}
+
 export interface TaskMergeCommandResult {
   taskId: string;
   status: TaskMergeResultStatus;
@@ -228,12 +237,14 @@ export interface WorktreeCleanupResult {
 }
 
 export type CommandRunStatus = 'passed' | 'failed' | 'timedOut' | 'cancelled';
+export type CommandRunPurpose = 'validation' | 'edit' | 'diagnostic';
 
 export type CommandOutputStream = 'stdout' | 'stderr';
 
 export interface CommandExecutionResult {
   runId: string;
   taskId: string;
+  purpose?: CommandRunPurpose;
   command: string;
   cwd: string;
   status: CommandRunStatus;
@@ -363,13 +374,131 @@ export interface AgentValidationCycleResult {
 export interface TaskSummary {
   id: string;
   title: string;
+  description: string;
   type: TaskType;
   status: TaskStatus;
+  taskStatus: TaskStatus;
+  repositoryId: string;
   repositoryPath: string;
-  worktreePath?: string;
-  branchName?: string;
+  worktreePath?: string | null;
+  branchName?: string | null;
+  taskBranch?: string | null;
+  targetBranch: string;
+  agentStage: string;
+  latestValidationStatus: DeliveryReportStatus | 'cancelled' | 'timedOut';
+  latestDiffSummary: string;
+  mergePreview: MergePreview;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskTodo {
+  id: string;
+  taskId: string;
+  title: string;
+  description: string;
+  status: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  errorMessage?: string | null;
+}
+
+export interface TaskCommandRun {
+  runId: string;
+  taskId: string;
+  purpose: CommandRunPurpose;
+  command: string;
+  cwd: string;
+  status: CommandRunStatus;
+  stdoutPath?: string | null;
+  stderrPath?: string | null;
+  exitCode?: number | null;
+  durationMs?: number | null;
+  createdAt: string;
+}
+
+export interface TaskArtifact {
+  id: string;
+  taskId: string;
+  changedFiles: string;
+  diffPath?: string | null;
+  testReportPath?: string | null;
+  screenshots: string;
+  summary: string;
+  commitMessage: string;
+}
+
+export interface TaskArtifactFile {
+  id: string;
+  taskId: string;
+  artifactId?: string | null;
+  fileType: string;
+  path: string;
+  sizeBytes: number;
+  compressed: boolean;
+  retentionClass: string;
+  createdAt: string;
+  expiresAt?: string | null;
+}
+
+export interface AgentSessionSummary {
+  id: string;
+  taskId: string;
+  status: string;
+  stage: string;
+  checkpointId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTimelineEvent {
+  eventId: string;
+  taskId: string;
+  eventType: string;
+  stage: string;
+  message: string;
+  createdAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface TaskValidationRound {
+  id: string;
+  taskId: string;
+  roundIndex: number;
+  status: string;
+  commandRunId?: string | null;
+  analysis: string;
+  repairSummary: string;
+  validationSummary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskMergeRecord {
+  id: string;
+  taskId: string;
+  status: TaskMergeResultStatus | 'failed';
+  targetBranch: string;
+  sourceBranch: string;
+  commitSha: string;
+  commitMessage: string;
+  conflictFiles: string[];
+  errorReason?: string | null;
+  recordPath?: string | null;
+  createdAt: string;
+}
+
+export interface TaskDetail {
+  task: TaskSummary;
+  todos: TaskTodo[];
+  commandRuns: TaskCommandRun[];
+  approvals: ApprovalSummary[];
+  artifacts: TaskArtifact[];
+  artifactFiles: TaskArtifactFile[];
+  agentSession?: AgentSessionSummary | null;
+  timeline: AgentTimelineEvent[];
+  validationRounds: TaskValidationRound[];
+  mergeRecords: TaskMergeRecord[];
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';

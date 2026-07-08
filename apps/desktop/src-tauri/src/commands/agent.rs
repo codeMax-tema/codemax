@@ -10,7 +10,10 @@ use crate::{
     agent::{AgentHealthResponse, AgentService, AgentServiceError, AgentServiceStatus},
     core::error::{AppResult, CommandError},
     exec::{CommandExecutionResult, CommandRequest, CommandRunRegistry},
-    storage::ManagedStorage,
+    storage::{
+        AgentEventRepository, AgentSessionRepository, ManagedStorage, NewAgentEvent,
+        NewAgentSession, NewTodo, StorageError, TaskRepository, TodoRepository,
+    },
 };
 
 use super::exec::run_task_command;
@@ -183,6 +186,7 @@ pub async fn run_agent_validation_cycle(
         )
         .await
         .map_err(agent_error)?;
+    sync_agent_state(storage.inner(), &task_id, response_state(&response)?)?;
 
     let limit = request
         .max_iterations
@@ -234,6 +238,7 @@ pub async fn run_agent_validation_cycle(
             )
             .await
             .map_err(agent_error)?;
+        sync_agent_state(storage.inner(), &task_id, response_state(&response)?)?;
     }
 
     let state = response_state(&response)?.clone();
@@ -250,6 +255,163 @@ pub async fn run_agent_validation_cycle(
         command_results,
         state,
     })
+}
+
+fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> AppResult<()> {
+    let phase = state
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("created");
+    let task_status = task_status_from_agent_phase(phase);
+    let checkpoint_id = state
+        .get("checkpointIndex")
+        .and_then(Value::as_i64)
+        .map(|index| format!("{task_id}:checkpoint:{index}"));
+    let repair_round = state
+        .get("repairRound")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+
+    TaskRepository::new(connection)
+        .update_status(task_id, task_status, None)
+        .map_err(storage_error)?;
+    AgentSessionRepository::new(connection)
+        .upsert(NewAgentSession {
+            id: &format!("agent-session-{task_id}"),
+            task_id,
+            status: phase,
+            stage: task_status,
+            checkpoint_id: checkpoint_id.as_deref(),
+        })
+        .map_err(storage_error)?;
+
+    if let Some(Value::Array(todos)) = state.get("todos") {
+        let todos_repo = TodoRepository::new(connection);
+        let events = AgentEventRepository::new(connection);
+        for todo in todos {
+            let Some(agent_todo_id) = todo.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let title = todo
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Agent todo");
+            let description = todo
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let status = todo
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
+            let todo_id = format!("todo-{task_id}-{}", safe_id_segment(agent_todo_id));
+            todos_repo
+                .upsert(NewTodo {
+                    id: &todo_id,
+                    task_id,
+                    title,
+                    description,
+                    status,
+                })
+                .map_err(storage_error)?;
+            record_agent_event_with_connection(
+                &events,
+                task_id,
+                "todo.updated",
+                task_status,
+                &format!("Agent todo updated: {title}"),
+                json!({
+                    "todo_id": todo_id,
+                    "agent_todo_id": agent_todo_id,
+                    "status": status,
+                }),
+            )?;
+        }
+    }
+
+    if phase == "repairing" {
+        record_agent_event_with_connection(
+            &AgentEventRepository::new(connection),
+            task_id,
+            "repair.started",
+            "repairing",
+            "Agent started an automatic repair round.",
+            json!({
+                "repair_round": repair_round,
+                "repair_plan": state.get("repairPlan").cloned().unwrap_or_else(|| json!({})),
+            }),
+        )?;
+    } else if phase == "validating" && repair_round > 0 {
+        record_agent_event_with_connection(
+            &AgentEventRepository::new(connection),
+            task_id,
+            "repair.finished",
+            "validating",
+            "Agent finished a repair round and requested validation.",
+            json!({
+                "repair_round": repair_round,
+                "validation_request": state.get("validationRequest").cloned().unwrap_or_else(|| json!({})),
+            }),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn task_status_from_agent_phase(phase: &str) -> &'static str {
+    match phase {
+        "created" | "planned" => "planning",
+        "editing" => "editing",
+        "validating" => "validating",
+        "analyzing_error" | "repairing" => "repairing",
+        "waiting_approval" => "awaitingApproval",
+        "needs_intervention" => "needsIntervention",
+        "completed" => "readyToMerge",
+        "failed" => "failed",
+        _ => "planning",
+    }
+}
+
+fn safe_id_segment(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            output.push(character);
+        } else {
+            output.push('-');
+        }
+    }
+    let output = output.trim_matches('-');
+    if output.is_empty() {
+        "todo".to_string()
+    } else {
+        output.chars().take(64).collect()
+    }
+}
+
+fn record_agent_event_with_connection(
+    events: &AgentEventRepository<'_>,
+    task_id: &str,
+    event_type: &str,
+    stage: &str,
+    message: &str,
+    payload: Value,
+) -> AppResult<()> {
+    let event_id = format!("event-{}", Uuid::new_v4());
+    let payload = serde_json::to_string(&payload).map_err(json_error)?;
+    events
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message,
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 fn agent_error(error: AgentServiceError) -> CommandError {
@@ -396,6 +558,34 @@ fn json_error(error: serde_json::Error) -> CommandError {
         "agent.invalidJson",
         format!("Unable to encode Agent API request: {error}"),
     )
+}
+
+fn storage_lock_error() -> CommandError {
+    CommandError::new(
+        "storage.lockUnavailable",
+        "Local storage is temporarily unavailable.",
+    )
+}
+
+fn storage_error(error: StorageError) -> CommandError {
+    match error {
+        StorageError::NotFound(message) => CommandError::new("task.notFound", message),
+        StorageError::UnsafeCleanup { task_id, reasons } => CommandError::new(
+            "storage.unsafeCleanup",
+            format!(
+                "Task {task_id} is not safe to clean: {}",
+                reasons.join("; ")
+            ),
+        ),
+        StorageError::Sqlite(error) => CommandError::new(
+            "storage.sqliteError",
+            format!("Local database error: {error}"),
+        ),
+        StorageError::Io(error) => CommandError::new(
+            "storage.filesystemError",
+            format!("Filesystem error: {error}"),
+        ),
+    }
 }
 
 #[cfg(test)]
