@@ -5,6 +5,7 @@ pub mod agent;
 pub mod core;
 pub mod exec;
 pub mod git;
+pub mod privacy;
 pub mod safety;
 pub mod secrets;
 pub mod storage;
@@ -58,6 +59,10 @@ pub fn run() {
             commands::models::get_model_config,
             commands::models::save_model_config,
             commands::models::test_model_connection,
+            commands::privacy::active_profile,
+            commands::privacy::privacy_ledger_summary,
+            commands::privacy::run_contract,
+            commands::privacy::token_budget_summary,
             commands::repository::select_repository_path,
             commands::repository::validate_repository_path,
             commands::repository::get_repository_current_branch,

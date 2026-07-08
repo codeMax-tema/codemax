@@ -264,6 +264,58 @@
           },
           "required": ["request", "response"]
         },
+        "active_profile": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/ActiveProfileView"
+            }
+          },
+          "required": ["response"]
+        },
+        "run_contract": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RunContractView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "privacy_ledger_summary": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/PrivacyLedgerSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "token_budget_summary": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TokenBudgetSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "start_agent_service": {
           "type": "object",
           "properties": {
@@ -419,6 +471,10 @@
         "cleanup_expired_task_logs",
         "get_model_config",
         "save_model_config",
+        "active_profile",
+        "run_contract",
+        "privacy_ledger_summary",
+        "token_budget_summary",
         "start_agent_service",
         "stop_agent_service",
         "get_agent_service_status",
@@ -1474,6 +1530,22 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "ActiveProfileView": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RunContractView": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "PrivacyLedgerSummary": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "TokenBudgetSummary": {
+      "type": "object",
+      "additionalProperties": true
     },
     "GenerateTaskProofPackRequest": {
       "type": "object",

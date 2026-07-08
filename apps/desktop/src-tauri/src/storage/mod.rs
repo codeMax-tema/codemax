@@ -21,6 +21,10 @@ const A_TASK_CHAIN_MIGRATION: &str =
 const COMMAND_RUN_PURPOSE_MIGRATION_VERSION: &str = "0004_command_run_purpose";
 const COMMAND_RUN_PURPOSE_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0004_command_run_purpose.sql");
+pub const DEFAULT_PROFILE_ID: &str = "profile-default";
+const PRIVACY_CONTRACT_BUDGET_MIGRATION_VERSION: &str = "0005_privacy_contract_budget";
+const PRIVACY_CONTRACT_BUDGET_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0005_privacy_contract_budget.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -88,8 +92,13 @@ impl SqliteStore {
             COMMAND_RUN_PURPOSE_MIGRATION_VERSION,
             COMMAND_RUN_PURPOSE_MIGRATION,
         )?;
+        self.apply_migration(
+            PRIVACY_CONTRACT_BUDGET_MIGRATION_VERSION,
+            PRIVACY_CONTRACT_BUDGET_MIGRATION,
+        )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
+        PersonalProfileRepository::new(&self.connection).ensure_default_active_profile()?;
         Ok(())
     }
 
@@ -1822,6 +1831,541 @@ impl<'conn> MergeRecordRepository<'conn> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonalProfileRecord {
+    pub id: String,
+    pub name: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub mode: String,
+    pub model_id: Option<String>,
+    pub reasoning_effort: String,
+    pub permission_level: String,
+    pub network_policy: String,
+    pub privacy_mode: String,
+    pub token_budget_total: i64,
+    pub token_budget_per_call: i64,
+    pub validation_policy: String,
+    pub output_language: String,
+    pub memory_scope: String,
+    pub quality_gate_policy: String,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub struct PersonalProfileRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> PersonalProfileRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn ensure_default_active_profile(&self) -> StorageResult<()> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT OR IGNORE INTO personal_profiles (
+                id, name, scope, scope_id, mode, model_id, reasoning_effort,
+                permission_level, network_policy, privacy_mode, token_budget_total,
+                token_budget_per_call, validation_policy, output_language, memory_scope,
+                quality_gate_policy, is_active, created_at, updated_at
+             ) VALUES (
+                ?1, 'Default', 'global', NULL, 'standard', 'model-default', 'balanced',
+                'worktree_write', 'approval_required', 'standard', 120000,
+                24000, 'auto', 'zh-CN', 'task', 'strict', 1, ?2, ?2
+             )",
+            params![DEFAULT_PROFILE_ID, now],
+        )?;
+
+        let active_count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM personal_profiles WHERE is_active = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        if active_count == 0 {
+            self.connection.execute(
+                "UPDATE personal_profiles
+                 SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END, updated_at = ?2",
+                params![DEFAULT_PROFILE_ID, now_text()],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn active_profile(&self) -> StorageResult<PersonalProfileRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, name, scope, scope_id, mode, model_id, reasoning_effort,
+                    permission_level, network_policy, privacy_mode, token_budget_total,
+                    token_budget_per_call, validation_policy, output_language, memory_scope,
+                    quality_gate_policy, is_active, created_at, updated_at
+                 FROM personal_profiles
+                 WHERE is_active = 1
+                 ORDER BY updated_at DESC, id
+                 LIMIT 1",
+                [],
+                map_personal_profile_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound("active profile".to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunContractRecord {
+    pub id: String,
+    pub task_id: String,
+    pub profile_id: Option<String>,
+    pub mode: String,
+    pub model_id: Option<String>,
+    pub reasoning_effort: String,
+    pub permission_level: String,
+    pub network_policy: String,
+    pub allowed_paths_json: String,
+    pub allowed_commands_json: String,
+    pub validation_command: Option<String>,
+    pub token_budget_total: i64,
+    pub token_budget_per_call: i64,
+    pub output_language: String,
+    pub memory_scope: String,
+    pub budget_overflow_policy: String,
+    pub contract_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewRunContract<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub profile_id: Option<&'a str>,
+    pub mode: &'a str,
+    pub model_id: Option<&'a str>,
+    pub reasoning_effort: &'a str,
+    pub permission_level: &'a str,
+    pub network_policy: &'a str,
+    pub allowed_paths_json: &'a str,
+    pub allowed_commands_json: &'a str,
+    pub validation_command: Option<&'a str>,
+    pub token_budget_total: i64,
+    pub token_budget_per_call: i64,
+    pub output_language: &'a str,
+    pub memory_scope: &'a str,
+    pub budget_overflow_policy: &'a str,
+    pub contract_json: &'a str,
+}
+
+pub struct RunContractRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> RunContractRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn upsert(&self, contract: NewRunContract<'_>) -> StorageResult<RunContractRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO run_contracts (
+                id, task_id, profile_id, mode, model_id, reasoning_effort, permission_level,
+                network_policy, allowed_paths_json, allowed_commands_json, validation_command,
+                token_budget_total, token_budget_per_call, output_language, memory_scope,
+                budget_overflow_policy, contract_json, created_at, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18
+             )
+             ON CONFLICT(task_id) DO UPDATE SET
+                profile_id = excluded.profile_id,
+                mode = excluded.mode,
+                model_id = excluded.model_id,
+                reasoning_effort = excluded.reasoning_effort,
+                permission_level = excluded.permission_level,
+                network_policy = excluded.network_policy,
+                allowed_paths_json = excluded.allowed_paths_json,
+                allowed_commands_json = excluded.allowed_commands_json,
+                validation_command = excluded.validation_command,
+                token_budget_total = excluded.token_budget_total,
+                token_budget_per_call = excluded.token_budget_per_call,
+                output_language = excluded.output_language,
+                memory_scope = excluded.memory_scope,
+                budget_overflow_policy = excluded.budget_overflow_policy,
+                contract_json = excluded.contract_json,
+                updated_at = excluded.updated_at",
+            params![
+                contract.id,
+                contract.task_id,
+                contract.profile_id,
+                contract.mode,
+                contract.model_id,
+                contract.reasoning_effort,
+                contract.permission_level,
+                contract.network_policy,
+                contract.allowed_paths_json,
+                contract.allowed_commands_json,
+                contract.validation_command,
+                contract.token_budget_total,
+                contract.token_budget_per_call,
+                contract.output_language,
+                contract.memory_scope,
+                contract.budget_overflow_policy,
+                contract.contract_json,
+                now,
+            ],
+        )?;
+
+        self.get_for_task(contract.task_id)?.ok_or_else(|| {
+            StorageError::NotFound(format!("run contract for task {}", contract.task_id))
+        })
+    }
+
+    pub fn get_for_task(&self, task_id: &str) -> StorageResult<Option<RunContractRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, profile_id, mode, model_id, reasoning_effort,
+                    permission_level, network_policy, allowed_paths_json, allowed_commands_json,
+                    validation_command, token_budget_total, token_budget_per_call, output_language,
+                    memory_scope, budget_overflow_policy, contract_json, created_at, updated_at
+                 FROM run_contracts
+                 WHERE task_id = ?1",
+                params![task_id],
+                map_run_contract_record,
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivacyLedgerEntryRecord {
+    pub id: String,
+    pub task_id: String,
+    pub event_type: String,
+    pub data_kind: String,
+    pub source_type: String,
+    pub source_ref: String,
+    pub destination: String,
+    pub provider: Option<String>,
+    pub model_id: Option<String>,
+    pub action: String,
+    pub sensitivity_level: String,
+    pub findings_json: String,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewPrivacyLedgerEntry<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub event_type: &'a str,
+    pub data_kind: &'a str,
+    pub source_type: &'a str,
+    pub source_ref: &'a str,
+    pub destination: &'a str,
+    pub provider: Option<&'a str>,
+    pub model_id: Option<&'a str>,
+    pub action: &'a str,
+    pub sensitivity_level: &'a str,
+    pub findings_json: &'a str,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: &'a str,
+    pub size_bytes: i64,
+}
+
+pub struct PrivacyLedgerRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> PrivacyLedgerRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(
+        &self,
+        entry: NewPrivacyLedgerEntry<'_>,
+    ) -> StorageResult<PrivacyLedgerEntryRecord> {
+        self.connection.execute(
+            "INSERT INTO privacy_ledger_entries (
+                id, task_id, event_type, data_kind, source_type, source_ref, destination,
+                provider, model_id, action, sensitivity_level, findings_json, redacted,
+                blocked, reason, size_bytes, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                entry.id,
+                entry.task_id,
+                entry.event_type,
+                entry.data_kind,
+                entry.source_type,
+                entry.source_ref,
+                entry.destination,
+                entry.provider,
+                entry.model_id,
+                entry.action,
+                entry.sensitivity_level,
+                entry.findings_json,
+                bool_to_i64(entry.redacted),
+                bool_to_i64(entry.blocked),
+                entry.reason,
+                entry.size_bytes,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(entry.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<PrivacyLedgerEntryRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, event_type, data_kind, source_type, source_ref, destination,
+                provider, model_id, action, sensitivity_level, findings_json, redacted,
+                blocked, reason, size_bytes, created_at
+             FROM privacy_ledger_entries
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_privacy_ledger_entry_record)?;
+        let mut entries = Vec::new();
+
+        for row in rows {
+            entries.push(row?);
+        }
+
+        Ok(entries)
+    }
+
+    fn get_required(&self, entry_id: &str) -> StorageResult<PrivacyLedgerEntryRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, event_type, data_kind, source_type, source_ref, destination,
+                    provider, model_id, action, sensitivity_level, findings_json, redacted,
+                    blocked, reason, size_bytes, created_at
+                 FROM privacy_ledger_entries WHERE id = ?1",
+                params![entry_id],
+                map_privacy_ledger_entry_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("privacy ledger entry {entry_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenBudgetRecord {
+    pub id: String,
+    pub task_id: String,
+    pub run_id: Option<String>,
+    pub call_type: String,
+    pub provider: Option<String>,
+    pub model_id: Option<String>,
+    pub phase: String,
+    pub input_tokens_estimate: i64,
+    pub output_tokens_estimate: i64,
+    pub total_tokens_estimate: i64,
+    pub budget_limit: i64,
+    pub budget_remaining: i64,
+    pub overflow_policy: String,
+    pub quality_fallback: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewTokenBudgetRecord<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub run_id: Option<&'a str>,
+    pub call_type: &'a str,
+    pub provider: Option<&'a str>,
+    pub model_id: Option<&'a str>,
+    pub phase: &'a str,
+    pub input_tokens_estimate: i64,
+    pub output_tokens_estimate: i64,
+    pub total_tokens_estimate: i64,
+    pub budget_limit: i64,
+    pub budget_remaining: i64,
+    pub overflow_policy: &'a str,
+    pub quality_fallback: &'a str,
+}
+
+pub struct TokenBudgetRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> TokenBudgetRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(&self, record: NewTokenBudgetRecord<'_>) -> StorageResult<TokenBudgetRecord> {
+        self.connection.execute(
+            "INSERT INTO token_budget_records (
+                id, task_id, run_id, call_type, provider, model_id, phase, input_tokens_estimate,
+                output_tokens_estimate, total_tokens_estimate, budget_limit, budget_remaining,
+                overflow_policy, quality_fallback, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                record.id,
+                record.task_id,
+                record.run_id,
+                record.call_type,
+                record.provider,
+                record.model_id,
+                record.phase,
+                record.input_tokens_estimate,
+                record.output_tokens_estimate,
+                record.total_tokens_estimate,
+                record.budget_limit,
+                record.budget_remaining,
+                record.overflow_policy,
+                record.quality_fallback,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(record.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<TokenBudgetRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, run_id, call_type, provider, model_id, phase,
+                input_tokens_estimate, output_tokens_estimate, total_tokens_estimate,
+                budget_limit, budget_remaining, overflow_policy, quality_fallback, created_at
+             FROM token_budget_records
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_token_budget_record)?;
+        let mut records = Vec::new();
+
+        for row in rows {
+            records.push(row?);
+        }
+
+        Ok(records)
+    }
+
+    fn get_required(&self, record_id: &str) -> StorageResult<TokenBudgetRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, run_id, call_type, provider, model_id, phase,
+                    input_tokens_estimate, output_tokens_estimate, total_tokens_estimate,
+                    budget_limit, budget_remaining, overflow_policy, quality_fallback, created_at
+                 FROM token_budget_records WHERE id = ?1",
+                params![record_id],
+                map_token_budget_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("token budget record {record_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextSourceRecord {
+    pub id: String,
+    pub task_id: String,
+    pub run_id: Option<String>,
+    pub source_type: String,
+    pub source_ref: String,
+    pub layer: String,
+    pub included: bool,
+    pub tokens_estimate: i64,
+    pub sensitivity_level: String,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewContextSource<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub run_id: Option<&'a str>,
+    pub source_type: &'a str,
+    pub source_ref: &'a str,
+    pub layer: &'a str,
+    pub included: bool,
+    pub tokens_estimate: i64,
+    pub sensitivity_level: &'a str,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: &'a str,
+}
+
+pub struct ContextSourceRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> ContextSourceRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(&self, source: NewContextSource<'_>) -> StorageResult<ContextSourceRecord> {
+        self.connection.execute(
+            "INSERT INTO context_sources (
+                id, task_id, run_id, source_type, source_ref, layer, included,
+                tokens_estimate, sensitivity_level, redacted, blocked, reason, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                source.id,
+                source.task_id,
+                source.run_id,
+                source.source_type,
+                source.source_ref,
+                source.layer,
+                bool_to_i64(source.included),
+                source.tokens_estimate,
+                source.sensitivity_level,
+                bool_to_i64(source.redacted),
+                bool_to_i64(source.blocked),
+                source.reason,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(source.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ContextSourceRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, run_id, source_type, source_ref, layer, included,
+                tokens_estimate, sensitivity_level, redacted, blocked, reason, created_at
+             FROM context_sources
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_context_source_record)?;
+        let mut sources = Vec::new();
+
+        for row in rows {
+            sources.push(row?);
+        }
+
+        Ok(sources)
+    }
+
+    fn get_required(&self, source_id: &str) -> StorageResult<ContextSourceRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, run_id, source_type, source_ref, layer, included,
+                    tokens_estimate, sensitivity_level, redacted, blocked, reason, created_at
+                 FROM context_sources WHERE id = ?1",
+                params![source_id],
+                map_context_source_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("context source {source_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupReadiness {
     pub task_id: String,
     pub final_diff_preserved: bool,
@@ -2144,9 +2688,7 @@ fn map_agent_event_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentEven
     })
 }
 
-fn map_validation_round_record(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<ValidationRoundRecord> {
+fn map_validation_round_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ValidationRoundRecord> {
     Ok(ValidationRoundRecord {
         id: row.get(0)?,
         task_id: row.get(1)?,
@@ -2174,6 +2716,116 @@ fn map_merge_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MergeRecord> {
         error_reason: row.get(8)?,
         record_path: row.get(9)?,
         created_at: row.get(10)?,
+    })
+}
+
+fn map_personal_profile_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersonalProfileRecord> {
+    Ok(PersonalProfileRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        scope: row.get(2)?,
+        scope_id: row.get(3)?,
+        mode: row.get(4)?,
+        model_id: row.get(5)?,
+        reasoning_effort: row.get(6)?,
+        permission_level: row.get(7)?,
+        network_policy: row.get(8)?,
+        privacy_mode: row.get(9)?,
+        token_budget_total: row.get(10)?,
+        token_budget_per_call: row.get(11)?,
+        validation_policy: row.get(12)?,
+        output_language: row.get(13)?,
+        memory_scope: row.get(14)?,
+        quality_gate_policy: row.get(15)?,
+        is_active: i64_to_bool(row.get(16)?),
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+    })
+}
+
+fn map_run_contract_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunContractRecord> {
+    Ok(RunContractRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        profile_id: row.get(2)?,
+        mode: row.get(3)?,
+        model_id: row.get(4)?,
+        reasoning_effort: row.get(5)?,
+        permission_level: row.get(6)?,
+        network_policy: row.get(7)?,
+        allowed_paths_json: row.get(8)?,
+        allowed_commands_json: row.get(9)?,
+        validation_command: row.get(10)?,
+        token_budget_total: row.get(11)?,
+        token_budget_per_call: row.get(12)?,
+        output_language: row.get(13)?,
+        memory_scope: row.get(14)?,
+        budget_overflow_policy: row.get(15)?,
+        contract_json: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+    })
+}
+
+fn map_privacy_ledger_entry_record(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PrivacyLedgerEntryRecord> {
+    Ok(PrivacyLedgerEntryRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        event_type: row.get(2)?,
+        data_kind: row.get(3)?,
+        source_type: row.get(4)?,
+        source_ref: row.get(5)?,
+        destination: row.get(6)?,
+        provider: row.get(7)?,
+        model_id: row.get(8)?,
+        action: row.get(9)?,
+        sensitivity_level: row.get(10)?,
+        findings_json: row.get(11)?,
+        redacted: i64_to_bool(row.get(12)?),
+        blocked: i64_to_bool(row.get(13)?),
+        reason: row.get(14)?,
+        size_bytes: row.get(15)?,
+        created_at: row.get(16)?,
+    })
+}
+
+fn map_token_budget_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenBudgetRecord> {
+    Ok(TokenBudgetRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        run_id: row.get(2)?,
+        call_type: row.get(3)?,
+        provider: row.get(4)?,
+        model_id: row.get(5)?,
+        phase: row.get(6)?,
+        input_tokens_estimate: row.get(7)?,
+        output_tokens_estimate: row.get(8)?,
+        total_tokens_estimate: row.get(9)?,
+        budget_limit: row.get(10)?,
+        budget_remaining: row.get(11)?,
+        overflow_policy: row.get(12)?,
+        quality_fallback: row.get(13)?,
+        created_at: row.get(14)?,
+    })
+}
+
+fn map_context_source_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContextSourceRecord> {
+    Ok(ContextSourceRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        run_id: row.get(2)?,
+        source_type: row.get(3)?,
+        source_ref: row.get(4)?,
+        layer: row.get(5)?,
+        included: i64_to_bool(row.get(6)?),
+        tokens_estimate: row.get(7)?,
+        sensitivity_level: row.get(8)?,
+        redacted: i64_to_bool(row.get(9)?),
+        blocked: i64_to_bool(row.get(10)?),
+        reason: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -2230,6 +2882,12 @@ mod tests {
             "agent_events",
             "validation_rounds",
             "merge_records",
+            "personal_profiles",
+            "run_contracts",
+            "contract_breach_records",
+            "privacy_ledger_entries",
+            "token_budget_records",
+            "context_sources",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
@@ -2243,6 +2901,12 @@ mod tests {
         assert_eq!(policy.temporary_context_retention_days, 7);
         assert!(policy.keep_final_diff_forever);
         assert!(policy.keep_approval_records_forever);
+
+        let profile = PersonalProfileRepository::new(store.connection())
+            .active_profile()
+            .expect("default active profile");
+        assert_eq!(profile.id, DEFAULT_PROFILE_ID);
+        assert!(profile.is_active);
     }
 
     #[test]
@@ -2603,5 +3267,118 @@ mod tests {
             .expect_err("cleanup must be blocked without final diff");
 
         assert!(blocked.to_string().contains("final diff"));
+    }
+
+    #[test]
+    fn b_line_privacy_contract_budget_repositories_round_trip() {
+        let store = migrated_store();
+        create_test_task(&store);
+
+        let profile = PersonalProfileRepository::new(store.connection())
+            .active_profile()
+            .expect("active profile exists");
+        assert_eq!(profile.privacy_mode, "standard");
+
+        let contracts = RunContractRepository::new(store.connection());
+        let contract = contracts
+            .upsert(NewRunContract {
+                id: "contract-001",
+                task_id: "task-001",
+                profile_id: Some(&profile.id),
+                mode: &profile.mode,
+                model_id: profile.model_id.as_deref(),
+                reasoning_effort: &profile.reasoning_effort,
+                permission_level: &profile.permission_level,
+                network_policy: &profile.network_policy,
+                allowed_paths_json: "[\"D:/codemax/app-data/worktrees/task-001\"]",
+                allowed_commands_json: "[\"npm test\"]",
+                validation_command: Some("npm test"),
+                token_budget_total: profile.token_budget_total,
+                token_budget_per_call: profile.token_budget_per_call,
+                output_language: &profile.output_language,
+                memory_scope: &profile.memory_scope,
+                budget_overflow_policy: "pause_for_approval",
+                contract_json: "{\"source\":\"test\"}",
+            })
+            .expect("record run contract");
+        assert_eq!(contract.task_id, "task-001");
+        assert_eq!(contract.profile_id.as_deref(), Some(DEFAULT_PROFILE_ID));
+
+        PrivacyLedgerRepository::new(store.connection())
+            .record(NewPrivacyLedgerEntry {
+                id: "privacy-001",
+                task_id: "task-001",
+                event_type: "model_context",
+                data_kind: "task_description",
+                source_type: "user_input",
+                source_ref: "task.description",
+                destination: "agent",
+                provider: Some("local-agent"),
+                model_id: Some("model-default"),
+                action: "redacted",
+                sensitivity_level: "high",
+                findings_json: "[{\"kind\":\"api_key\"}]",
+                redacted: true,
+                blocked: false,
+                reason: "secret token masked before context use",
+                size_bytes: 42,
+            })
+            .expect("record privacy ledger entry");
+        assert_eq!(
+            PrivacyLedgerRepository::new(store.connection())
+                .list_for_task("task-001")
+                .expect("list privacy entries")[0]
+                .action,
+            "redacted"
+        );
+
+        TokenBudgetRepository::new(store.connection())
+            .record(NewTokenBudgetRecord {
+                id: "budget-001",
+                task_id: "task-001",
+                run_id: Some("agent-create"),
+                call_type: "agent_task_create",
+                provider: Some("local-agent"),
+                model_id: Some("model-default"),
+                phase: "created",
+                input_tokens_estimate: 11,
+                output_tokens_estimate: 0,
+                total_tokens_estimate: 11,
+                budget_limit: 120000,
+                budget_remaining: 119989,
+                overflow_policy: "pause_for_approval",
+                quality_fallback: "",
+            })
+            .expect("record token budget");
+        assert_eq!(
+            TokenBudgetRepository::new(store.connection())
+                .list_for_task("task-001")
+                .expect("list token records")[0]
+                .total_tokens_estimate,
+            11
+        );
+
+        ContextSourceRepository::new(store.connection())
+            .record(NewContextSource {
+                id: "context-001",
+                task_id: "task-001",
+                run_id: Some("agent-create"),
+                source_type: "user_input",
+                source_ref: "task.description",
+                layer: "recent_user_request",
+                included: true,
+                tokens_estimate: 11,
+                sensitivity_level: "high",
+                redacted: true,
+                blocked: false,
+                reason: "redacted before agent context",
+            })
+            .expect("record context source");
+        assert!(
+            ContextSourceRepository::new(store.connection())
+                .list_for_task("task-001")
+                .expect("list context sources")[0]
+                .redacted
+        );
     }
 }

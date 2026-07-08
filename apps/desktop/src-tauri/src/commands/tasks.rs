@@ -8,13 +8,17 @@ use uuid::Uuid;
 use crate::{
     core::error::{AppResult, CommandError},
     git::{self, GitError},
+    privacy::{
+        record_context_observation, record_token_budget_observation, sanitize_for_model_context,
+        ContextObservation, SanitizedContent, TokenBudgetObservation,
+    },
     storage::{
         AgentEventRecord, AgentEventRepository, AgentSessionRecord, AgentSessionRepository,
         ApprovalRecord, ApprovalRepository, ArtifactFileRecord, ArtifactRecord, ArtifactRepository,
         CommandRunRecord, CommandRunRepository, ManagedStorage, MergeRecord, MergeRecordRepository,
-        NewAgentEvent, NewAgentSession, NewArtifactFile, NewTask, NewTodo, StorageError,
-        TaskRecord, TaskRepository, TodoRecord, TodoRepository, ValidationRoundRecord,
-        ValidationRoundRepository,
+        NewAgentEvent, NewAgentSession, NewArtifactFile, NewRunContract, NewTask, NewTodo,
+        PersonalProfileRepository, RunContractRepository, StorageError, TaskRecord, TaskRepository,
+        TodoRecord, TodoRepository, ValidationRoundRecord, ValidationRoundRepository,
     },
 };
 
@@ -238,27 +242,41 @@ pub(crate) fn create_task_record_inner(
     storage: &ManagedStorage,
     request: CreateTaskRecordRequest,
 ) -> AppResult<TaskSummaryView> {
-    let repository = git::validate_repository(request.repository_path.trim()).map_err(task_git_error)?;
+    let repository =
+        git::validate_repository(request.repository_path.trim()).map_err(task_git_error)?;
     let repository_id = repository_id(&repository.path);
-    let description = require_non_empty(request.description.trim(), "task.descriptionRequired")?;
-    let title = request
+    let raw_description =
+        require_non_empty(request.description.trim(), "task.descriptionRequired")?;
+    let sanitized_description = sanitize_for_model_context(raw_description, "task.description");
+    let description = sanitized_description.content.clone();
+    let raw_title = request
         .title
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| derive_title(description));
+        .unwrap_or_else(|| derive_title(&description));
+    let sanitized_title = sanitize_for_model_context(&raw_title, "task.title");
+    let title = sanitized_title.content.clone();
     let task_type = normalize_task_type(request.task_type.as_deref())?;
     let model_id = request
         .model_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let validation_command = request
+    let raw_validation_command = request
         .validation_command
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let sanitized_validation_command = raw_validation_command
+        .as_deref()
+        .map(|command| sanitize_for_model_context(command, "task.validationCommand"));
+    let validation_command = sanitized_validation_command
+        .as_ref()
+        .map(|command| command.content.as_str())
+        .filter(|command| !command.trim().is_empty());
     let task_id = format!("task-{}", Uuid::new_v4());
     let paths = storage
         .roots
@@ -300,10 +318,13 @@ pub(crate) fn create_task_record_inner(
         storage,
         &task_id,
         &title,
-        description,
+        &description,
         &task_type,
         model_id,
         validation_command,
+        &sanitized_description,
+        &sanitized_title,
+        sanitized_validation_command.as_ref(),
         &repository,
         &repository_id,
         &worktree,
@@ -452,6 +473,9 @@ fn persist_created_task(
     task_type: &str,
     model_id: Option<&str>,
     validation_command: Option<&str>,
+    sanitized_description: &SanitizedContent,
+    sanitized_title: &SanitizedContent,
+    sanitized_validation_command: Option<&SanitizedContent>,
     repository: &git::RepositoryInfo,
     repository_id: &str,
     worktree: &git::TaskWorktree,
@@ -505,6 +529,133 @@ fn persist_created_task(
         })
         .map_err(storage_error)?;
 
+    let profile = PersonalProfileRepository::new(&transaction)
+        .active_profile()
+        .map_err(storage_error)?;
+    let effective_model_id = model_id.or(profile.model_id.as_deref());
+    let allowed_paths = vec![worktree.worktree_path.clone()];
+    let allowed_commands = validation_command
+        .map(|command| vec![command.to_string()])
+        .unwrap_or_default();
+    let allowed_paths_json = serde_json::to_string(&allowed_paths).map_err(json_error)?;
+    let allowed_commands_json = serde_json::to_string(&allowed_commands).map_err(json_error)?;
+    let contract_payload = json!({
+        "taskId": task_id,
+        "profileId": profile.id,
+        "mode": profile.mode,
+        "modelId": effective_model_id,
+        "reasoningEffort": profile.reasoning_effort,
+        "permissionLevel": profile.permission_level,
+        "networkPolicy": profile.network_policy,
+        "allowedPaths": allowed_paths,
+        "allowedCommands": allowed_commands,
+        "validationCommand": validation_command,
+        "tokenBudgetTotal": profile.token_budget_total,
+        "tokenBudgetPerCall": profile.token_budget_per_call,
+        "outputLanguage": profile.output_language,
+        "memoryScope": profile.memory_scope,
+        "budgetOverflowPolicy": "pause_for_approval",
+        "source": "active_profile"
+    });
+    let contract_json = serde_json::to_string(&contract_payload).map_err(json_error)?;
+    RunContractRepository::new(&transaction)
+        .upsert(NewRunContract {
+            id: &format!("run-contract-{task_id}"),
+            task_id,
+            profile_id: Some(&profile.id),
+            mode: &profile.mode,
+            model_id: effective_model_id,
+            reasoning_effort: &profile.reasoning_effort,
+            permission_level: &profile.permission_level,
+            network_policy: &profile.network_policy,
+            allowed_paths_json: &allowed_paths_json,
+            allowed_commands_json: &allowed_commands_json,
+            validation_command,
+            token_budget_total: profile.token_budget_total,
+            token_budget_per_call: profile.token_budget_per_call,
+            output_language: &profile.output_language,
+            memory_scope: &profile.memory_scope,
+            budget_overflow_policy: "pause_for_approval",
+            contract_json: &contract_json,
+        })
+        .map_err(storage_error)?;
+
+    record_context_observation(
+        &transaction,
+        ContextObservation {
+            task_id,
+            run_id: Some("task-create"),
+            event_type: "task_created",
+            data_kind: "task_description",
+            source_type: "user_input",
+            source_ref: "task.description",
+            destination: "local_task_record",
+            provider: Some("local-desktop"),
+            model_id: effective_model_id,
+            layer: "recent_user_request",
+        },
+        sanitized_description,
+    )
+    .map_err(storage_error)?;
+    record_context_observation(
+        &transaction,
+        ContextObservation {
+            task_id,
+            run_id: Some("task-create"),
+            event_type: "task_created",
+            data_kind: "task_title",
+            source_type: "user_input",
+            source_ref: "task.title",
+            destination: "local_task_record",
+            provider: Some("local-desktop"),
+            model_id: effective_model_id,
+            layer: "recent_user_request",
+        },
+        sanitized_title,
+    )
+    .map_err(storage_error)?;
+    if let Some(sanitized_validation_command) = sanitized_validation_command {
+        record_context_observation(
+            &transaction,
+            ContextObservation {
+                task_id,
+                run_id: Some("task-create"),
+                event_type: "task_created",
+                data_kind: "validation_command",
+                source_type: "user_input",
+                source_ref: "task.validationCommand",
+                destination: "local_task_record",
+                provider: Some("local-desktop"),
+                model_id: effective_model_id,
+                layer: "validation_policy",
+            },
+            sanitized_validation_command,
+        )
+        .map_err(storage_error)?;
+    }
+    let initial_input_tokens = sanitized_description.tokens_estimate
+        + sanitized_title.tokens_estimate
+        + sanitized_validation_command
+            .map(|content| content.tokens_estimate)
+            .unwrap_or(0);
+    record_token_budget_observation(
+        &transaction,
+        TokenBudgetObservation {
+            task_id,
+            run_id: Some("task-create"),
+            call_type: "task_create",
+            provider: Some("local-desktop"),
+            model_id: effective_model_id,
+            phase: DEFAULT_TASK_STATUS,
+            input_tokens_estimate: initial_input_tokens,
+            output_tokens_estimate: 0,
+            budget_limit: profile.token_budget_total,
+            overflow_policy: "pause_for_approval",
+            quality_fallback: "",
+        },
+    )
+    .map_err(storage_error)?;
+
     let events = AgentEventRepository::new(&transaction);
     record_event(
         &events,
@@ -520,6 +671,8 @@ fn persist_created_task(
             "worktree_path": worktree.worktree_path,
             "agent_session_id": session_id,
             "validation_command": validation_command,
+            "run_contract_id": format!("run-contract-{task_id}"),
+            "active_profile_id": profile.id,
         }),
     )?;
 
@@ -650,7 +803,10 @@ fn is_validation_command_run(run: &CommandRunRecord) -> bool {
 }
 
 fn latest_diff_summary(artifacts: &[ArtifactRecord]) -> String {
-    let Some(artifact) = artifacts.iter().rev().find(|artifact| artifact.diff_path.is_some())
+    let Some(artifact) = artifacts
+        .iter()
+        .rev()
+        .find(|artifact| artifact.diff_path.is_some())
     else {
         return String::new();
     };
@@ -676,14 +832,23 @@ fn latest_merge_preview(
     worktree_path: Option<&str>,
     records: &[MergeRecord],
 ) -> Option<MergePreviewView> {
-    records.last().map(|record| MergePreviewView {
-        target_branch: record.target_branch.clone(),
-        source_branch: Some(record.source_branch.clone()),
-        status: record.status.clone(),
-        can_merge: false,
-        blockers: vec![format!("latest merge status: {}", record.status)],
-        record_path: record.record_path.clone(),
-    }).or_else(|| Some(default_merge_preview(target_branch, task_branch, worktree_path)))
+    records
+        .last()
+        .map(|record| MergePreviewView {
+            target_branch: record.target_branch.clone(),
+            source_branch: Some(record.source_branch.clone()),
+            status: record.status.clone(),
+            can_merge: false,
+            blockers: vec![format!("latest merge status: {}", record.status)],
+            record_path: record.record_path.clone(),
+        })
+        .or_else(|| {
+            Some(default_merge_preview(
+                target_branch,
+                task_branch,
+                worktree_path,
+            ))
+        })
 }
 
 fn default_merge_preview(
@@ -1001,7 +1166,9 @@ mod a_line_tests {
             Path::new(&summary.repository_path)
                 .canonicalize()
                 .expect("canonical summary path"),
-            repository.canonicalize().expect("canonical repository path")
+            repository
+                .canonicalize()
+                .expect("canonical repository path")
         );
         assert!(summary
             .worktree_path
@@ -1129,7 +1296,10 @@ fn normalize_task_type(task_type: Option<&str>) -> AppResult<String> {
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_TASK_TYPE);
 
-    if matches!(task_type, "bugfix" | "test" | "refactor" | "explain" | "custom") {
+    if matches!(
+        task_type,
+        "bugfix" | "test" | "refactor" | "explain" | "custom"
+    ) {
         return Ok(task_type.to_string());
     }
 

@@ -329,6 +329,129 @@ export interface ModelConnectionTestResult {
   detail?: string | null;
 }
 
+export interface ActiveProfile {
+  id: string;
+  name: string;
+  scope: string;
+  scopeId?: string | null;
+  mode: string;
+  modelId?: string | null;
+  reasoningEffort: string;
+  permissionLevel: string;
+  networkPolicy: string;
+  privacyMode: string;
+  tokenBudgetTotal: number;
+  tokenBudgetPerCall: number;
+  validationPolicy: string;
+  outputLanguage: string;
+  memoryScope: string;
+  qualityGatePolicy: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunContract {
+  id: string;
+  taskId: string;
+  profileId?: string | null;
+  mode: string;
+  modelId?: string | null;
+  reasoningEffort: string;
+  permissionLevel: string;
+  networkPolicy: string;
+  allowedPaths: string[];
+  allowedCommands: string[];
+  validationCommand?: string | null;
+  tokenBudgetTotal: number;
+  tokenBudgetPerCall: number;
+  outputLanguage: string;
+  memoryScope: string;
+  budgetOverflowPolicy: string;
+  contract: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PrivacyLedgerEntry {
+  id: string;
+  taskId: string;
+  eventType: string;
+  dataKind: string;
+  sourceType: string;
+  sourceRef: string;
+  destination: string;
+  provider?: string | null;
+  modelId?: string | null;
+  action: string;
+  sensitivityLevel: string;
+  findings: unknown;
+  redacted: boolean;
+  blocked: boolean;
+  reason: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface PrivacyLedgerSummary {
+  taskId: string;
+  totalEntries: number;
+  allowedCount: number;
+  redactedCount: number;
+  blockedCount: number;
+  providerCount: number;
+  sensitivityCounts: Record<string, number>;
+  latestEntries: PrivacyLedgerEntry[];
+}
+
+export interface TokenBudgetRecord {
+  id: string;
+  taskId: string;
+  runId?: string | null;
+  callType: string;
+  provider?: string | null;
+  modelId?: string | null;
+  phase: string;
+  inputTokensEstimate: number;
+  outputTokensEstimate: number;
+  totalTokensEstimate: number;
+  budgetLimit: number;
+  budgetRemaining: number;
+  overflowPolicy: string;
+  qualityFallback: string;
+  createdAt: string;
+}
+
+export interface ContextSource {
+  id: string;
+  taskId: string;
+  runId?: string | null;
+  sourceType: string;
+  sourceRef: string;
+  layer: string;
+  included: boolean;
+  tokensEstimate: number;
+  sensitivityLevel: string;
+  redacted: boolean;
+  blocked: boolean;
+  reason: string;
+  createdAt: string;
+}
+
+export interface TokenBudgetSummary {
+  taskId: string;
+  budgetLimit: number;
+  usedTokensEstimate: number;
+  remainingTokensEstimate: number;
+  recordCount: number;
+  contextSourceCount: number;
+  includedContextSourceCount: number;
+  redactedContextSourceCount: number;
+  blockedContextSourceCount: number;
+  records: TokenBudgetRecord[];
+  contextSources: ContextSource[];
+}
+
 export interface StorageUsageResponse {
   appDataDir: string;
   databasePath: string;
