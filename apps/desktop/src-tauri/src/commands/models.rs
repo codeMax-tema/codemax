@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use tauri::State;
 
 use crate::{
@@ -39,6 +40,18 @@ pub struct ModelConfigView {
     pub updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConnectionTestResult {
+    pub status: String,
+    pub provider: String,
+    pub model_name: String,
+    pub base_url_host: Option<String>,
+    pub latency_ms: u128,
+    pub message_key: String,
+    pub detail: Option<String>,
+}
+
 #[tauri::command]
 pub fn get_model_config(
     storage: State<'_, ManagedStorage>,
@@ -53,6 +66,14 @@ pub fn save_model_config(
     request: SaveModelConfigRequest,
 ) -> AppResult<ModelConfigView> {
     save_model_config_inner(storage.inner(), request)
+}
+
+#[tauri::command]
+pub fn test_model_connection(
+    storage: State<'_, ManagedStorage>,
+    id: Option<String>,
+) -> AppResult<ModelConnectionTestResult> {
+    test_model_connection_inner(storage.inner(), id.as_deref())
 }
 
 pub(crate) fn load_model_api_key_values(storage: &ManagedStorage) -> Vec<String> {
@@ -143,6 +164,72 @@ fn save_model_config_inner(
     model_config_view(saved, &secret_store)
 }
 
+fn test_model_connection_inner(
+    storage: &ManagedStorage,
+    id: Option<&str>,
+) -> AppResult<ModelConnectionTestResult> {
+    let started = Instant::now();
+    let id = normalize_config_id(id.unwrap_or(DEFAULT_MODEL_CONFIG_ID))?;
+    let secret_store = SecretStore::new(&storage.roots.app_data_dir);
+    let config = {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        ModelConfigRepository::new(store.connection())
+            .get(id)
+            .map_err(storage_error)?
+    };
+
+    let Some(config) = config else {
+        return Ok(ModelConnectionTestResult {
+            status: "warning".to_string(),
+            provider: String::new(),
+            model_name: String::new(),
+            base_url_host: None,
+            latency_ms: started.elapsed().as_millis(),
+            message_key: "settings.models.connectionMissingConfig".to_string(),
+            detail: None,
+        });
+    };
+
+    let base_url_host = parse_base_url_host(&config.base_url);
+    if config.base_url.trim().is_empty() {
+        return Ok(ModelConnectionTestResult {
+            status: "warning".to_string(),
+            provider: config.provider,
+            model_name: config.model_name,
+            base_url_host,
+            latency_ms: started.elapsed().as_millis(),
+            message_key: "settings.models.connectionMissingBaseUrl".to_string(),
+            detail: None,
+        });
+    }
+
+    let api_key_configured = config
+        .api_key_secret_ref
+        .as_deref()
+        .is_some_and(|secret_ref| secret_store.secret_exists(secret_ref));
+    if !api_key_configured {
+        return Ok(ModelConnectionTestResult {
+            status: "warning".to_string(),
+            provider: config.provider,
+            model_name: config.model_name,
+            base_url_host,
+            latency_ms: started.elapsed().as_millis(),
+            message_key: "settings.models.connectionMissingApiKey".to_string(),
+            detail: None,
+        });
+    }
+
+    Ok(ModelConnectionTestResult {
+        status: "ready".to_string(),
+        provider: config.provider,
+        model_name: config.model_name,
+        base_url_host,
+        latency_ms: started.elapsed().as_millis(),
+        message_key: "settings.models.connectionConfigReady".to_string(),
+        detail: None,
+    })
+}
+
 fn model_config_view(
     config: ModelConfigRecord,
     secret_store: &SecretStore,
@@ -168,6 +255,27 @@ fn model_config_view(
         created_at: config.created_at,
         updated_at: config.updated_at,
     })
+}
+
+fn parse_base_url_host(value: &str) -> Option<String> {
+    let value = value.trim();
+    let without_scheme = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .unwrap_or(value);
+    let host = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .split('@')
+        .next_back()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim();
+
+    (!host.is_empty()).then(|| host.to_string())
 }
 
 fn normalize_config_id(value: &str) -> AppResult<&str> {
@@ -312,5 +420,33 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).expect("clean temp model storage");
+    }
+
+    #[test]
+    fn model_connection_reports_missing_api_key_without_leaking_secret() {
+        let (storage, root) = model_storage();
+        save_model_config_inner(
+            &storage,
+            SaveModelConfigRequest {
+                id: None,
+                provider: "openai-compatible".to_string(),
+                base_url: "https://api.example.test/v1".to_string(),
+                model_name: "codemax-test".to_string(),
+                api_key: None,
+                clear_api_key: false,
+            },
+        )
+        .expect("save config");
+
+        let result = test_model_connection_inner(&storage, None).expect("test model");
+
+        assert_eq!(result.status, "warning");
+        assert_eq!(
+            result.message_key,
+            "settings.models.connectionMissingApiKey"
+        );
+        assert!(!format!("{result:?}").contains("sk-"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

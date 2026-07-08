@@ -8,6 +8,9 @@ import type {
   AgentValidationCycleResult,
   ApprovalDecision,
   ApprovalSummary,
+  AppSettingValue,
+  CleanupStorageRequest,
+  CleanupStorageResponse,
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
@@ -17,11 +20,14 @@ import type {
   QualityGateOverrideResult,
   QualityGateRecord,
   LogCleanupResult,
+  ModelConnectionTestResult,
   ModelConfigView,
   PreparedTaskMerge,
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
+  StartupHealthResponse,
+  StorageUsageResponse,
   TaskBranch,
   TaskDetail,
   TaskMergeCommandResult,
@@ -72,6 +78,26 @@ export interface StorageRootsResponse {
 
 export function getStorageRoots() {
   return invokeCommand<StorageRootsResponse>('get_storage_roots');
+}
+
+export function getStorageUsage() {
+  return invokeCommand<StorageUsageResponse>('get_storage_usage');
+}
+
+export function cleanupStorage(request: CleanupStorageRequest) {
+  return invokeCommand<CleanupStorageResponse>('cleanup_storage', { request });
+}
+
+export function getStartupHealth() {
+  return invokeCommand<StartupHealthResponse>('get_startup_health');
+}
+
+export function getAppSetting(key: string) {
+  return invokeCommand<AppSettingValue>('get_app_setting', { key });
+}
+
+export function setAppSetting(key: string, value: string) {
+  return invokeCommand<AppSettingValue>('set_app_setting', { request: { key, value } });
 }
 
 export function emitAppReady() {
@@ -136,6 +162,10 @@ export function getModelConfig(id = 'model-default') {
 
 export function saveModelConfig(request: SaveModelConfigRequest) {
   return invokeCommand<ModelConfigView>('save_model_config', { request });
+}
+
+export function testModelConnection(id = 'model-default') {
+  return invokeCommand<ModelConnectionTestResult>('test_model_connection', { id });
 }
 
 export function listPendingApprovals() {

@@ -1,4 +1,5 @@
 import {
+  Activity,
   Archive,
   ArrowLeft,
   Bot,
@@ -13,21 +14,38 @@ import {
   Monitor,
   Palette,
   Plug,
+  RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
   TerminalSquare,
+  Trash2,
   Workflow,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { getModelConfig, getStorageRoots, saveModelConfig, type StorageRootsResponse } from '@/api/tauriClient';
+import {
+  cleanupStorage,
+  getModelConfig,
+  getStartupHealth,
+  getStorageRoots,
+  getStorageUsage,
+  saveModelConfig,
+  testModelConnection,
+  type StorageRootsResponse,
+} from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
 import { settingsDefaults } from '@/features/tasks/taskDefaults';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
-import type { ModelConfigView } from '@/types/domain';
+import type {
+  CleanupStorageResponse,
+  ModelConfigView,
+  ModelConnectionTestResult,
+  StartupHealthResponse,
+  StorageUsageResponse,
+} from '@/types/domain';
 
 type SettingsCategory =
   | 'general'
@@ -190,10 +208,74 @@ function SettingsPaneHeader({ titleKey, bodyKey }: { titleKey: string; bodyKey: 
 
 function GeneralSettings() {
   const locale = useAppStore((state) => state.locale);
+  const [health, setHealth] = useState<StartupHealthResponse | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getStartupHealth()
+      .then((result) => {
+        if (!cancelled) {
+          setHealth(result);
+          setHealthError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setHealthError(readErrorMessage(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
       <SettingsPaneHeader titleKey="settings.general.title" bodyKey="settings.general.body" />
+
+      <section className="settings-block">
+        <div className="settings-block-heading">
+          <h4>{t('settings.health.title', locale)}</h4>
+          <p>{t('settings.health.body', locale)}</p>
+        </div>
+        <div className="settings-diagnostic-list">
+          {healthError ? (
+            <section className="settings-line-section vertical">
+              <strong>{t('settings.health.error', locale)}</strong>
+              <code>{healthError}</code>
+            </section>
+          ) : null}
+          {health ? (
+            <>
+              <section className="settings-line-section">
+                <span>
+                  <strong>{t('settings.health.overall', locale)}</strong>
+                </span>
+                <StatusPill status={health.status} label={t(`settings.health.status.${health.status}`, locale)} />
+              </section>
+              {health.items.map((item) => (
+                <section className="settings-line-section" key={item.key}>
+                  <span>
+                    <strong>{t(`settings.health.item.${item.key}`, locale)}</strong>
+                    <small>{t(item.messageKey, locale)}</small>
+                    {item.detail ? <code>{item.detail}</code> : null}
+                  </span>
+                  <StatusPill status={item.status} label={t(`settings.health.status.${item.status}`, locale)} />
+                </section>
+              ))}
+            </>
+          ) : (
+            <section className="settings-line-section">
+              <span>
+                <strong>{t('settings.health.loading', locale)}</strong>
+              </span>
+            </section>
+          )}
+        </div>
+      </section>
 
       <section className="settings-block">
         <div className="settings-block-heading">
@@ -262,6 +344,8 @@ function ModelSettings() {
   const [savedConfig, setSavedConfig] = useState<ModelConfigView | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'loading' | 'saving' | 'saved' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+  const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'tested' | 'error'>('idle');
+  const [connectionResult, setConnectionResult] = useState<ModelConnectionTestResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,6 +396,21 @@ function ModelSettings() {
       setStatusMessage(t('settings.models.saved', locale));
     } catch (error) {
       setSaveState('error');
+      setStatusMessage(readErrorMessage(error));
+    }
+  }
+
+  async function handleTestConnection() {
+    setConnectionState('testing');
+    setConnectionResult(null);
+    setStatusMessage('');
+
+    try {
+      const result = await testModelConnection(savedConfig?.id ?? DEFAULT_MODEL_CONFIG_ID);
+      setConnectionResult(result);
+      setConnectionState('tested');
+    } catch (error) {
+      setConnectionState('error');
       setStatusMessage(readErrorMessage(error));
     }
   }
@@ -381,8 +480,40 @@ function ModelSettings() {
           <Button type="submit" size="sm" disabled={saveState === 'saving' || saveState === 'loading'}>
             {saveState === 'saving' ? t('settings.models.saving', locale) : t('settings.models.save', locale)}
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={saveState === 'saving' || saveState === 'loading' || connectionState === 'testing'}
+            onClick={handleTestConnection}
+          >
+            <Plug className="h-4 w-4" aria-hidden="true" />
+            {connectionState === 'testing'
+              ? t('settings.models.testingConnection', locale)
+              : t('settings.models.testConnection', locale)}
+          </Button>
           <span role="status">{statusMessage}</span>
         </div>
+        {connectionResult ? (
+          <section className="settings-line-section vertical model-connection-result">
+            <strong>{t('settings.models.connectionResult', locale)}</strong>
+            <div className="settings-diagnostic-list compact">
+              <section className="settings-line-section">
+                <span>
+                  <small>{t(connectionResult.messageKey, locale)}</small>
+                  <small>
+                    {connectionResult.provider} / {connectionResult.modelName}
+                    {connectionResult.baseUrlHost ? ` / ${connectionResult.baseUrlHost}` : ''}
+                  </small>
+                </span>
+                <StatusPill
+                  status={connectionResult.status}
+                  label={t(`settings.health.status.${connectionResult.status}`, locale)}
+                />
+              </section>
+            </div>
+          </section>
+        ) : null}
       </form>
       <div className="settings-section-list model-provider-list">
         {settingsDefaults.models.map((model, index) => (
@@ -456,21 +587,28 @@ function ModeSettings() {
 function StorageSettings() {
   const locale = useAppStore((state) => state.locale);
   const [roots, setRoots] = useState<StorageRootsResponse | null>(null);
+  const [usage, setUsage] = useState<StorageUsageResponse | null>(null);
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupStorageResponse | null>(null);
   const [rootsError, setRootsError] = useState<string | null>(null);
+  const [storageState, setStorageState] = useState<'idle' | 'loading' | 'cleaning'>('idle');
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadRoots() {
       try {
-        const result = await getStorageRoots();
+        setStorageState('loading');
+        const [result, usageResult] = await Promise.all([getStorageRoots(), getStorageUsage()]);
         if (!cancelled) {
           setRoots(result);
+          setUsage(usageResult);
           setRootsError(null);
+          setStorageState('idle');
         }
       } catch (error) {
         if (!cancelled) {
           setRootsError(readErrorMessage(error));
+          setStorageState('idle');
         }
       }
     }
@@ -482,9 +620,80 @@ function StorageSettings() {
     };
   }, []);
 
+  async function refreshUsage() {
+    setStorageState('loading');
+    setRootsError(null);
+    try {
+      const [result, usageResult] = await Promise.all([getStorageRoots(), getStorageUsage()]);
+      setRoots(result);
+      setUsage(usageResult);
+    } catch (error) {
+      setRootsError(readErrorMessage(error));
+    } finally {
+      setStorageState('idle');
+    }
+  }
+
+  async function previewCleanup() {
+    setStorageState('loading');
+    setRootsError(null);
+    try {
+      const result = await cleanupStorage({
+        logs: true,
+        screenshots: true,
+        temporaryContext: true,
+        dryRun: true,
+      });
+      setCleanupPreview(result);
+    } catch (error) {
+      setRootsError(readErrorMessage(error));
+    } finally {
+      setStorageState('idle');
+    }
+  }
+
+  async function runCleanup() {
+    const confirmed = window.confirm(t('settings.storage.cleanupConfirm', locale));
+    if (!confirmed) {
+      return;
+    }
+
+    setStorageState('cleaning');
+    setRootsError(null);
+    try {
+      const result = await cleanupStorage({
+        logs: true,
+        screenshots: true,
+        temporaryContext: true,
+        dryRun: false,
+      });
+      setCleanupPreview(result);
+      const usageResult = await getStorageUsage();
+      setUsage(usageResult);
+    } catch (error) {
+      setRootsError(readErrorMessage(error));
+    } finally {
+      setStorageState('idle');
+    }
+  }
+
   return (
     <>
       <SettingsPaneHeader titleKey="settings.storage.title" bodyKey="settings.storage.body" />
+      <div className="settings-form-actions storage-actions">
+        <Button type="button" size="sm" variant="secondary" disabled={storageState === 'loading'} onClick={refreshUsage}>
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          {t('settings.storage.refreshUsage', locale)}
+        </Button>
+        <Button type="button" size="sm" variant="secondary" disabled={storageState !== 'idle'} onClick={previewCleanup}>
+          <Activity className="h-4 w-4" aria-hidden="true" />
+          {t('settings.storage.previewCleanup', locale)}
+        </Button>
+        <Button type="button" size="sm" disabled={storageState !== 'idle'} onClick={runCleanup}>
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
+          {storageState === 'cleaning' ? t('settings.storage.cleaning', locale) : t('settings.storage.runCleanup', locale)}
+        </Button>
+      </div>
       <div className="settings-section-list">
         {rootsError ? (
           <section className="settings-line-section vertical">
@@ -507,6 +716,36 @@ function StorageSettings() {
         <section className="settings-line-section vertical">
           <strong>{t('settings.storage.worktreeRoot', locale)}</strong>
           <code>{roots?.worktreeRoot ?? t('settings.storage.loading', locale)}</code>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.storage.usageTitle', locale)}</strong>
+          <div className="settings-usage-grid">
+            <UsageMetric labelKey="settings.storage.databaseBytes" value={usage?.databaseBytes} />
+            <UsageMetric labelKey="settings.storage.worktreeBytes" value={usage?.worktreeBytes} />
+            <UsageMetric labelKey="settings.storage.logsBytes" value={usage?.logsBytes} />
+            <UsageMetric labelKey="settings.storage.screenshotsBytes" value={usage?.screenshotsBytes} />
+            <UsageMetric labelKey="settings.storage.contextBytes" value={usage?.temporaryContextBytes} />
+            <UsageMetric labelKey="settings.storage.permanentEvidenceBytes" value={usage?.permanentEvidenceBytes} />
+            <UsageMetric labelKey="settings.storage.totalBytes" value={usage?.totalBytes} />
+          </div>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.storage.cleanupTitle', locale)}</strong>
+          <small>{t('settings.storage.cleanupBody', locale)}</small>
+          {cleanupPreview ? (
+            <div className="settings-cleanup-result">
+              <span>
+                {cleanupPreview.dryRun
+                  ? t('settings.storage.cleanupPreviewResult', locale)
+                  : t('settings.storage.cleanupResult', locale)}
+              </span>
+              <strong>{formatBytes(cleanupPreview.deletedBytes)}</strong>
+              <small>
+                {cleanupPreview.deletedFiles} {t('settings.storage.files', locale)} /{' '}
+                {t('settings.storage.protectedEvidence', locale)} {formatBytes(cleanupPreview.protectedBytes)}
+              </small>
+            </div>
+          ) : null}
         </section>
         <PolicyLine titleKey="settings.storage.recentMessages" value={`${settingsDefaults.recentMessages}`} />
         <PolicyLine titleKey="settings.storage.logs" value={`${settingsDefaults.logRetentionDays}d`} />
@@ -655,6 +894,38 @@ function PolicyLine({ titleKey, valueKey, value }: { titleKey: string; valueKey?
       <em>{value ?? (valueKey ? t(valueKey, locale) : '')}</em>
     </section>
   );
+}
+
+function UsageMetric({ labelKey, value }: { labelKey: string; value?: number }) {
+  const locale = useAppStore((state) => state.locale);
+
+  return (
+    <span className="settings-byte-value">
+      <small>{t(labelKey, locale)}</small>
+      <strong>{typeof value === 'number' ? formatBytes(value) : t('settings.storage.loading', locale)}</strong>
+    </span>
+  );
+}
+
+function StatusPill({ status, label }: { status: string; label: string }) {
+  return <em className={cn('settings-status-pill', `status-${status}`)}>{label}</em>;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 function MessageBubbleIcon() {

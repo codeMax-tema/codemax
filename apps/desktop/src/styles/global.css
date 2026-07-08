@@ -4164,6 +4164,102 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.settings-diagnostic-list {
+  overflow: hidden;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.settings-diagnostic-list.compact {
+  width: 100%;
+}
+
+.settings-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-status-pill.status-ready {
+  background: #e9f7ef;
+  color: #197151;
+}
+
+.settings-status-pill.status-warning,
+.settings-status-pill.status-degraded {
+  background: #fff7d6;
+  color: #7c5a00;
+}
+
+.settings-status-pill.status-blocked {
+  background: #fff0f0;
+  color: #a33a3a;
+}
+
+.settings-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.settings-byte-value {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #eeeeef;
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 10px;
+}
+
+.settings-byte-value small,
+.settings-byte-value strong {
+  margin: 0;
+}
+
+.settings-byte-value strong {
+  overflow-wrap: anywhere;
+  color: #20242b;
+  font-size: 14px;
+}
+
+.settings-cleanup-result {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid #eeeeef;
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 10px;
+}
+
+.settings-cleanup-result span {
+  color: #73737c;
+  font-size: 12px;
+}
+
+.settings-cleanup-result strong {
+  color: #20242b;
+  font-size: 18px;
+}
+
+.storage-actions {
+  justify-content: flex-start;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  margin-bottom: 18px;
+}
+
+.model-connection-result {
+  border-top: 1px solid #eeeeef;
+}
+
 .approval-center-page {
   display: grid;
   gap: 18px;

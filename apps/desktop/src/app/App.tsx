@@ -64,6 +64,7 @@ export function App() {
   const setCurrentRoute = useAppStore((state) => state.setCurrentRoute);
   const setSelectedTaskId = useAppStore((state) => state.setSelectedTaskId);
   const setNewTaskDialogOpen = useAppStore((state) => state.setNewTaskDialogOpen);
+  const hydratePreferences = useAppStore((state) => state.hydratePreferences);
   const newTaskDialogOpen = useAppStore((state) => state.newTaskDialogOpen);
   const theme = useAppStore((state) => state.theme);
   const compactMode = useAppStore((state) => state.compactMode);
@@ -71,6 +72,10 @@ export function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | TaskStatus>('all');
   const [taskListError, setTaskListError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void hydratePreferences();
+  }, [hydratePreferences]);
 
   useEffect(() => {
     let cancelled = false;

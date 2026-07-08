@@ -101,6 +101,10 @@ for (const marker of [
   'api-key-input',
   'api-key-preview',
   'secret-storage-location',
+  'testModelConnection',
+  'getStorageUsage',
+  'cleanupStorage',
+  'getStartupHealth',
 ]) {
   assertIncludes('SettingsPage.tsx', settings, marker);
 }
@@ -129,12 +133,31 @@ for (const marker of [
   'record_quality_gate_result',
   'overrideQualityGate',
   'override_quality_gate',
+  'test_model_connection',
+  'get_storage_usage',
+  'cleanup_storage',
+  'get_startup_health',
+  'get_app_setting',
+  'set_app_setting',
   'ApprovalSummary',
   'ModelConfigView',
+  'ModelConnectionTestResult',
+  'StorageUsageResponse',
+  'StartupHealthResponse',
   'GeneratedTaskProofPack',
   'QualityGateRecord',
 ]) {
   assertIncludes('tauriClient.ts', tauriClient, marker);
+}
+
+for (const marker of [
+  'hydratePreferences',
+  'ui.locale',
+  'ui.theme',
+  'ui.compactMode',
+  'ui.highContrastMode',
+]) {
+  assertIncludes('appStore.ts', store, marker);
 }
 
 for (const marker of [
@@ -162,6 +185,11 @@ for (const marker of [
   '.settings-form-field',
   '.model-secret-form',
   '.secret-storage-location',
+  '.settings-diagnostic-list',
+  '.settings-status-pill',
+  '.settings-usage-grid',
+  '.settings-cleanup-result',
+  '.settings-byte-value',
   '.permission-toggle',
   '.model-option',
   '.approval-center-page',
@@ -203,6 +231,10 @@ for (const key of [
   'settings.models.apiKey',
   'settings.models.apiKeyPreview',
   'settings.models.secretStorage',
+  'settings.models.testConnection',
+  'settings.storage.usageTitle',
+  'settings.storage.cleanupTitle',
+  'settings.health.title',
   'approvals.approve',
   'approvals.reject',
   'approvals.revise',

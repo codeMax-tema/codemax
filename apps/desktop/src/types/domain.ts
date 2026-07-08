@@ -301,6 +301,11 @@ export interface LogCleanupResult {
   cleanupDisabled: boolean;
 }
 
+export interface AppSettingValue {
+  key: string;
+  value?: string | null;
+}
+
 export interface ModelConfigView {
   id: string;
   provider: string;
@@ -312,6 +317,61 @@ export interface ModelConfigView {
   secretLocation?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ModelConnectionTestResult {
+  status: 'ready' | 'warning' | 'blocked';
+  provider: string;
+  modelName: string;
+  baseUrlHost?: string | null;
+  latencyMs: number;
+  messageKey: string;
+  detail?: string | null;
+}
+
+export interface StorageUsageResponse {
+  appDataDir: string;
+  databasePath: string;
+  artifactRoot: string;
+  worktreeRoot: string;
+  databaseBytes: number;
+  artifactBytes: number;
+  worktreeBytes: number;
+  logsBytes: number;
+  screenshotsBytes: number;
+  temporaryContextBytes: number;
+  permanentEvidenceBytes: number;
+  totalBytes: number;
+}
+
+export interface CleanupStorageRequest {
+  logs: boolean;
+  screenshots: boolean;
+  temporaryContext: boolean;
+  dryRun: boolean;
+}
+
+export interface CleanupStorageResponse {
+  dryRun: boolean;
+  scannedFiles: number;
+  deletedFiles: number;
+  deletedBytes: number;
+  protectedBytes: number;
+}
+
+export type StartupHealthStatus = 'ready' | 'degraded' | 'blocked';
+export type StartupHealthItemStatus = 'ready' | 'warning' | 'blocked';
+
+export interface StartupHealthItem {
+  key: string;
+  status: StartupHealthItemStatus;
+  messageKey: string;
+  detail?: string | null;
+}
+
+export interface StartupHealthResponse {
+  status: StartupHealthStatus;
+  items: StartupHealthItem[];
 }
 
 export type AgentTaskPhase =
