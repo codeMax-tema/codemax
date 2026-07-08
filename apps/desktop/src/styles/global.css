@@ -4542,6 +4542,84 @@ button:disabled {
   line-height: 1.45;
 }
 
+.s12-review-status-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.s12-review-status-strip span {
+  min-width: 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 9px;
+  color: #73737c;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.s12-review-status-strip strong {
+  display: block;
+  margin-top: 3px;
+  color: #20242b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.s12-review-status-strip.is-passed strong {
+  color: #197151;
+}
+
+.s12-review-status-strip.is-warning strong {
+  color: #8a5b00;
+}
+
+.s12-review-status-strip.is-blocked strong {
+  color: #a33a3a;
+}
+
+.s12-review-blockers {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #f1d0d0;
+  border-radius: 9px;
+  background: #fffafa;
+  padding: 10px;
+}
+
+.s12-review-blockers strong {
+  color: #7f1d1d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.s12-review-blockers > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.s12-review-blockers span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid #f1d0d0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 8px;
+  color: #7f1d1d;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.s12-review-blockers svg {
+  flex: 0 0 auto;
+}
+
 .s12-highlight-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) 150px minmax(0, 1fr) minmax(0, 1fr);
@@ -4643,9 +4721,11 @@ button:disabled {
   border: 1px solid #e4e4e7;
   border-radius: 8px;
   background: #ffffff;
-  padding: 0 8px;
+  padding: 6px 8px;
   color: #20242b;
   font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .s12-status-pill em,
@@ -4737,6 +4817,7 @@ button:disabled {
   .settings-form-field,
   .codex-model-drawer,
   .codex-contract-grid,
+  .s12-review-status-strip,
   .s12-highlight-grid,
   .s12-secondary-grid,
   .approval-detail-grid,

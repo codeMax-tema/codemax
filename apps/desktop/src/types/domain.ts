@@ -157,6 +157,16 @@ export interface QualityGateOverrideResult {
   reason: string;
 }
 
+export type DeliveryReviewStatus = 'passed' | 'warning' | 'blocked';
+export type ProofPackStatus = 'generated' | 'missing';
+
+export interface RiskFinding {
+  kind: string;
+  level: RiskLevel;
+  subject: string;
+  reason: string;
+}
+
 export interface TaskProofPackScore {
   value: number;
   grade: string;
@@ -176,6 +186,80 @@ export interface GeneratedTaskProofPack {
   risks: TaskProofPackRisk[];
 }
 
+export interface QualityGateResultState {
+  status: DeliveryReviewStatus;
+  gates: TaskProofPackGate[];
+  blockers: string[];
+}
+
+export interface DeliveryScoreState {
+  value: number;
+  grade: string;
+  testScore: number;
+  riskScore: number;
+  diffScore: number;
+  approvalScore: number;
+  explanation: string;
+  riskLevel: RiskLevel;
+  createdAt?: string | null;
+}
+
+export interface TaskCapsuleState {
+  taskId: string;
+  changedFiles: string[];
+  commandCount: number;
+  diffPath?: string | null;
+  deliveryPath?: string | null;
+  manifestPath?: string | null;
+  summaryPath?: string | null;
+  capsulePath?: string | null;
+}
+
+export interface RuleHitState {
+  id: string;
+  rule: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+}
+
+export interface HookRunState {
+  id: string;
+  hook: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+}
+
+export interface ModelArenaDecisionState {
+  status: string;
+  selectedModel?: string | null;
+  reason: string;
+}
+
+export interface DeliveryReviewState {
+  taskId: string;
+  taskStatus: TaskStatus | string;
+  status: DeliveryReviewStatus;
+  canMerge: boolean;
+  blockers: string[];
+  validationStatus: DeliveryReportStatus | 'cancelled' | 'timedOut';
+  diffFileCount: number;
+  approvalBlocked: boolean;
+  highestRiskLevel: RiskLevel;
+  proofPackStatus: ProofPackStatus;
+  proofPackId?: string | null;
+  proofPackPath?: string | null;
+  qualityGateResult: QualityGateResultState;
+  deliveryScore: DeliveryScoreState;
+  riskRecords: RiskFinding[];
+  taskCapsule: TaskCapsuleState;
+  ruleHits: RuleHitState[];
+  hookRuns: HookRunState[];
+  modelArenaDecision: ModelArenaDecisionState;
+  updatedAt: string;
+}
+
 export interface GeneratedTaskDelivery {
   taskId: string;
   artifactId: string;
@@ -185,6 +269,10 @@ export interface GeneratedTaskDelivery {
   summary: string;
   commitMessage: string;
   report: TaskDeliveryReport;
+  qualityGateResult: QualityGateResultState;
+  deliveryScore: DeliveryScoreState;
+  proofPackPath?: string | null;
+  deliveryReviewState: DeliveryReviewState;
 }
 
 export type TaskMergeResultStatus = 'merged' | 'conflicted';
@@ -559,6 +647,7 @@ export interface TaskDetail {
   timeline: AgentTimelineEvent[];
   validationRounds: TaskValidationRound[];
   mergeRecords: TaskMergeRecord[];
+  deliveryReviewState: DeliveryReviewState;
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';

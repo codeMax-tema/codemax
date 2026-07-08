@@ -11,6 +11,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
+    commands::s12_evidence::{DeliveryReviewState, DeliveryScoreState, QualityGateResultState},
     core::error::{AppResult, CommandError},
     storage::{
         AgentEventRepository, ArtifactRecord, ArtifactRepository, CommandRunRecord,
@@ -36,6 +37,10 @@ pub struct GeneratedTaskDelivery {
     pub summary: String,
     pub commit_message: String,
     pub report: TaskDeliveryReport,
+    pub quality_gate_result: QualityGateResultState,
+    pub delivery_score: DeliveryScoreState,
+    pub proof_pack_path: Option<String>,
+    pub delivery_review_state: DeliveryReviewState,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,7 +152,7 @@ pub(crate) fn generate_task_delivery_inner(
         &summary,
         &commit_message,
     )?;
-    record_delivery_artifact(
+    let delivery_review_state = record_delivery_artifact(
         storage,
         &task.id,
         &artifact_id,
@@ -159,6 +164,9 @@ pub(crate) fn generate_task_delivery_inner(
         &commit_message,
         &report.overall_status,
     )?;
+    let quality_gate_result = delivery_review_state.quality_gate_result.clone();
+    let delivery_score = delivery_review_state.delivery_score.clone();
+    let proof_pack_path = delivery_review_state.proof_pack_path.clone();
 
     Ok(GeneratedTaskDelivery {
         task_id: task.id,
@@ -169,6 +177,10 @@ pub(crate) fn generate_task_delivery_inner(
         summary,
         commit_message,
         report,
+        quality_gate_result,
+        delivery_score,
+        proof_pack_path,
+        delivery_review_state,
     })
 }
 
@@ -225,10 +237,7 @@ fn changed_files_from_artifacts(artifact: Option<&ArtifactRecord>) -> Vec<String
 fn latest_validation_runs(runs: Vec<CommandRunRecord>) -> Vec<CommandRunRecord> {
     let mut latest: Vec<CommandRunRecord> = Vec::new();
 
-    for run in runs
-        .into_iter()
-        .filter(|run| run.purpose == "validation")
-    {
+    for run in runs.into_iter().filter(|run| run.purpose == "validation") {
         let command = run.command.clone();
         let cwd = run.cwd.clone();
         if let Some(index) = latest
@@ -389,7 +398,7 @@ fn record_delivery_artifact(
     summary: &str,
     commit_message: &str,
     overall_status: &str,
-) -> AppResult<()> {
+) -> AppResult<DeliveryReviewState> {
     let changed_files = serde_json::to_string(changed_files).map_err(json_error)?;
     let report_size = file_size(Path::new(report_path)).map_err(storage_error)?;
     let delivery_size = file_size(Path::new(delivery_path)).map_err(storage_error)?;
@@ -436,36 +445,32 @@ fn record_delivery_artifact(
             expires_at: None,
         })
         .map_err(storage_error)?;
-    TaskRepository::new(store.connection())
-        .update_status(
+    drop(artifacts);
+    drop(store);
+    let review_state =
+        crate::commands::s12_evidence::refresh_task_delivery_review_status(storage, task_id)?;
+    {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        record_agent_event_with_connection(
+            store.connection(),
             task_id,
-            if overall_status == "passed" {
-                "readyToMerge"
-            } else {
-                "awaitingReview"
-            },
-            None,
-        )
-        .map_err(storage_error)?;
-    record_agent_event_with_connection(
-        store.connection(),
-        task_id,
-        "delivery.ready",
-        if overall_status == "passed" {
-            "readyToMerge"
-        } else {
-            "awaitingReview"
-        },
-        "Delivery report was generated from task evidence.",
-        json!({
-            "artifact_id": artifact_id,
-            "report_path": report_path,
-            "delivery_path": delivery_path,
-            "overall_status": overall_status,
-        }),
-    )?;
+            "delivery.ready",
+            &review_state.task_status,
+            "Delivery report was generated from task evidence.",
+            json!({
+                "artifact_id": artifact_id,
+                "report_path": report_path,
+                "delivery_path": delivery_path,
+                "overall_status": overall_status,
+                "quality_gate_result": &review_state.quality_gate_result,
+                "delivery_score": &review_state.delivery_score,
+                "proof_pack_path": &review_state.proof_pack_path,
+                "delivery_review_state": &review_state,
+            }),
+        )?;
+    }
 
-    Ok(())
+    Ok(review_state)
 }
 
 fn file_size(path: &Path) -> std::io::Result<u64> {

@@ -6,6 +6,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
+    commands::s12_evidence::DeliveryReviewState,
     core::error::{AppResult, CommandError},
     git::{self, GitError},
     storage::{
@@ -89,6 +90,7 @@ pub struct TaskDetailView {
     pub timeline: Vec<AgentEventView>,
     pub validation_rounds: Vec<ValidationRoundView>,
     pub merge_records: Vec<MergeRecordView>,
+    pub delivery_review_state: DeliveryReviewState,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,7 +240,8 @@ pub(crate) fn create_task_record_inner(
     storage: &ManagedStorage,
     request: CreateTaskRecordRequest,
 ) -> AppResult<TaskSummaryView> {
-    let repository = git::validate_repository(request.repository_path.trim()).map_err(task_git_error)?;
+    let repository =
+        git::validate_repository(request.repository_path.trim()).map_err(task_git_error)?;
     let repository_id = repository_id(&repository.path);
     let description = require_non_empty(request.description.trim(), "task.descriptionRequired")?;
     let title = request
@@ -428,6 +431,9 @@ pub fn get_task_detail(
         .into_iter()
         .map(MergeRecordView::from)
         .collect();
+    drop(store);
+    let delivery_review_state =
+        crate::commands::s12_evidence::delivery_review_state_for_task(&storage, task_id)?;
 
     Ok(TaskDetailView {
         task,
@@ -440,6 +446,7 @@ pub fn get_task_detail(
         timeline,
         validation_rounds,
         merge_records,
+        delivery_review_state,
     })
 }
 
@@ -650,7 +657,10 @@ fn is_validation_command_run(run: &CommandRunRecord) -> bool {
 }
 
 fn latest_diff_summary(artifacts: &[ArtifactRecord]) -> String {
-    let Some(artifact) = artifacts.iter().rev().find(|artifact| artifact.diff_path.is_some())
+    let Some(artifact) = artifacts
+        .iter()
+        .rev()
+        .find(|artifact| artifact.diff_path.is_some())
     else {
         return String::new();
     };
@@ -676,14 +686,23 @@ fn latest_merge_preview(
     worktree_path: Option<&str>,
     records: &[MergeRecord],
 ) -> Option<MergePreviewView> {
-    records.last().map(|record| MergePreviewView {
-        target_branch: record.target_branch.clone(),
-        source_branch: Some(record.source_branch.clone()),
-        status: record.status.clone(),
-        can_merge: false,
-        blockers: vec![format!("latest merge status: {}", record.status)],
-        record_path: record.record_path.clone(),
-    }).or_else(|| Some(default_merge_preview(target_branch, task_branch, worktree_path)))
+    records
+        .last()
+        .map(|record| MergePreviewView {
+            target_branch: record.target_branch.clone(),
+            source_branch: Some(record.source_branch.clone()),
+            status: record.status.clone(),
+            can_merge: false,
+            blockers: vec![format!("latest merge status: {}", record.status)],
+            record_path: record.record_path.clone(),
+        })
+        .or_else(|| {
+            Some(default_merge_preview(
+                target_branch,
+                task_branch,
+                worktree_path,
+            ))
+        })
 }
 
 fn default_merge_preview(
@@ -1001,7 +1020,9 @@ mod a_line_tests {
             Path::new(&summary.repository_path)
                 .canonicalize()
                 .expect("canonical summary path"),
-            repository.canonicalize().expect("canonical repository path")
+            repository
+                .canonicalize()
+                .expect("canonical repository path")
         );
         assert!(summary
             .worktree_path
@@ -1129,7 +1150,10 @@ fn normalize_task_type(task_type: Option<&str>) -> AppResult<String> {
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_TASK_TYPE);
 
-    if matches!(task_type, "bugfix" | "test" | "refactor" | "explain" | "custom") {
+    if matches!(
+        task_type,
+        "bugfix" | "test" | "refactor" | "explain" | "custom"
+    ) {
         return Ok(task_type.to_string());
     }
 

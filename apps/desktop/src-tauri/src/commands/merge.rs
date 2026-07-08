@@ -123,14 +123,10 @@ pub(crate) fn merge_task_inner(
             target_branch: request.target_branch,
         },
     )?;
-    let mut blockers = merge_blockers(
-        prepared.target_dirty,
-        &prepared.validation_status,
-        prepared.diff_file_count,
-        &commit_message,
+    let mut blockers = merge_blockers(prepared.target_dirty, &commit_message);
+    blockers.extend(
+        crate::commands::s12_evidence::delivery_review_blockers_for_task(storage, &task_id)?,
     );
-    blockers
-        .extend(crate::commands::s12_evidence::quality_gate_blockers_for_task(storage, &task_id)?);
     if !blockers.is_empty() {
         return Err(CommandError::new(
             "merge.precheckFailed",
@@ -278,14 +274,10 @@ pub(crate) fn prepare_task_merge_inner(
         latest_diff_artifact(&artifacts).and_then(|artifact| artifact.diff_path.clone());
     let commit_message =
         latest_commit_message(&artifacts).unwrap_or_else(|| fallback_commit_message(&task));
-    let mut blockers = merge_blockers(
-        target_dirty,
-        &validation_status,
-        diff.files.len(),
-        &commit_message,
+    let mut blockers = merge_blockers(target_dirty, &commit_message);
+    blockers.extend(
+        crate::commands::s12_evidence::delivery_review_blockers_for_task(storage, &task_id)?,
     );
-    blockers
-        .extend(crate::commands::s12_evidence::quality_gate_blockers_for_task(storage, &task_id)?);
 
     Ok(PreparedTaskMerge {
         task_id: task.id,
@@ -361,22 +353,11 @@ fn validation_summary(status: &str, run_count: usize) -> String {
     }
 }
 
-fn merge_blockers(
-    target_dirty: bool,
-    validation_status: &str,
-    diff_file_count: usize,
-    commit_message: &str,
-) -> Vec<String> {
+fn merge_blockers(target_dirty: bool, commit_message: &str) -> Vec<String> {
     let mut blockers = Vec::new();
 
     if target_dirty {
         blockers.push("target branch has uncommitted changes".to_string());
-    }
-    if validation_status != "passed" {
-        blockers.push("validation has not passed".to_string());
-    }
-    if diff_file_count == 0 {
-        blockers.push("final diff is empty".to_string());
     }
     if commit_message.trim().is_empty() {
         blockers.push("commit message is required".to_string());
@@ -775,14 +756,14 @@ mod tests {
 
     #[test]
     fn merge_blockers_protect_dirty_targets_and_unverified_tasks() {
-        let blockers = merge_blockers(true, "failed", 2, "feat: merge task");
+        let blockers = merge_blockers(true, "");
 
         assert!(blockers.iter().any(|blocker| blocker.contains("target")));
         assert!(blockers
             .iter()
-            .any(|blocker| blocker.contains("validation")));
+            .any(|blocker| blocker.contains("commit message")));
 
-        assert!(merge_blockers(false, "passed", 2, "feat: merge task").is_empty());
+        assert!(merge_blockers(false, "feat: merge task").is_empty());
     }
 
     fn temp_path(label: &str) -> PathBuf {

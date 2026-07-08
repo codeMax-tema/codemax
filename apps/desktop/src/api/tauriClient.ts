@@ -14,6 +14,7 @@ import type {
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
+  DeliveryReviewState,
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
@@ -337,6 +338,14 @@ export interface GenerateTaskProofPackRequest {
 
 export function generateTaskProofPack(request: GenerateTaskProofPackRequest) {
   return invokeCommand<GeneratedTaskProofPack>('generate_task_proof_pack', { request });
+}
+
+export interface GetDeliveryReviewStateRequest {
+  taskId: string;
+}
+
+export function getDeliveryReviewState(request: GetDeliveryReviewStateRequest) {
+  return invokeCommand<DeliveryReviewState>('get_delivery_review_state', { request });
 }
 
 export interface RecordQualityGateRequest {

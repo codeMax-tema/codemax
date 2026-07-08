@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -14,8 +14,9 @@ use uuid::Uuid;
 use crate::{
     core::error::{AppResult, CommandError},
     storage::{
-        ApprovalRepository, ArtifactRepository, CommandRunRepository, ManagedStorage,
-        NewArtifactFile, StorageError, TaskRepository,
+        ApprovalRepository, ArtifactFileRecord, ArtifactRecord, ArtifactRepository,
+        CommandRunRecord, CommandRunRepository, ManagedStorage, NewArtifactFile, StorageError,
+        TaskRecord, TaskRepository,
     },
 };
 
@@ -74,6 +75,12 @@ pub struct OverrideQualityGateRequest {
     pub reason: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDeliveryReviewStateRequest {
+    pub task_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityGateRecord {
@@ -94,6 +101,94 @@ pub struct QualityGateOverrideResult {
     pub gate_type: String,
     pub overridden_count: usize,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityGateResultState {
+    pub status: String,
+    pub gates: Vec<TaskProofPackGate>,
+    pub blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryScoreState {
+    pub value: u8,
+    pub grade: String,
+    pub test_score: u8,
+    pub risk_score: u8,
+    pub diff_score: u8,
+    pub approval_score: u8,
+    pub explanation: String,
+    pub risk_level: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCapsuleState {
+    pub task_id: String,
+    pub changed_files: Vec<String>,
+    pub command_count: usize,
+    pub diff_path: Option<String>,
+    pub delivery_path: Option<String>,
+    pub manifest_path: Option<String>,
+    pub summary_path: Option<String>,
+    pub capsule_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleHitState {
+    pub id: String,
+    pub rule: String,
+    pub status: String,
+    pub message: String,
+    pub evidence_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookRunState {
+    pub id: String,
+    pub hook: String,
+    pub status: String,
+    pub message: String,
+    pub evidence_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelArenaDecisionState {
+    pub status: String,
+    pub selected_model: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryReviewState {
+    pub task_id: String,
+    pub task_status: String,
+    pub status: String,
+    pub can_merge: bool,
+    pub blockers: Vec<String>,
+    pub validation_status: String,
+    pub diff_file_count: usize,
+    pub approval_blocked: bool,
+    pub highest_risk_level: String,
+    pub proof_pack_status: String,
+    pub proof_pack_id: Option<String>,
+    pub proof_pack_path: Option<String>,
+    pub quality_gate_result: QualityGateResultState,
+    pub delivery_score: DeliveryScoreState,
+    pub risk_records: Vec<RiskFinding>,
+    pub task_capsule: TaskCapsuleState,
+    pub rule_hits: Vec<RuleHitState>,
+    pub hook_runs: Vec<HookRunState>,
+    pub model_arena_decision: ModelArenaDecisionState,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,6 +275,48 @@ struct ProofPackManifest {
     quality_gate_blockers: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct QualityGateRow {
+    id: String,
+    gate_type: String,
+    status: String,
+    message: String,
+    evidence_path: Option<String>,
+    override_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ProofPackRow {
+    id: String,
+    proof_dir: String,
+    delivery_score: u8,
+    risk_level: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct DeliveryScoreRow {
+    score: u8,
+    test_score: u8,
+    risk_score: u8,
+    diff_score: u8,
+    approval_score: u8,
+    explanation: String,
+    created_at: String,
+}
+
+#[derive(Debug)]
+struct DeliveryReviewSnapshot {
+    task: TaskRecord,
+    commands: Vec<CommandRunRecord>,
+    artifacts: Vec<ArtifactRecord>,
+    artifact_files: Vec<ArtifactFileRecord>,
+    approvals_blocked: bool,
+    quality_gates: Vec<QualityGateRow>,
+    proof_pack: Option<ProofPackRow>,
+    delivery_score: Option<DeliveryScoreRow>,
+}
+
 #[tauri::command]
 pub fn generate_task_proof_pack(
     storage: State<'_, ManagedStorage>,
@@ -202,6 +339,57 @@ pub fn override_quality_gate(
     request: OverrideQualityGateRequest,
 ) -> AppResult<QualityGateOverrideResult> {
     override_quality_gate_inner(&storage, request)
+}
+
+#[tauri::command]
+pub fn get_delivery_review_state(
+    storage: State<'_, ManagedStorage>,
+    request: GetDeliveryReviewStateRequest,
+) -> AppResult<DeliveryReviewState> {
+    let task_id = required_text(
+        request.task_id,
+        "deliveryReview.taskIdRequired",
+        "Task id is required.",
+    )?;
+
+    delivery_review_state_for_task(&storage, &task_id)
+}
+
+pub(crate) fn delivery_review_state_for_task(
+    storage: &ManagedStorage,
+    task_id: &str,
+) -> AppResult<DeliveryReviewState> {
+    let snapshot = load_delivery_review_snapshot(storage, task_id)?;
+    Ok(build_delivery_review_state(snapshot))
+}
+
+pub(crate) fn delivery_review_blockers_for_task(
+    storage: &ManagedStorage,
+    task_id: &str,
+) -> AppResult<Vec<String>> {
+    delivery_review_state_for_task(storage, task_id).map(|state| state.blockers)
+}
+
+pub(crate) fn refresh_task_delivery_review_status(
+    storage: &ManagedStorage,
+    task_id: &str,
+) -> AppResult<DeliveryReviewState> {
+    let mut state = delivery_review_state_for_task(storage, task_id)?;
+    let next_status = if state.can_merge {
+        "readyToMerge"
+    } else {
+        "awaitingReview"
+    };
+
+    if should_update_review_status(&state.task_status) && state.task_status != next_status {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        TaskRepository::new(store.connection())
+            .update_status(task_id, next_status, None)
+            .map_err(storage_error)?;
+        state.task_status = next_status.to_string();
+    }
+
+    Ok(state)
 }
 
 pub(crate) fn generate_task_proof_pack_inner(
@@ -274,6 +462,7 @@ pub(crate) fn generate_task_proof_pack_inner(
         &capsule_path,
         &delivery_score,
     )?;
+    let _review_state = refresh_task_delivery_review_status(storage, &task_id)?;
 
     Ok(GeneratedTaskProofPack {
         task_id: task_id.clone(),
@@ -350,6 +539,8 @@ pub(crate) fn record_quality_gate_result_inner(
             ],
         )
         .map_err(storage_error)?;
+    drop(store);
+    let _review_state = refresh_task_delivery_review_status(storage, &task_id)?;
 
     Ok(QualityGateRecord {
         id,
@@ -399,6 +590,8 @@ pub(crate) fn override_quality_gate_inner(
             params![task_id, gate_type, reason],
         )
         .map_err(storage_error)?;
+    drop(store);
+    let _review_state = refresh_task_delivery_review_status(storage, &task_id)?;
 
     Ok(QualityGateOverrideResult {
         task_id,
@@ -503,6 +696,499 @@ pub(crate) fn scan_risks(commands: &[String], changed_files: &[String]) -> Vec<R
         }
     }
     findings
+}
+
+fn load_delivery_review_snapshot(
+    storage: &ManagedStorage,
+    task_id: &str,
+) -> AppResult<DeliveryReviewSnapshot> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+    let task = TaskRepository::new(connection)
+        .get_required(task_id)
+        .map_err(storage_error)?;
+    let commands = CommandRunRepository::new(connection)
+        .list_for_task(task_id)
+        .map_err(storage_error)?;
+    let artifacts = ArtifactRepository::new(connection)
+        .artifacts_for_task(task_id)
+        .map_err(storage_error)?;
+    let artifact_files = ArtifactRepository::new(connection)
+        .files_for_task(task_id)
+        .map_err(storage_error)?;
+    let approvals_blocked = ApprovalRepository::new(connection)
+        .list_for_task(task_id)
+        .map_err(storage_error)?
+        .into_iter()
+        .any(|approval| approval.decision.as_deref() != Some("approved"));
+    let quality_gates = load_quality_gate_rows(connection, task_id)?;
+    let proof_pack = load_latest_proof_pack(connection, task_id)?;
+    let delivery_score = load_latest_delivery_score(connection, task_id)?;
+
+    Ok(DeliveryReviewSnapshot {
+        task,
+        commands,
+        artifacts,
+        artifact_files,
+        approvals_blocked,
+        quality_gates,
+        proof_pack,
+        delivery_score,
+    })
+}
+
+fn build_delivery_review_state(snapshot: DeliveryReviewSnapshot) -> DeliveryReviewState {
+    let task_id = snapshot.task.id.clone();
+    let latest_artifact = latest_delivery_artifact(&snapshot.artifacts);
+    let changed_files = latest_artifact
+        .map(|artifact| changed_files_from_json(&artifact.changed_files))
+        .unwrap_or_default();
+    let commands = snapshot
+        .commands
+        .iter()
+        .map(|run| run.command.clone())
+        .collect::<Vec<_>>();
+    let validation_status = validation_status_from_runs(&snapshot.commands);
+    let diff_path = latest_artifact.and_then(|artifact| artifact.diff_path.clone());
+    let delivery_path = latest_artifact.and_then(|artifact| artifact.test_report_path.clone());
+    let risk_records = scan_risks(&commands, &changed_files);
+    let highest_risk_level = highest_risk_level(&risk_records);
+    let manual_gate_blockers = quality_gate_blockers_from_rows(&snapshot.quality_gates);
+    let proof_pack_path = snapshot
+        .proof_pack
+        .as_ref()
+        .map(|proof_pack| proof_pack.proof_dir.clone());
+    let proof_pack_status = if proof_pack_path.is_some() {
+        "generated"
+    } else {
+        "missing"
+    };
+    let manifest_path = artifact_file_path(&snapshot.artifact_files, "proof_manifest");
+    let summary_path = artifact_file_path(&snapshot.artifact_files, "proof_summary");
+    let capsule_path = artifact_file_path(&snapshot.artifact_files, "task_capsule");
+    let mut blockers = Vec::new();
+
+    if validation_status != "passed" {
+        blockers.push(format!("validation status is {validation_status}"));
+    }
+    if changed_files.is_empty() {
+        blockers.push("final diff is empty".to_string());
+    }
+    if proof_pack_path.is_none() {
+        blockers.push("proof pack has not been generated".to_string());
+    }
+    if snapshot.approvals_blocked {
+        blockers.push("approval is not approved".to_string());
+    }
+    if risk_records.iter().any(|finding| finding.level == "high") {
+        blockers.push("high risk finding requires review".to_string());
+    }
+    blockers.extend(manual_gate_blockers.clone());
+
+    let status = if blockers.is_empty() {
+        "passed"
+    } else if validation_status == "passed" && proof_pack_path.is_some() {
+        "warning"
+    } else {
+        "blocked"
+    };
+    let quality_gate_result = QualityGateResultState {
+        status: status.to_string(),
+        gates: build_quality_gates(
+            &validation_status,
+            !changed_files.is_empty() && proof_pack_path.is_some(),
+            snapshot.approvals_blocked,
+            &manual_gate_blockers,
+        ),
+        blockers: manual_gate_blockers,
+    };
+    let delivery_score = delivery_score_state(
+        snapshot.delivery_score.as_ref(),
+        snapshot.proof_pack.as_ref(),
+        &validation_status,
+        &highest_risk_level,
+        changed_files.len(),
+        snapshot.approvals_blocked,
+        delivery_path.is_some(),
+    );
+    let rule_hits = build_rule_hits(
+        &validation_status,
+        !changed_files.is_empty(),
+        proof_pack_path.as_deref(),
+        &risk_records,
+        &snapshot.quality_gates,
+    );
+    let hook_runs = build_hook_runs(
+        &snapshot.commands,
+        &validation_status,
+        proof_pack_path.as_deref(),
+    );
+    let model_arena_decision = ModelArenaDecisionState {
+        status: "placeholder".to_string(),
+        selected_model: snapshot.task.model_id.clone(),
+        reason: "Model Arena decision is reserved for D integration and exposed as stable state."
+            .to_string(),
+    };
+
+    DeliveryReviewState {
+        task_id: task_id.clone(),
+        task_status: snapshot.task.status,
+        status: status.to_string(),
+        can_merge: blockers.is_empty(),
+        blockers,
+        validation_status,
+        diff_file_count: changed_files.len(),
+        approval_blocked: snapshot.approvals_blocked,
+        highest_risk_level,
+        proof_pack_status: proof_pack_status.to_string(),
+        proof_pack_id: snapshot
+            .proof_pack
+            .as_ref()
+            .map(|proof_pack| proof_pack.id.clone()),
+        proof_pack_path,
+        quality_gate_result,
+        delivery_score,
+        risk_records,
+        task_capsule: TaskCapsuleState {
+            task_id,
+            changed_files,
+            command_count: snapshot.commands.len(),
+            diff_path,
+            delivery_path,
+            manifest_path,
+            summary_path,
+            capsule_path,
+        },
+        rule_hits,
+        hook_runs,
+        model_arena_decision,
+        updated_at: now_text(),
+    }
+}
+
+fn load_quality_gate_rows(
+    connection: &Connection,
+    task_id: &str,
+) -> AppResult<Vec<QualityGateRow>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, gate_type, status, message, evidence_path, override_reason
+             FROM quality_gate_results
+             WHERE task_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![task_id], |row| {
+            Ok(QualityGateRow {
+                id: row.get(0)?,
+                gate_type: row.get(1)?,
+                status: row.get(2)?,
+                message: row.get(3)?,
+                evidence_path: row.get(4)?,
+                override_reason: row.get(5)?,
+            })
+        })
+        .map_err(storage_error)?;
+    let mut gates = Vec::new();
+    for row in rows {
+        gates.push(row.map_err(storage_error)?);
+    }
+    Ok(gates)
+}
+
+fn load_latest_proof_pack(
+    connection: &Connection,
+    task_id: &str,
+) -> AppResult<Option<ProofPackRow>> {
+    connection
+        .query_row(
+            "SELECT id, proof_dir, delivery_score, risk_level, created_at
+             FROM proof_packs
+             WHERE task_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            params![task_id],
+            |row| {
+                let delivery_score: i64 = row.get(2)?;
+                Ok(ProofPackRow {
+                    id: row.get(0)?,
+                    proof_dir: row.get(1)?,
+                    delivery_score: clamp_score(delivery_score),
+                    risk_level: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(storage_error)
+}
+
+fn load_latest_delivery_score(
+    connection: &Connection,
+    task_id: &str,
+) -> AppResult<Option<DeliveryScoreRow>> {
+    connection
+        .query_row(
+            "SELECT score, test_score, risk_score, diff_score, approval_score, explanation, created_at
+             FROM delivery_scores
+             WHERE task_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            params![task_id],
+            |row| {
+                let score: i64 = row.get(0)?;
+                let test_score: i64 = row.get(1)?;
+                let risk_score: i64 = row.get(2)?;
+                let diff_score: i64 = row.get(3)?;
+                let approval_score: i64 = row.get(4)?;
+                Ok(DeliveryScoreRow {
+                    score: clamp_score(score),
+                    test_score: clamp_score(test_score),
+                    risk_score: clamp_score(risk_score),
+                    diff_score: clamp_score(diff_score),
+                    approval_score: clamp_score(approval_score),
+                    explanation: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(storage_error)
+}
+
+fn quality_gate_blockers_from_rows(rows: &[QualityGateRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.status != "passed" && row.override_reason.is_none())
+        .map(|row| {
+            format!(
+                "quality gate {} is {}: {}",
+                row.gate_type, row.status, row.message
+            )
+        })
+        .collect()
+}
+
+fn delivery_score_state(
+    persisted: Option<&DeliveryScoreRow>,
+    proof_pack: Option<&ProofPackRow>,
+    validation_status: &str,
+    risk_level: &str,
+    diff_file_count: usize,
+    approval_blocked: bool,
+    has_delivery_summary: bool,
+) -> DeliveryScoreState {
+    if let Some(score) = persisted {
+        return DeliveryScoreState {
+            value: score.score,
+            grade: delivery_grade(score.score).to_string(),
+            test_score: score.test_score,
+            risk_score: score.risk_score,
+            diff_score: score.diff_score,
+            approval_score: score.approval_score,
+            explanation: score.explanation.clone(),
+            risk_level: proof_pack
+                .map(|proof_pack| proof_pack.risk_level.clone())
+                .unwrap_or_else(|| risk_level.to_string()),
+            created_at: Some(score.created_at.clone()),
+        };
+    }
+
+    if let Some(proof_pack) = proof_pack {
+        return DeliveryScoreState {
+            value: proof_pack.delivery_score,
+            grade: delivery_grade(proof_pack.delivery_score).to_string(),
+            test_score: 0,
+            risk_score: 0,
+            diff_score: 0,
+            approval_score: 0,
+            explanation: "Score was loaded from the latest proof pack index.".to_string(),
+            risk_level: proof_pack.risk_level.clone(),
+            created_at: Some(proof_pack.created_at.clone()),
+        };
+    }
+
+    let calculated = calculate_delivery_score(ScoreInput {
+        validation_status: validation_status.to_string(),
+        risk_level: risk_level.to_string(),
+        diff_file_count,
+        approval_blocked,
+        has_delivery_summary,
+    });
+    DeliveryScoreState {
+        value: calculated.score,
+        grade: delivery_grade(calculated.score).to_string(),
+        test_score: calculated.test_score,
+        risk_score: calculated.risk_score,
+        diff_score: calculated.diff_score,
+        approval_score: calculated.approval_score,
+        explanation: calculated.explanation,
+        risk_level: calculated.risk_level,
+        created_at: None,
+    }
+}
+
+fn build_rule_hits(
+    validation_status: &str,
+    has_diff: bool,
+    proof_pack_path: Option<&str>,
+    risks: &[RiskFinding],
+    quality_gates: &[QualityGateRow],
+) -> Vec<RuleHitState> {
+    let mut hits = vec![
+        RuleHitState {
+            id: "rule-validation".to_string(),
+            rule: "validation_must_pass".to_string(),
+            status: if validation_status == "passed" {
+                "passed"
+            } else {
+                "blocked"
+            }
+            .to_string(),
+            message: format!("validation status is {validation_status}"),
+            evidence_path: None,
+        },
+        RuleHitState {
+            id: "rule-diff".to_string(),
+            rule: "final_diff_required".to_string(),
+            status: if has_diff { "passed" } else { "blocked" }.to_string(),
+            message: if has_diff {
+                "final diff is recorded".to_string()
+            } else {
+                "final diff is empty".to_string()
+            },
+            evidence_path: None,
+        },
+        RuleHitState {
+            id: "rule-proof-pack".to_string(),
+            rule: "proof_pack_required".to_string(),
+            status: if proof_pack_path.is_some() {
+                "passed"
+            } else {
+                "blocked"
+            }
+            .to_string(),
+            message: proof_pack_path
+                .map(|path| format!("proof pack generated at {path}"))
+                .unwrap_or_else(|| "proof pack has not been generated".to_string()),
+            evidence_path: proof_pack_path.map(ToOwned::to_owned),
+        },
+        RuleHitState {
+            id: "rule-risk".to_string(),
+            rule: "high_risk_requires_review".to_string(),
+            status: if risks.iter().any(|risk| risk.level == "high") {
+                "blocked"
+            } else if risks.iter().any(|risk| risk.level == "medium") {
+                "warning"
+            } else {
+                "passed"
+            }
+            .to_string(),
+            message: format!("{} risk finding(s) detected", risks.len()),
+            evidence_path: None,
+        },
+    ];
+
+    hits.extend(quality_gates.iter().map(|gate| {
+        RuleHitState {
+            id: format!("rule-quality-{}", gate.id),
+            rule: format!("manual_quality_gate:{}", gate.gate_type),
+            status: if gate.override_reason.is_some() {
+                "warning".to_string()
+            } else {
+                gate.status.clone()
+            },
+            message: gate
+                .override_reason
+                .as_ref()
+                .map(|reason| format!("{} (override: {reason})", gate.message))
+                .unwrap_or_else(|| gate.message.clone()),
+            evidence_path: gate.evidence_path.clone(),
+        }
+    }));
+    hits
+}
+
+fn build_hook_runs(
+    commands: &[CommandRunRecord],
+    validation_status: &str,
+    proof_pack_path: Option<&str>,
+) -> Vec<HookRunState> {
+    let validation_count = commands
+        .iter()
+        .filter(|run| run.purpose == "validation")
+        .count();
+    vec![
+        HookRunState {
+            id: "hook-validation-cycle".to_string(),
+            hook: "validation_cycle".to_string(),
+            status: validation_status.to_string(),
+            message: format!("{validation_count} validation command(s) recorded"),
+            evidence_path: commands
+                .iter()
+                .rev()
+                .find(|run| run.purpose == "validation")
+                .and_then(|run| run.stdout_path.clone()),
+        },
+        HookRunState {
+            id: "hook-proof-pack".to_string(),
+            hook: "proof_pack_generator".to_string(),
+            status: if proof_pack_path.is_some() {
+                "passed"
+            } else {
+                "notRun"
+            }
+            .to_string(),
+            message: proof_pack_path
+                .map(|path| format!("Proof Pack is indexed at {path}"))
+                .unwrap_or_else(|| "Proof Pack generator has not produced evidence".to_string()),
+            evidence_path: proof_pack_path.map(ToOwned::to_owned),
+        },
+    ]
+}
+
+fn latest_delivery_artifact(artifacts: &[ArtifactRecord]) -> Option<&ArtifactRecord> {
+    artifacts
+        .iter()
+        .rev()
+        .find(|artifact| artifact.diff_path.is_some() || artifact.test_report_path.is_some())
+}
+
+fn artifact_file_path(files: &[ArtifactFileRecord], file_type: &str) -> Option<String> {
+    files
+        .iter()
+        .rev()
+        .find(|file| file.file_type == file_type)
+        .map(|file| file.path.clone())
+}
+
+fn validation_status_from_runs(runs: &[CommandRunRecord]) -> String {
+    let validation_runs = runs
+        .iter()
+        .filter(|run| run.purpose == "validation")
+        .collect::<Vec<_>>();
+    if validation_runs.is_empty() {
+        return "notRun".to_string();
+    }
+    if validation_runs
+        .iter()
+        .all(|run| run.status == "passed" && run.exit_code.unwrap_or(0) == 0)
+    {
+        "passed".to_string()
+    } else {
+        "failed".to_string()
+    }
+}
+
+fn should_update_review_status(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "awaitingReview" | "readyToMerge" | "validating" | "repairing"
+    )
+}
+
+fn clamp_score(value: i64) -> u8 {
+    value.clamp(0, 100) as u8
 }
 
 pub(crate) fn quality_gate_blockers_for_task(
@@ -998,6 +1684,41 @@ mod tests {
     }
 
     #[test]
+    fn delivery_review_blocks_ready_to_merge_until_proof_pack_exists() {
+        let (storage, root) = proof_pack_storage();
+        seed_proof_task(&storage);
+
+        let blocked = refresh_task_delivery_review_status(&storage, "task-s12-proof")
+            .expect("refresh delivery review before proof pack");
+        assert!(!blocked.can_merge);
+        assert_eq!(blocked.proof_pack_status, "missing");
+        assert!(blocked
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("proof pack")));
+        assert_eq!(task_status(&storage, "task-s12-proof"), "awaitingReview");
+
+        let _proof_pack = generate_task_proof_pack_inner(
+            &storage,
+            GenerateTaskProofPackRequest {
+                task_id: "task-s12-proof".to_string(),
+            },
+        )
+        .expect("generate proof pack");
+
+        let passed = delivery_review_state_for_task(&storage, "task-s12-proof")
+            .expect("read delivery review after proof pack");
+        assert!(passed.can_merge);
+        assert_eq!(passed.proof_pack_status, "generated");
+        assert!(passed.blockers.is_empty());
+        assert_eq!(task_status(&storage, "task-s12-proof"), "readyToMerge");
+
+        if root.exists() {
+            fs::remove_dir_all(root).expect("clean proof test root");
+        }
+    }
+
+    #[test]
     fn failed_quality_gate_blocks_until_override_reason_is_recorded() {
         let (storage, root) = proof_pack_storage();
         seed_proof_task(&storage);
@@ -1111,5 +1832,13 @@ mod tests {
             .connection()
             .query_row("SELECT COUNT(*) FROM delivery_scores", [], |row| row.get(0))
             .expect("count delivery scores")
+    }
+
+    fn task_status(storage: &ManagedStorage, task_id: &str) -> String {
+        let store = storage.store.lock().expect("lock storage");
+        TaskRepository::new(store.connection())
+            .get_required(task_id)
+            .expect("read task")
+            .status
     }
 }

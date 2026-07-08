@@ -61,11 +61,15 @@ import type {
   AgentValidationCycleResult,
   CommandLogPage,
   CommandOutputStream,
+  DeliveryReviewState,
+  DeliveryScoreState,
   PreparedTaskMerge,
+  RiskLevel,
   TaskCommandRun,
   TaskDetail,
   TaskDiffFile,
   TaskMergeCommandResult,
+  TaskProofPackScore,
   TaskValidationRunSummary,
 } from '@/types/domain';
 
@@ -75,6 +79,14 @@ const largeDiffLineThreshold = 420;
 const largeDiffCharThreshold = 32000;
 const commandLogPageBytes = 32 * 1024;
 type CommandRunLike = TaskValidationRunSummary | TaskCommandRun;
+type VisibleDeliveryScore = TaskProofPackScore | DeliveryScoreState;
+type VisibleRiskItem = {
+  id: string;
+  titleKey: string;
+  summaryKey?: string;
+  level: RiskLevel;
+  label?: string;
+};
 
 export function TaskOverviewPage() {
   const locale = useAppStore((state) => state.locale);
@@ -108,6 +120,21 @@ export function TaskOverviewPage() {
   const visibleDiff = generatedDiff;
   const visibleDelivery = generatedDelivery;
   const visibleProofPack = generatedProofPack;
+  const visibleReview = taskDetail?.deliveryReviewState ?? visibleDelivery?.deliveryReviewState ?? null;
+  const visibleProofPackPath = visibleReview?.proofPackPath ?? visibleProofPack?.proofPackPath ?? null;
+  const visibleProofPackId = visibleReview?.proofPackId ?? visibleProofPack?.artifactId ?? null;
+  const visibleProofPackStatus = visibleReview?.proofPackStatus ?? (visibleProofPack ? 'generated' : 'missing');
+  const visibleDeliveryScore: VisibleDeliveryScore | null = visibleReview?.deliveryScore ?? visibleProofPack?.deliveryScore ?? null;
+  const visibleQualityGates = visibleReview?.qualityGateResult.gates ?? visibleProofPack?.qualityGates ?? [];
+  const visibleRiskItems: VisibleRiskItem[] = visibleReview
+    ? visibleReview.riskRecords.map((risk, index) => ({
+      id: `review-risk-${index + 1}`,
+      titleKey: risk.kind,
+      summaryKey: risk.reason,
+      level: risk.level,
+      label: risk.subject || risk.kind,
+    }))
+    : visibleProofPack?.risks ?? [];
   const visibleMerge = preparedMerge;
   const taskRecord = taskDetail?.task ?? null;
   const visibleCommandRuns = taskDetail?.commandRuns ?? visibleDelivery?.report.runs ?? [];
@@ -253,6 +280,7 @@ export function TaskOverviewPage() {
       setGeneratedDelivery(result);
       setPreparedMerge(null);
       setMergeResult(null);
+      await refreshSelectedTaskDetail(taskId);
     } catch (error) {
       if (selectedTaskIdRef.current === taskId) {
         setDeliveryError(normalizeDiffError(error));
@@ -279,6 +307,7 @@ export function TaskOverviewPage() {
         return;
       }
       setGeneratedProofPack(result);
+      await refreshSelectedTaskDetail(taskId);
     } catch (error) {
       if (selectedTaskIdRef.current === taskId) {
         setProofPackError(normalizeDiffError(error));
@@ -837,7 +866,7 @@ export function TaskOverviewPage() {
           <div className="s12-highlight-heading">
             <div>
               <span>{t('tasks.s12.title', locale)}</span>
-              <p>{visibleProofPack ? t(visibleProofPack.summaryKey, locale) : t('tasks.s12.empty', locale)}</p>
+              <p>{formatDeliveryReviewSummary(visibleReview, visibleProofPack?.summaryKey, locale)}</p>
             </div>
             <Button type="button" size="sm" variant="secondary" onClick={handleGenerateProofPack}>
               <PackageCheck className={cn('h-3.5 w-3.5', isProofPackLoading && 'diff-spin')} aria-hidden="true" />
@@ -852,14 +881,47 @@ export function TaskOverviewPage() {
             </div>
           ) : null}
 
+          <div className={cn('s12-review-status-strip', `is-${visibleReview?.status ?? 'blocked'}`)}>
+            <span>
+              {t('tasks.s12.reviewState', locale)}{' '}
+              <strong>{t(`tasks.s12.reviewStatus.${visibleReview?.status ?? 'blocked'}`, locale)}</strong>
+            </span>
+            <span>
+              {t('tasks.s12.proofPack.status', locale)}{' '}
+              <strong>{t(`tasks.s12.proofPackStatus.${visibleProofPackStatus}`, locale)}</strong>
+            </span>
+            <span>
+              {t('tasks.execution.mergeEvidence', locale)}{' '}
+              <strong>{visibleReview?.diffFileCount ?? visibleDiff?.files.length ?? 0} {t('tasks.execution.mergeFiles', locale)}</strong>
+            </span>
+            <span>
+              {t('tasks.execution.mergeValidation', locale)}{' '}
+              <strong>{t(`tasks.execution.deliveryStatus.${visibleReview?.validationStatus ?? deliveryStatus}`, locale)}</strong>
+            </span>
+          </div>
+
+          {visibleReview?.blockers.length ? (
+            <div className="s12-review-blockers" role="status">
+              <strong>{t('tasks.s12.blockers', locale)}</strong>
+              <div>
+                {visibleReview.blockers.map((blocker) => (
+                  <span key={blocker}>
+                    <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                    {formatDeliveryReviewBlocker(blocker, locale)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="s12-highlight-grid">
             <article className="s12-proof-pack">
               <header>
                 <PackageCheck className="h-4 w-4" aria-hidden="true" />
                 <span>{t('tasks.s12.proofPack.title', locale)}</span>
               </header>
-              <code>{visibleProofPack?.proofPackPath ?? '-'}</code>
-              <small>{visibleProofPack?.artifactId ?? t('tasks.s12.empty', locale)}</small>
+              <code>{visibleProofPackPath ?? '-'}</code>
+              <small>{visibleProofPackId ?? t(`tasks.s12.proofPackStatus.${visibleProofPackStatus}`, locale)}</small>
             </article>
 
             <article className="s12-delivery-score">
@@ -867,13 +929,13 @@ export function TaskOverviewPage() {
                 <Gauge className="h-4 w-4" aria-hidden="true" />
                 <span>{t('tasks.s12.deliveryScore.title', locale)}</span>
               </header>
-              {visibleProofPack ? (
+              {visibleDeliveryScore ? (
                 <>
                   <strong>
-                    {visibleProofPack.deliveryScore.value}
-                    <small>{visibleProofPack.deliveryScore.grade}</small>
+                    {visibleDeliveryScore.value}
+                    <small>{visibleDeliveryScore.grade}</small>
                   </strong>
-                  <p>{t(visibleProofPack.deliveryScore.summaryKey, locale)}</p>
+                  <p>{formatDeliveryScoreSummary(visibleDeliveryScore, locale)}</p>
                 </>
               ) : (
                 <p>{t('tasks.s12.empty', locale)}</p>
@@ -886,7 +948,7 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.qualityGate.title', locale)}</span>
               </header>
               <div className="s12-check-list">
-                {visibleProofPack ? visibleProofPack.qualityGates.map((gate) => (
+                {visibleQualityGates.length ? visibleQualityGates.map((gate) => (
                   <span key={gate.id} className={cn('s12-status-pill', `is-${gate.status}`)}>
                     {t(gate.titleKey, locale)}
                     <em>{t(`tasks.s12.status.${gate.status}`, locale)}</em>
@@ -901,9 +963,9 @@ export function TaskOverviewPage() {
                 <span>{t('tasks.s12.riskRadar.title', locale)}</span>
               </header>
               <div className="s12-risk-list">
-                {visibleProofPack ? visibleProofPack.risks.map((risk) => (
+                {visibleRiskItems.length ? visibleRiskItems.map((risk) => (
                   <span key={risk.id} className={cn('s12-risk-pill', `risk-${risk.level}`)}>
-                    {t(risk.titleKey, locale)}
+                    {formatRiskTitle(risk, locale)}
                     <em>{t(`approvals.risk.${risk.level}`, locale)}</em>
                   </span>
                 )) : <span>{t('tasks.s12.empty', locale)}</span>}
@@ -1449,6 +1511,62 @@ function formatTaskStatus(status: string, locale: Locale) {
   const statusKey = `status.${status}`;
   const label = t(statusKey, locale);
   return label === statusKey ? status : label;
+}
+
+function formatDeliveryReviewSummary(
+  review: DeliveryReviewState | null,
+  proofPackSummaryKey: string | undefined,
+  locale: Locale,
+) {
+  if (review) {
+    const status = t(`tasks.s12.reviewStatus.${review.status}`, locale);
+    const proofStatus = t(`tasks.s12.proofPackStatus.${review.proofPackStatus}`, locale);
+    return `${status} / ${proofStatus} / ${review.blockers.length} ${t('tasks.s12.blockerCount', locale)}`;
+  }
+
+  return proofPackSummaryKey ? t(proofPackSummaryKey, locale) : t('tasks.s12.empty', locale);
+}
+
+function formatDeliveryScoreSummary(score: VisibleDeliveryScore, locale: Locale) {
+  if ('summaryKey' in score) {
+    return t(score.summaryKey, locale);
+  }
+
+  return score.explanation || t('tasks.s12.deliveryScore.summary', locale);
+}
+
+function formatRiskTitle(risk: VisibleRiskItem, locale: Locale) {
+  if (risk.label) {
+    return risk.summaryKey ? `${risk.label}: ${risk.summaryKey}` : risk.label;
+  }
+
+  const label = t(risk.titleKey, locale);
+  return label === risk.titleKey ? risk.titleKey : label;
+}
+
+function formatDeliveryReviewBlocker(blocker: string, locale: Locale) {
+  const normalized = blocker.toLowerCase();
+
+  if (normalized.includes('validation')) {
+    return t('tasks.s12.blocker.validation', locale);
+  }
+  if (normalized.includes('diff')) {
+    return t('tasks.s12.blocker.diff', locale);
+  }
+  if (normalized.includes('proof pack')) {
+    return t('tasks.s12.blocker.proofPack', locale);
+  }
+  if (normalized.includes('approval')) {
+    return t('tasks.s12.blocker.approval', locale);
+  }
+  if (normalized.includes('high risk')) {
+    return t('tasks.s12.blocker.highRisk', locale);
+  }
+  if (normalized.includes('quality gate')) {
+    return t('tasks.s12.blocker.qualityGate', locale);
+  }
+
+  return blocker;
 }
 
 function formatMergeBlocker(blocker: string, locale: Locale) {

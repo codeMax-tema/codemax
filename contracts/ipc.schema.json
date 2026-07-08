@@ -360,6 +360,18 @@
           },
           "required": ["request", "response"]
         },
+        "generate_task_delivery": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/GeneratedTaskDelivery"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "generate_task_proof_pack": {
           "type": "object",
           "properties": {
@@ -368,6 +380,18 @@
             },
             "response": {
               "$ref": "#/$defs/GeneratedTaskProofPack"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_delivery_review_state": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/DeliveryReviewState"
             }
           },
           "required": ["request", "response"]
@@ -428,7 +452,9 @@
         "advance_agent_task",
         "submit_agent_validation_result",
         "run_agent_validation_cycle",
+        "generate_task_delivery",
         "generate_task_proof_pack",
+        "get_delivery_review_state",
         "record_quality_gate_result",
         "override_quality_gate"
       ]
@@ -812,6 +838,9 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "deliveryReviewState": {
+          "$ref": "#/$defs/DeliveryReviewState"
         }
       },
       "required": [
@@ -824,7 +853,8 @@
         "agentSession",
         "timeline",
         "validationRounds",
-        "mergeRecords"
+        "mergeRecords",
+        "deliveryReviewState"
       ]
     },
     "AgentTaskCreateRequest": {
@@ -1484,6 +1514,63 @@
       },
       "required": ["taskId"]
     },
+    "GeneratedTaskDelivery": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "artifactId": {
+          "type": "string"
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "deliveryPath": {
+          "type": "string"
+        },
+        "diffPath": {
+          "type": ["string", "null"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "report": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "qualityGateResult": {
+          "$ref": "#/$defs/QualityGateResultState"
+        },
+        "deliveryScore": {
+          "$ref": "#/$defs/DeliveryScoreState"
+        },
+        "proofPackPath": {
+          "type": ["string", "null"]
+        },
+        "deliveryReviewState": {
+          "$ref": "#/$defs/DeliveryReviewState"
+        }
+      },
+      "required": [
+        "taskId",
+        "artifactId",
+        "reportPath",
+        "deliveryPath",
+        "diffPath",
+        "summary",
+        "commitMessage",
+        "report",
+        "qualityGateResult",
+        "deliveryScore",
+        "proofPackPath",
+        "deliveryReviewState"
+      ],
+      "additionalProperties": true
+    },
     "GeneratedTaskProofPack": {
       "type": "object",
       "properties": {
@@ -1546,6 +1633,189 @@
         "screenshots",
         "qualityGates",
         "risks"
+      ],
+      "additionalProperties": true
+    },
+    "QualityGateResultState": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["status", "gates", "blockers"],
+      "additionalProperties": true
+    },
+    "DeliveryScoreState": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "grade": {
+          "type": "string"
+        },
+        "testScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "riskScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "diffScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "approvalScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "riskLevel": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "value",
+        "grade",
+        "testScore",
+        "riskScore",
+        "diffScore",
+        "approvalScore",
+        "explanation",
+        "riskLevel",
+        "createdAt"
+      ],
+      "additionalProperties": true
+    },
+    "DeliveryReviewState": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "taskStatus": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "canMerge": {
+          "type": "boolean"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validationStatus": {
+          "type": "string"
+        },
+        "diffFileCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approvalBlocked": {
+          "type": "boolean"
+        },
+        "highestRiskLevel": {
+          "type": "string"
+        },
+        "proofPackStatus": {
+          "type": "string"
+        },
+        "proofPackId": {
+          "type": ["string", "null"]
+        },
+        "proofPackPath": {
+          "type": ["string", "null"]
+        },
+        "qualityGateResult": {
+          "$ref": "#/$defs/QualityGateResultState"
+        },
+        "deliveryScore": {
+          "$ref": "#/$defs/DeliveryScoreState"
+        },
+        "riskRecords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "taskCapsule": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "ruleHits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "hookRuns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "modelArenaDecision": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "taskStatus",
+        "status",
+        "canMerge",
+        "blockers",
+        "validationStatus",
+        "diffFileCount",
+        "approvalBlocked",
+        "highestRiskLevel",
+        "proofPackStatus",
+        "proofPackId",
+        "proofPackPath",
+        "qualityGateResult",
+        "deliveryScore",
+        "riskRecords",
+        "taskCapsule",
+        "ruleHits",
+        "hookRuns",
+        "modelArenaDecision",
+        "updatedAt"
       ],
       "additionalProperties": true
     },

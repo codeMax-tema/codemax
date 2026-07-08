@@ -63,6 +63,7 @@ pub fn run() {
             commands::repository::get_repository_current_branch,
             commands::repository::get_repository_dirty_status,
             commands::s12_evidence::generate_task_proof_pack,
+            commands::s12_evidence::get_delivery_review_state,
             commands::s12_evidence::record_quality_gate_result,
             commands::s12_evidence::override_quality_gate,
             commands::tasks::create_task_record,
