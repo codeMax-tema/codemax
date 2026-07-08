@@ -122,12 +122,14 @@ pub(crate) fn merge_task_inner(
             target_branch: request.target_branch,
         },
     )?;
-    let blockers = merge_blockers(
+    let mut blockers = merge_blockers(
         prepared.target_dirty,
         &prepared.validation_status,
         prepared.diff_file_count,
         &commit_message,
     );
+    blockers
+        .extend(crate::commands::s12_evidence::quality_gate_blockers_for_task(storage, &task_id)?);
     if !blockers.is_empty() {
         return Err(CommandError::new(
             "merge.precheckFailed",
@@ -233,12 +235,14 @@ pub(crate) fn prepare_task_merge_inner(
         latest_diff_artifact(&artifacts).and_then(|artifact| artifact.diff_path.clone());
     let commit_message =
         latest_commit_message(&artifacts).unwrap_or_else(|| fallback_commit_message(&task));
-    let blockers = merge_blockers(
+    let mut blockers = merge_blockers(
         target_dirty,
         &validation_status,
         diff.files.len(),
         &commit_message,
     );
+    blockers
+        .extend(crate::commands::s12_evidence::quality_gate_blockers_for_task(storage, &task_id)?);
 
     Ok(PreparedTaskMerge {
         task_id: task.id,

@@ -299,6 +299,42 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "generate_task_proof_pack": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/GenerateTaskProofPackRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/GeneratedTaskProofPack"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "record_quality_gate_result": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordQualityGateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/QualityGateRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "override_quality_gate": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/OverrideQualityGateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/QualityGateOverrideResult"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
       "required": [
@@ -326,7 +362,10 @@
         "get_agent_task_state",
         "advance_agent_task",
         "submit_agent_validation_result",
-        "run_agent_validation_cycle"
+        "run_agent_validation_cycle",
+        "generate_task_proof_pack",
+        "record_quality_gate_result",
+        "override_quality_gate"
       ]
     }
   },
@@ -1120,6 +1159,124 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "GenerateTaskProofPackRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId"]
+    },
+    "GeneratedTaskProofPack": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "artifactId": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "proofPackPath": {
+          "type": "string"
+        },
+        "summaryKey": {
+          "type": "string"
+        },
+        "deliveryScore": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "screenshots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "qualityGates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "taskId",
+        "artifactId",
+        "generatedAt",
+        "proofPackPath",
+        "summaryKey",
+        "deliveryScore",
+        "proposals",
+        "screenshots",
+        "qualityGates",
+        "risks"
+      ],
+      "additionalProperties": true
+    },
+    "RecordQualityGateRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "gateType": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId", "gateType", "status", "message"]
+    },
+    "OverrideQualityGateRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "gateType": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "gateType", "reason"]
+    },
+    "QualityGateRecord": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "QualityGateOverrideResult": {
+      "type": "object",
+      "additionalProperties": true
     }
   }
 }

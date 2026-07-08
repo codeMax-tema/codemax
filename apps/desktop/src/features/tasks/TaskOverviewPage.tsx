@@ -8,26 +8,38 @@ import {
   ClipboardCheck,
   Code2,
   Command,
+  Camera,
   FileCode2,
   FileText,
   FolderOpen,
+  Gauge,
   GitBranch,
   GitMerge,
   Github,
   Laptop,
+  Layers3,
   ListFilter,
   Minus,
   MoreHorizontal,
+  PackageCheck,
   PanelRight,
   Plus,
+  Radar,
   RefreshCw,
   SendHorizontal,
+  ShieldCheck,
   SlidersHorizontal,
   TerminalSquare,
 } from 'lucide-react';
 import * as monaco from 'monaco-editor';
 
-import { generateTaskDelivery, generateTaskDiff, mergeTask, prepareTaskMerge } from '@/api/tauriClient';
+import {
+  generateTaskDelivery,
+  generateTaskDiff,
+  generateTaskProofPack,
+  mergeTask,
+  prepareTaskMerge,
+} from '@/api/tauriClient';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -39,9 +51,11 @@ import {
 import { t, type Locale } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/state/appStore';
+import { s12ProofPackFixture } from '@/features/tasks/taskFixtures';
 import type {
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
+  GeneratedTaskProofPack,
   PreparedTaskMerge,
   TaskDiffFile,
   TaskMergeCommandResult,
@@ -205,15 +219,18 @@ export function TaskOverviewPage() {
   const selectedTaskIdRef = useRef(selectedTaskId);
   const [generatedDiff, setGeneratedDiff] = useState<GeneratedTaskDiff | null>(null);
   const [generatedDelivery, setGeneratedDelivery] = useState<GeneratedTaskDelivery | null>(null);
+  const [generatedProofPack, setGeneratedProofPack] = useState<GeneratedTaskProofPack | null>(null);
   const [preparedMerge, setPreparedMerge] = useState<PreparedTaskMerge | null>(null);
   const [mergeResult, setMergeResult] = useState<TaskMergeCommandResult | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string>(demoDiff.files[0]?.path ?? '');
   const [isDiffLoading, setIsDiffLoading] = useState(false);
   const [isDeliveryLoading, setIsDeliveryLoading] = useState(false);
+  const [isProofPackLoading, setIsProofPackLoading] = useState(false);
   const [isMergePreparing, setIsMergePreparing] = useState(false);
   const [isMergeLoading, setIsMergeLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [proofPackError, setProofPackError] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [largeDiffExpanded, setLargeDiffExpanded] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
@@ -221,6 +238,7 @@ export function TaskOverviewPage() {
 
   const visibleDiff = generatedDiff ?? demoDiff;
   const visibleDelivery = generatedDelivery ?? demoDelivery;
+  const visibleProofPack = generatedProofPack ?? s12ProofPackFixture;
   const visibleMerge = preparedMerge ?? buildPreparedMergePreview(visibleDiff, visibleDelivery);
   const selectedFile =
     visibleDiff.files.find((file) => file.path === selectedFilePath) ?? visibleDiff.files[0] ?? null;
@@ -240,10 +258,12 @@ export function TaskOverviewPage() {
     selectedTaskIdRef.current = selectedTaskId;
     setGeneratedDiff(null);
     setGeneratedDelivery(null);
+    setGeneratedProofPack(null);
     setPreparedMerge(null);
     setMergeResult(null);
     setDiffError(null);
     setDeliveryError(null);
+    setProofPackError(null);
     setMergeError(null);
     setMergeDialogOpen(false);
     setLargeDiffExpanded(false);
@@ -327,6 +347,32 @@ export function TaskOverviewPage() {
     } finally {
       if (selectedTaskIdRef.current === taskId) {
         setIsDeliveryLoading(false);
+      }
+    }
+  }
+
+  async function handleGenerateProofPack() {
+    const taskId = selectedTaskId;
+    if (!taskId) {
+      setProofPackError(t('tasks.s12.noTask', locale));
+      return;
+    }
+
+    setIsProofPackLoading(true);
+    setProofPackError(null);
+    try {
+      const result = await generateTaskProofPack({ taskId });
+      if (selectedTaskIdRef.current !== taskId) {
+        return;
+      }
+      setGeneratedProofPack(result);
+    } catch (error) {
+      if (selectedTaskIdRef.current === taskId) {
+        setProofPackError(normalizeDiffError(error));
+      }
+    } finally {
+      if (selectedTaskIdRef.current === taskId) {
+        setIsProofPackLoading(false);
       }
     }
   }
@@ -673,6 +719,117 @@ export function TaskOverviewPage() {
               <div className="commit-message-box">
                 <span>{t('tasks.execution.commitMessage', locale)}</span>
                 <code>{visibleDelivery.commitMessage}</code>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section className="s12-highlight-panel" aria-label={t('tasks.s12.title', locale)}>
+          <div className="s12-highlight-heading">
+            <div>
+              <span>{t('tasks.s12.title', locale)}</span>
+              <p>{t(visibleProofPack.summaryKey, locale)}</p>
+            </div>
+            <Button type="button" size="sm" variant="secondary" onClick={handleGenerateProofPack}>
+              <PackageCheck className={cn('h-3.5 w-3.5', isProofPackLoading && 'diff-spin')} aria-hidden="true" />
+              {isProofPackLoading ? t('tasks.s12.generating', locale) : t('tasks.s12.generate', locale)}
+            </Button>
+          </div>
+
+          {proofPackError ? (
+            <div className="diff-error-banner" role="status">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{proofPackError}</span>
+            </div>
+          ) : null}
+
+          <div className="s12-highlight-grid">
+            <article className="s12-proof-pack">
+              <header>
+                <PackageCheck className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.proofPack.title', locale)}</span>
+              </header>
+              <code>{visibleProofPack.proofPackPath}</code>
+              <small>{visibleProofPack.artifactId}</small>
+            </article>
+
+            <article className="s12-delivery-score">
+              <header>
+                <Gauge className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.deliveryScore.title', locale)}</span>
+              </header>
+              <strong>
+                {visibleProofPack.deliveryScore.value}
+                <small>{visibleProofPack.deliveryScore.grade}</small>
+              </strong>
+              <p>{t(visibleProofPack.deliveryScore.summaryKey, locale)}</p>
+            </article>
+
+            <article className="s12-quality-gate">
+              <header>
+                <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.qualityGate.title', locale)}</span>
+              </header>
+              <div className="s12-check-list">
+                {visibleProofPack.qualityGates.map((gate) => (
+                  <span key={gate.id} className={cn('s12-status-pill', `is-${gate.status}`)}>
+                    {t(gate.titleKey, locale)}
+                    <em>{t(`tasks.s12.status.${gate.status}`, locale)}</em>
+                  </span>
+                ))}
+              </div>
+            </article>
+
+            <article className="s12-risk-radar">
+              <header>
+                <Radar className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.riskRadar.title', locale)}</span>
+              </header>
+              <div className="s12-risk-list">
+                {visibleProofPack.risks.map((risk) => (
+                  <span key={risk.id} className={cn('s12-risk-pill', `risk-${risk.level}`)}>
+                    {t(risk.titleKey, locale)}
+                    <em>{t(`approvals.risk.${risk.level}`, locale)}</em>
+                  </span>
+                ))}
+              </div>
+            </article>
+          </div>
+
+          <div className="s12-secondary-grid">
+            <article className="s12-proposal-cards">
+              <header>
+                <Layers3 className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.proposals.title', locale)}</span>
+              </header>
+              <div>
+                {visibleProofPack.proposals.map((proposal) => (
+                  <section key={proposal.id}>
+                    <strong>{t(proposal.titleKey, locale)}</strong>
+                    <p>{t(proposal.summaryKey, locale)}</p>
+                    <small>
+                      {t(`tasks.s12.status.${proposal.status}`, locale)} / {proposal.confidence}%
+                    </small>
+                  </section>
+                ))}
+              </div>
+            </article>
+
+            <article className="s12-screenshots-panel">
+              <header>
+                <Camera className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.screenshots.title', locale)}</span>
+              </header>
+              <div>
+                {visibleProofPack.screenshots.map((screenshot) => (
+                  <section key={screenshot.id}>
+                    <strong>{t(screenshot.titleKey, locale)}</strong>
+                    <code>{screenshot.path}</code>
+                    <small>
+                      {screenshot.capturedAt} / {t(`tasks.s12.status.${screenshot.status}`, locale)}
+                    </small>
+                  </section>
+                ))}
               </div>
             </article>
           </div>

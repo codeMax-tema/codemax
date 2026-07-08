@@ -107,6 +107,75 @@ export interface TaskDeliveryReport {
   risk: string;
 }
 
+export type TaskProofStatus = 'passed' | 'warning' | 'blocked';
+
+export interface TaskProofPackProposal {
+  id: string;
+  titleKey: string;
+  summaryKey: string;
+  status: TaskProofStatus;
+  confidence: number;
+}
+
+export interface TaskProofPackScreenshot {
+  id: string;
+  titleKey: string;
+  path: string;
+  capturedAt: string;
+  status: TaskProofStatus;
+}
+
+export interface TaskProofPackGate {
+  id: string;
+  titleKey: string;
+  summaryKey: string;
+  status: TaskProofStatus;
+}
+
+export interface TaskProofPackRisk {
+  id: string;
+  titleKey: string;
+  summaryKey: string;
+  level: RiskLevel;
+}
+
+export interface QualityGateRecord {
+  id: string;
+  taskId: string;
+  gateType: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+  overrideReason?: string | null;
+  createdAt: string;
+}
+
+export interface QualityGateOverrideResult {
+  taskId: string;
+  gateType: string;
+  overriddenCount: number;
+  reason: string;
+}
+
+export interface TaskProofPackScore {
+  value: number;
+  grade: string;
+  summaryKey: string;
+}
+
+export interface GeneratedTaskProofPack {
+  taskId: string;
+  artifactId: string;
+  generatedAt: string;
+  proofPackPath: string;
+  summaryKey: string;
+  deliveryScore: TaskProofPackScore;
+  proposals: TaskProofPackProposal[];
+  screenshots: TaskProofPackScreenshot[];
+  qualityGates: TaskProofPackGate[];
+  risks: TaskProofPackRisk[];
+}
+
 export interface GeneratedTaskDelivery {
   taskId: string;
   artifactId: string;
