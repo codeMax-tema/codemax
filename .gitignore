@@ -33,6 +33,7 @@ __pycache__/
 
 # Local app data and generated artifacts
 app-data/
+output/
 .worktrees/
 *.db
 *.db-shm

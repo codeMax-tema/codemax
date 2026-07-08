@@ -18,6 +18,8 @@ import type {
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
+  ActiveProfile,
+  PrivacyLedgerSummary,
   QualityGateOverrideResult,
   QualityGateRecord,
   LogCleanupResult,
@@ -27,10 +29,12 @@ import type {
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
+  RunContract,
   StartupHealthResponse,
   StorageUsageResponse,
   TaskBranch,
   TaskDetail,
+  TokenBudgetSummary,
   TaskMergeCommandResult,
   TaskSummary,
   TaskType,
@@ -167,6 +171,22 @@ export function saveModelConfig(request: SaveModelConfigRequest) {
 
 export function testModelConnection(id = 'model-default') {
   return invokeCommand<ModelConnectionTestResult>('test_model_connection', { id });
+}
+
+export function getActiveProfile() {
+  return invokeCommand<ActiveProfile>('active_profile');
+}
+
+export function getRunContract(taskId: string) {
+  return invokeCommand<RunContract | null>('run_contract', { taskId });
+}
+
+export function getPrivacyLedgerSummary(taskId: string) {
+  return invokeCommand<PrivacyLedgerSummary>('privacy_ledger_summary', { taskId });
+}
+
+export function getTokenBudgetSummary(taskId: string) {
+  return invokeCommand<TokenBudgetSummary>('token_budget_summary', { taskId });
 }
 
 export function listPendingApprovals() {

@@ -10,9 +10,14 @@ use crate::{
     agent::{AgentHealthResponse, AgentService, AgentServiceError, AgentServiceStatus},
     core::error::{AppResult, CommandError},
     exec::{CommandExecutionResult, CommandRequest, CommandRunRegistry},
+    privacy::{
+        estimate_tokens, record_context_observation, record_token_budget_observation,
+        sanitize_for_model_context, ContextObservation, SanitizedContent, TokenBudgetObservation,
+    },
     storage::{
         AgentEventRepository, AgentSessionRepository, ManagedStorage, NewAgentEvent,
-        NewAgentSession, NewTodo, StorageError, TaskRepository, TodoRepository,
+        NewAgentSession, NewTodo, RunContractRepository, StorageError, TaskRepository,
+        TodoRepository,
     },
 };
 
@@ -21,6 +26,14 @@ use super::exec::run_task_command;
 const VALIDATION_LOG_TAIL_BYTES: usize = 64 * 1024;
 const DEFAULT_VALIDATION_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_VALIDATION_LOOP_LIMIT: usize = 12;
+const DEFAULT_AGENT_BUDGET_LIMIT: i64 = 120_000;
+
+#[derive(Debug, Clone)]
+struct ContractBudget {
+    model_id: Option<String>,
+    token_budget_total: i64,
+    overflow_policy: String,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,13 +118,64 @@ pub async fn check_agent_health(agent: State<'_, AgentService>) -> AppResult<Age
 #[tauri::command]
 pub async fn create_agent_task(
     agent: State<'_, AgentService>,
-    request: AgentTaskCreateRequest,
+    storage: State<'_, ManagedStorage>,
+    mut request: AgentTaskCreateRequest,
 ) -> AppResult<Value> {
+    let contract = load_contract_budget(storage.inner(), &request.task_id)?;
+    let sanitized_title = sanitize_for_model_context(&request.title, "agent.task.title");
+    let sanitized_description =
+        sanitize_for_model_context(&request.description, "agent.task.description");
+    let sanitized_validation_command = request
+        .validation_command
+        .as_deref()
+        .map(|command| sanitize_for_model_context(command, "agent.task.validationCommand"));
+    let repository_path_context = allowed_context(&request.repository_path);
+    let worktree_path_context = allowed_context(&request.worktree_path);
+
+    request.title = sanitized_title.content.clone();
+    request.description = sanitized_description.content.clone();
+    if let Some(sanitized) = sanitized_validation_command.as_ref() {
+        request.validation_command = Some(sanitized.content.clone());
+    }
+
+    record_agent_create_contexts(
+        storage.inner(),
+        &request.task_id,
+        contract.model_id.as_deref(),
+        &sanitized_title,
+        &sanitized_description,
+        sanitized_validation_command.as_ref(),
+        &repository_path_context,
+        &worktree_path_context,
+    )?;
+    let input_tokens = sanitized_title.tokens_estimate
+        + sanitized_description.tokens_estimate
+        + sanitized_validation_command
+            .as_ref()
+            .map(|content| content.tokens_estimate)
+            .unwrap_or(0)
+        + repository_path_context.tokens_estimate
+        + worktree_path_context.tokens_estimate;
+    record_agent_token_budget(
+        storage.inner(),
+        &request.task_id,
+        Some("agent-create"),
+        "agent_task_create",
+        "created",
+        input_tokens,
+        &contract,
+    )?;
+
+    let task_id = request.task_id.clone();
     let body = serde_json::to_value(request).map_err(json_error)?;
-    agent
+    let response = agent
         .api_json("POST", "/api/v1/tasks", Some(body))
         .await
-        .map_err(agent_error)
+        .map_err(agent_error)?;
+    if let Ok(state) = response_state(&response) {
+        sync_agent_state(storage.inner(), &task_id, state)?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -143,18 +207,24 @@ pub async fn advance_agent_task(
 #[tauri::command]
 pub async fn submit_agent_validation_result(
     agent: State<'_, AgentService>,
+    storage: State<'_, ManagedStorage>,
     task_id: String,
-    request: AgentValidationResultRequest,
+    mut request: AgentValidationResultRequest,
 ) -> AppResult<Value> {
     let path = format!(
         "/api/v1/tasks/{}/validation-result",
         encode_path_segment(&task_id)
     );
+    sanitize_and_record_validation_result(storage.inner(), &task_id, &mut request)?;
     let body = serde_json::to_value(request).map_err(json_error)?;
-    agent
+    let response = agent
         .api_json("POST", &path, Some(body))
         .await
-        .map_err(agent_error)
+        .map_err(agent_error)?;
+    if let Ok(state) = response_state(&response) {
+        sync_agent_state(storage.inner(), &task_id, state)?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -218,16 +288,18 @@ pub async fn run_agent_validation_cycle(
 
         let stdout = read_log_tail(Path::new(&command_result.stdout_path));
         let stderr = read_log_tail(Path::new(&command_result.stderr_path));
-        let result_body = json!({
-            "runId": command_result.run_id,
-            "command": command_result.command,
-            "cwd": command_result.cwd,
-            "stdout": stdout,
-            "stderr": stderr,
-            "exitCode": command_result.exit_code,
-            "timedOut": command_result.timed_out,
-            "cancelled": command_result.cancelled,
-        });
+        let mut validation_result = AgentValidationResultRequest {
+            run_id: Some(command_result.run_id.clone()),
+            command: Some(command_result.command.clone()),
+            cwd: Some(command_result.cwd.clone()),
+            stdout,
+            stderr,
+            exit_code: command_result.exit_code,
+            timed_out: command_result.timed_out,
+            cancelled: command_result.cancelled,
+        };
+        sanitize_and_record_validation_result(storage.inner(), &task_id, &mut validation_result)?;
+        let result_body = serde_json::to_value(&validation_result).map_err(json_error)?;
         command_results.push(command_result);
 
         response = agent
@@ -411,6 +483,280 @@ fn record_agent_event_with_connection(
             payload: &payload,
         })
         .map_err(storage_error)?;
+    Ok(())
+}
+
+fn load_contract_budget(storage: &ManagedStorage, task_id: &str) -> AppResult<ContractBudget> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let contract = RunContractRepository::new(store.connection())
+        .get_for_task(task_id)
+        .map_err(storage_error)?;
+
+    Ok(contract
+        .map(|contract| ContractBudget {
+            model_id: contract.model_id,
+            token_budget_total: contract.token_budget_total,
+            overflow_policy: contract.budget_overflow_policy,
+        })
+        .unwrap_or(ContractBudget {
+            model_id: None,
+            token_budget_total: DEFAULT_AGENT_BUDGET_LIMIT,
+            overflow_policy: "pause_for_approval".to_string(),
+        }))
+}
+
+fn allowed_context(content: &str) -> SanitizedContent {
+    let tokens_estimate = estimate_tokens(content);
+    SanitizedContent {
+        content: content.to_string(),
+        action: "allowed".to_string(),
+        sensitivity_level: "none".to_string(),
+        findings: Vec::new(),
+        redacted: false,
+        blocked: false,
+        reason: "Context source reference allowed.".to_string(),
+        original_size_bytes: content.len() as i64,
+        tokens_estimate,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_agent_create_contexts(
+    storage: &ManagedStorage,
+    task_id: &str,
+    model_id: Option<&str>,
+    title: &SanitizedContent,
+    description: &SanitizedContent,
+    validation_command: Option<&SanitizedContent>,
+    repository_path: &SanitizedContent,
+    worktree_path: &SanitizedContent,
+) -> AppResult<()> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+
+    for (data_kind, source_ref, layer, sanitized) in [
+        (
+            "task_title",
+            "agent.task.title",
+            "recent_user_request",
+            title,
+        ),
+        (
+            "task_description",
+            "agent.task.description",
+            "recent_user_request",
+            description,
+        ),
+        (
+            "repository_path",
+            "agent.task.repositoryPath",
+            "runtime_boundary",
+            repository_path,
+        ),
+        (
+            "worktree_path",
+            "agent.task.worktreePath",
+            "runtime_boundary",
+            worktree_path,
+        ),
+    ] {
+        record_context_observation(
+            connection,
+            ContextObservation {
+                task_id,
+                run_id: Some("agent-create"),
+                event_type: "model_context",
+                data_kind,
+                source_type: if data_kind.ends_with("_path") {
+                    "runtime_path"
+                } else {
+                    "user_input"
+                },
+                source_ref,
+                destination: "python_agent",
+                provider: Some("local-agent"),
+                model_id,
+                layer,
+            },
+            sanitized,
+        )
+        .map_err(storage_error)?;
+    }
+
+    if let Some(validation_command) = validation_command {
+        record_context_observation(
+            connection,
+            ContextObservation {
+                task_id,
+                run_id: Some("agent-create"),
+                event_type: "model_context",
+                data_kind: "validation_command",
+                source_type: "user_input",
+                source_ref: "agent.task.validationCommand",
+                destination: "python_agent",
+                provider: Some("local-agent"),
+                model_id,
+                layer: "validation_policy",
+            },
+            validation_command,
+        )
+        .map_err(storage_error)?;
+    }
+
+    Ok(())
+}
+
+fn record_agent_token_budget(
+    storage: &ManagedStorage,
+    task_id: &str,
+    run_id: Option<&str>,
+    call_type: &str,
+    phase: &str,
+    input_tokens: i64,
+    contract: &ContractBudget,
+) -> AppResult<()> {
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    record_token_budget_observation(
+        store.connection(),
+        TokenBudgetObservation {
+            task_id,
+            run_id,
+            call_type,
+            provider: Some("local-agent"),
+            model_id: contract.model_id.as_deref(),
+            phase,
+            input_tokens_estimate: input_tokens,
+            output_tokens_estimate: 0,
+            budget_limit: contract.token_budget_total,
+            overflow_policy: &contract.overflow_policy,
+            quality_fallback: "",
+        },
+    )
+    .map_err(storage_error)
+}
+
+fn sanitize_and_record_validation_result(
+    storage: &ManagedStorage,
+    task_id: &str,
+    request: &mut AgentValidationResultRequest,
+) -> AppResult<()> {
+    let contract = load_contract_budget(storage, task_id)?;
+    let run_id = request.run_id.as_deref();
+    let command = request
+        .command
+        .as_deref()
+        .map(|command| sanitize_for_model_context(command, "agent.validation.command"));
+    let cwd = request.cwd.as_deref().map(allowed_context);
+    let stdout = sanitize_for_model_context(&request.stdout, "agent.validation.stdout");
+    let stderr = sanitize_for_model_context(&request.stderr, "agent.validation.stderr");
+
+    if let Some(command) = command.as_ref() {
+        request.command = Some(command.content.clone());
+    }
+    if let Some(cwd) = cwd.as_ref() {
+        request.cwd = Some(cwd.content.clone());
+    }
+    request.stdout = stdout.content.clone();
+    request.stderr = stderr.content.clone();
+
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let connection = store.connection();
+
+    if let Some(command) = command.as_ref() {
+        record_context_observation(
+            connection,
+            ContextObservation {
+                task_id,
+                run_id,
+                event_type: "validation_result",
+                data_kind: "validation_command",
+                source_type: "tool_result",
+                source_ref: "agent.validation.command",
+                destination: "python_agent",
+                provider: Some("local-agent"),
+                model_id: contract.model_id.as_deref(),
+                layer: "tool_result",
+            },
+            command,
+        )
+        .map_err(storage_error)?;
+    }
+
+    if let Some(cwd) = cwd.as_ref() {
+        record_context_observation(
+            connection,
+            ContextObservation {
+                task_id,
+                run_id,
+                event_type: "validation_result",
+                data_kind: "validation_cwd",
+                source_type: "runtime_path",
+                source_ref: "agent.validation.cwd",
+                destination: "python_agent",
+                provider: Some("local-agent"),
+                model_id: contract.model_id.as_deref(),
+                layer: "tool_result",
+            },
+            cwd,
+        )
+        .map_err(storage_error)?;
+    }
+
+    for (data_kind, source_ref, sanitized) in [
+        ("validation_stdout", "agent.validation.stdout", &stdout),
+        ("validation_stderr", "agent.validation.stderr", &stderr),
+    ] {
+        record_context_observation(
+            connection,
+            ContextObservation {
+                task_id,
+                run_id,
+                event_type: "validation_result",
+                data_kind,
+                source_type: "tool_result",
+                source_ref,
+                destination: "python_agent",
+                provider: Some("local-agent"),
+                model_id: contract.model_id.as_deref(),
+                layer: "tool_result",
+            },
+            sanitized,
+        )
+        .map_err(storage_error)?;
+    }
+
+    let input_tokens = command
+        .as_ref()
+        .map(|content| content.tokens_estimate)
+        .unwrap_or(0)
+        + cwd
+            .as_ref()
+            .map(|content| content.tokens_estimate)
+            .unwrap_or(0)
+        + stdout.tokens_estimate
+        + stderr.tokens_estimate;
+    record_token_budget_observation(
+        connection,
+        TokenBudgetObservation {
+            task_id,
+            run_id,
+            call_type: "validation_result",
+            provider: Some("local-agent"),
+            model_id: contract.model_id.as_deref(),
+            phase: "validating",
+            input_tokens_estimate: input_tokens,
+            output_tokens_estimate: 0,
+            budget_limit: contract.token_budget_total,
+            overflow_policy: &contract.overflow_policy,
+            quality_fallback: if request.exit_code == Some(0) {
+                ""
+            } else {
+                "validation_failure_context_recorded"
+            },
+        },
+    )
+    .map_err(storage_error)?;
+
     Ok(())
 }
 
