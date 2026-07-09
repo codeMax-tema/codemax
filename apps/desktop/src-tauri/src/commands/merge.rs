@@ -837,6 +837,32 @@ mod tests {
                     duration_ms: Some(1000),
                 })
                 .expect("record passing validation");
+            ArtifactRepository::new(connection)
+                .record_artifact(NewArtifact {
+                    id: "artifact-merge-ready",
+                    task_id: "task-merge-error",
+                    changed_files: "[\"modified.txt\"]",
+                    diff_path: Some("proof/task-merge-error/diff.patch"),
+                    test_report_path: Some("proof/task-merge-error/report.json"),
+                    screenshots: "[]",
+                    summary: "Merge error fixture is ready for precheck.",
+                    commit_message: "feat: merge task",
+                })
+                .expect("record merge artifact");
+            connection
+                .execute(
+                    "INSERT INTO proof_packs (
+                        id, task_id, summary, proof_dir, export_path, delivery_score, risk_level, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, NULL, 90, 'low', ?5)",
+                    rusqlite::params![
+                        "proof-pack-merge-ready",
+                        "task-merge-error",
+                        "Merge error fixture proof pack.",
+                        "proof/task-merge-error",
+                        "2026-07-04T12:00:00Z",
+                    ],
+                )
+                .expect("record proof pack index");
         }
 
         (

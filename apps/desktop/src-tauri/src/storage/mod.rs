@@ -25,6 +25,9 @@ pub const DEFAULT_PROFILE_ID: &str = "profile-default";
 const PRIVACY_CONTRACT_BUDGET_MIGRATION_VERSION: &str = "0005_privacy_contract_budget";
 const PRIVACY_CONTRACT_BUDGET_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0005_privacy_contract_budget.sql");
+const B_LINE_FULL_CLOSURE_MIGRATION_VERSION: &str = "0006_b_line_full_closure";
+const B_LINE_FULL_CLOSURE_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0006_b_line_full_closure.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -95,6 +98,10 @@ impl SqliteStore {
         self.apply_migration(
             PRIVACY_CONTRACT_BUDGET_MIGRATION_VERSION,
             PRIVACY_CONTRACT_BUDGET_MIGRATION,
+        )?;
+        self.apply_migration(
+            B_LINE_FULL_CLOSURE_MIGRATION_VERSION,
+            B_LINE_FULL_CLOSURE_MIGRATION,
         )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
@@ -1853,6 +1860,27 @@ pub struct PersonalProfileRecord {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct NewPersonalProfile<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub scope: &'a str,
+    pub scope_id: Option<&'a str>,
+    pub mode: &'a str,
+    pub model_id: Option<&'a str>,
+    pub reasoning_effort: &'a str,
+    pub permission_level: &'a str,
+    pub network_policy: &'a str,
+    pub privacy_mode: &'a str,
+    pub token_budget_total: i64,
+    pub token_budget_per_call: i64,
+    pub validation_policy: &'a str,
+    pub output_language: &'a str,
+    pub memory_scope: &'a str,
+    pub quality_gate_policy: &'a str,
+    pub is_active: bool,
+}
+
 pub struct PersonalProfileRepository<'conn> {
     connection: &'conn Connection,
 }
@@ -1910,6 +1938,107 @@ impl<'conn> PersonalProfileRepository<'conn> {
             )
             .optional()?
             .ok_or_else(|| StorageError::NotFound("active profile".to_string()))
+    }
+
+    pub fn list(&self) -> StorageResult<Vec<PersonalProfileRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, scope, scope_id, mode, model_id, reasoning_effort,
+                permission_level, network_policy, privacy_mode, token_budget_total,
+                token_budget_per_call, validation_policy, output_language, memory_scope,
+                quality_gate_policy, is_active, created_at, updated_at
+             FROM personal_profiles
+             ORDER BY is_active DESC, updated_at DESC, id",
+        )?;
+        let rows = statement.query_map([], map_personal_profile_record)?;
+        let mut profiles = Vec::new();
+
+        for row in rows {
+            profiles.push(row?);
+        }
+
+        Ok(profiles)
+    }
+
+    pub fn get_required(&self, profile_id: &str) -> StorageResult<PersonalProfileRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, name, scope, scope_id, mode, model_id, reasoning_effort,
+                    permission_level, network_policy, privacy_mode, token_budget_total,
+                    token_budget_per_call, validation_policy, output_language, memory_scope,
+                    quality_gate_policy, is_active, created_at, updated_at
+                 FROM personal_profiles
+                 WHERE id = ?1",
+                params![profile_id],
+                map_personal_profile_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("profile {profile_id}")))
+    }
+
+    pub fn save(&self, profile: NewPersonalProfile<'_>) -> StorageResult<PersonalProfileRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO personal_profiles (
+                id, name, scope, scope_id, mode, model_id, reasoning_effort,
+                permission_level, network_policy, privacy_mode, token_budget_total,
+                token_budget_per_call, validation_policy, output_language, memory_scope,
+                quality_gate_policy, is_active, created_at, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18
+             )
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                scope = excluded.scope,
+                scope_id = excluded.scope_id,
+                mode = excluded.mode,
+                model_id = excluded.model_id,
+                reasoning_effort = excluded.reasoning_effort,
+                permission_level = excluded.permission_level,
+                network_policy = excluded.network_policy,
+                privacy_mode = excluded.privacy_mode,
+                token_budget_total = excluded.token_budget_total,
+                token_budget_per_call = excluded.token_budget_per_call,
+                validation_policy = excluded.validation_policy,
+                output_language = excluded.output_language,
+                memory_scope = excluded.memory_scope,
+                quality_gate_policy = excluded.quality_gate_policy,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at",
+            params![
+                profile.id,
+                profile.name,
+                profile.scope,
+                profile.scope_id,
+                profile.mode,
+                profile.model_id,
+                profile.reasoning_effort,
+                profile.permission_level,
+                profile.network_policy,
+                profile.privacy_mode,
+                profile.token_budget_total,
+                profile.token_budget_per_call,
+                profile.validation_policy,
+                profile.output_language,
+                profile.memory_scope,
+                profile.quality_gate_policy,
+                bool_to_i64(profile.is_active),
+                now,
+            ],
+        )?;
+
+        self.get_required(profile.id)
+    }
+
+    pub fn activate(&self, profile_id: &str) -> StorageResult<PersonalProfileRecord> {
+        self.get_required(profile_id)?;
+        let now = now_text();
+        self.connection.execute(
+            "UPDATE personal_profiles
+             SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END,
+                 updated_at = CASE WHEN id = ?1 THEN ?2 ELSE updated_at END",
+            params![profile_id, now],
+        )?;
+        self.get_required(profile_id)
     }
 }
 
@@ -2035,6 +2164,115 @@ impl<'conn> RunContractRepository<'conn> {
             )
             .optional()
             .map_err(StorageError::from)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractBreachRecord {
+    pub id: String,
+    pub task_id: String,
+    pub contract_id: Option<String>,
+    pub breach_type: String,
+    pub requested_value: String,
+    pub policy_value: String,
+    pub status: String,
+    pub approval_id: Option<String>,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewContractBreachRecord<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub contract_id: Option<&'a str>,
+    pub breach_type: &'a str,
+    pub requested_value: &'a str,
+    pub policy_value: &'a str,
+    pub status: &'a str,
+    pub approval_id: Option<&'a str>,
+    pub reason: &'a str,
+}
+
+pub struct ContractBreachRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> ContractBreachRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(
+        &self,
+        breach: NewContractBreachRecord<'_>,
+    ) -> StorageResult<ContractBreachRecord> {
+        self.connection.execute(
+            "INSERT INTO contract_breach_records (
+                id, task_id, contract_id, breach_type, requested_value, policy_value,
+                status, approval_id, reason, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                breach.id,
+                breach.task_id,
+                breach.contract_id,
+                breach.breach_type,
+                breach.requested_value,
+                breach.policy_value,
+                breach.status,
+                breach.approval_id,
+                breach.reason,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(breach.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ContractBreachRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, contract_id, breach_type, requested_value, policy_value,
+                status, approval_id, reason, created_at
+             FROM contract_breach_records
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_contract_breach_record)?;
+        let mut breaches = Vec::new();
+
+        for row in rows {
+            breaches.push(row?);
+        }
+
+        Ok(breaches)
+    }
+
+    pub fn update_status_for_approval(
+        &self,
+        approval_id: &str,
+        status: &str,
+    ) -> StorageResult<usize> {
+        self.connection
+            .execute(
+                "UPDATE contract_breach_records
+                 SET status = ?2
+                 WHERE approval_id = ?1",
+                params![approval_id, status],
+            )
+            .map_err(StorageError::from)
+    }
+
+    fn get_required(&self, breach_id: &str) -> StorageResult<ContractBreachRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, contract_id, breach_type, requested_value, policy_value,
+                    status, approval_id, reason, created_at
+                 FROM contract_breach_records WHERE id = ?1",
+                params![breach_id],
+                map_contract_breach_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("contract breach {breach_id}")))
     }
 }
 
@@ -2362,6 +2600,264 @@ impl<'conn> ContextSourceRepository<'conn> {
             )
             .optional()?
             .ok_or_else(|| StorageError::NotFound(format!("context source {source_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMemoryUsageRecord {
+    pub id: String,
+    pub task_id: String,
+    pub memory_id: Option<String>,
+    pub memory_key: String,
+    pub memory_scope: String,
+    pub memory_scope_id: Option<String>,
+    pub usage_type: String,
+    pub value_preview: String,
+    pub tokens_estimate: i64,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewTaskMemoryUsage<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub memory_id: Option<&'a str>,
+    pub memory_key: &'a str,
+    pub memory_scope: &'a str,
+    pub memory_scope_id: Option<&'a str>,
+    pub usage_type: &'a str,
+    pub value_preview: &'a str,
+    pub tokens_estimate: i64,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: &'a str,
+}
+
+pub struct TaskMemoryUsageRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> TaskMemoryUsageRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(&self, usage: NewTaskMemoryUsage<'_>) -> StorageResult<TaskMemoryUsageRecord> {
+        self.connection.execute(
+            "INSERT INTO task_memory_usages (
+                id, task_id, memory_id, memory_key, memory_scope, memory_scope_id, usage_type,
+                value_preview, tokens_estimate, redacted, blocked, reason, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                usage.id,
+                usage.task_id,
+                usage.memory_id,
+                usage.memory_key,
+                usage.memory_scope,
+                usage.memory_scope_id,
+                usage.usage_type,
+                usage.value_preview,
+                usage.tokens_estimate,
+                bool_to_i64(usage.redacted),
+                bool_to_i64(usage.blocked),
+                usage.reason,
+                now_text(),
+            ],
+        )?;
+
+        self.get_required(usage.id)
+    }
+
+    pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<TaskMemoryUsageRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, task_id, memory_id, memory_key, memory_scope, memory_scope_id,
+                usage_type, value_preview, tokens_estimate, redacted, blocked, reason, created_at
+             FROM task_memory_usages
+             WHERE task_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![task_id], map_task_memory_usage_record)?;
+        let mut usages = Vec::new();
+
+        for row in rows {
+            usages.push(row?);
+        }
+
+        Ok(usages)
+    }
+
+    fn get_required(&self, usage_id: &str) -> StorageResult<TaskMemoryUsageRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, memory_id, memory_key, memory_scope, memory_scope_id,
+                    usage_type, value_preview, tokens_estimate, redacted, blocked, reason, created_at
+                 FROM task_memory_usages WHERE id = ?1",
+                params![usage_id],
+                map_task_memory_usage_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("task memory usage {usage_id}")))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreferenceCandidateRecord {
+    pub id: String,
+    pub task_id: Option<String>,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub preference_key: String,
+    pub candidate_value: String,
+    pub evidence: String,
+    pub confidence: f64,
+    pub status: String,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: String,
+    pub decision_comment: Option<String>,
+    pub accepted_memory_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub decided_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewPreferenceCandidate<'a> {
+    pub id: &'a str,
+    pub task_id: Option<&'a str>,
+    pub scope: &'a str,
+    pub scope_id: Option<&'a str>,
+    pub preference_key: &'a str,
+    pub candidate_value: &'a str,
+    pub evidence: &'a str,
+    pub confidence: f64,
+    pub status: &'a str,
+    pub redacted: bool,
+    pub blocked: bool,
+    pub reason: &'a str,
+}
+
+pub struct PreferenceCandidateRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> PreferenceCandidateRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn record(
+        &self,
+        candidate: NewPreferenceCandidate<'_>,
+    ) -> StorageResult<PreferenceCandidateRecord> {
+        let now = now_text();
+        self.connection.execute(
+            "INSERT INTO preference_candidates (
+                id, task_id, scope, scope_id, preference_key, candidate_value, evidence,
+                confidence, status, redacted, blocked, reason, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            params![
+                candidate.id,
+                candidate.task_id,
+                candidate.scope,
+                candidate.scope_id,
+                candidate.preference_key,
+                candidate.candidate_value,
+                candidate.evidence,
+                candidate.confidence,
+                candidate.status,
+                bool_to_i64(candidate.redacted),
+                bool_to_i64(candidate.blocked),
+                candidate.reason,
+                now,
+            ],
+        )?;
+
+        self.get_required(candidate.id)
+    }
+
+    pub fn list(&self, task_id: Option<&str>) -> StorageResult<Vec<PreferenceCandidateRecord>> {
+        let mut candidates = Vec::new();
+
+        if let Some(task_id) = task_id {
+            let mut statement = self.connection.prepare(
+                "SELECT id, task_id, scope, scope_id, preference_key, candidate_value, evidence,
+                    confidence, status, redacted, blocked, reason, decision_comment,
+                    accepted_memory_id, created_at, updated_at, decided_at
+                 FROM preference_candidates
+                 WHERE task_id = ?1
+                 ORDER BY status = 'pending' DESC, updated_at DESC, id",
+            )?;
+            let rows = statement.query_map(params![task_id], map_preference_candidate_record)?;
+            for row in rows {
+                candidates.push(row?);
+            }
+        } else {
+            let mut statement = self.connection.prepare(
+                "SELECT id, task_id, scope, scope_id, preference_key, candidate_value, evidence,
+                    confidence, status, redacted, blocked, reason, decision_comment,
+                    accepted_memory_id, created_at, updated_at, decided_at
+                 FROM preference_candidates
+                 ORDER BY status = 'pending' DESC, updated_at DESC, id",
+            )?;
+            let rows = statement.query_map([], map_preference_candidate_record)?;
+            for row in rows {
+                candidates.push(row?);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    pub fn decide(
+        &self,
+        candidate_id: &str,
+        status: &str,
+        decision_comment: Option<&str>,
+        accepted_memory_id: Option<&str>,
+    ) -> StorageResult<PreferenceCandidateRecord> {
+        let now = now_text();
+        let updated = self.connection.execute(
+            "UPDATE preference_candidates
+             SET status = ?2,
+                 decision_comment = ?3,
+                 accepted_memory_id = ?4,
+                 decided_at = ?5,
+                 updated_at = ?5
+             WHERE id = ?1",
+            params![
+                candidate_id,
+                status,
+                decision_comment,
+                accepted_memory_id,
+                now,
+            ],
+        )?;
+
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!(
+                "preference candidate {candidate_id}"
+            )));
+        }
+
+        self.get_required(candidate_id)
+    }
+
+    pub fn get_required(&self, candidate_id: &str) -> StorageResult<PreferenceCandidateRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, scope, scope_id, preference_key, candidate_value, evidence,
+                    confidence, status, redacted, blocked, reason, decision_comment,
+                    accepted_memory_id, created_at, updated_at, decided_at
+                 FROM preference_candidates WHERE id = ?1",
+                params![candidate_id],
+                map_preference_candidate_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("preference candidate {candidate_id}")))
     }
 }
 
@@ -2767,6 +3263,21 @@ fn map_run_contract_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunContr
     })
 }
 
+fn map_contract_breach_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContractBreachRecord> {
+    Ok(ContractBreachRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        contract_id: row.get(2)?,
+        breach_type: row.get(3)?,
+        requested_value: row.get(4)?,
+        policy_value: row.get(5)?,
+        status: row.get(6)?,
+        approval_id: row.get(7)?,
+        reason: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
 fn map_privacy_ledger_entry_record(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<PrivacyLedgerEntryRecord> {
@@ -2829,6 +3340,50 @@ fn map_context_source_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contex
     })
 }
 
+fn map_task_memory_usage_record(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaskMemoryUsageRecord> {
+    Ok(TaskMemoryUsageRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        memory_id: row.get(2)?,
+        memory_key: row.get(3)?,
+        memory_scope: row.get(4)?,
+        memory_scope_id: row.get(5)?,
+        usage_type: row.get(6)?,
+        value_preview: row.get(7)?,
+        tokens_estimate: row.get(8)?,
+        redacted: i64_to_bool(row.get(9)?),
+        blocked: i64_to_bool(row.get(10)?),
+        reason: row.get(11)?,
+        created_at: row.get(12)?,
+    })
+}
+
+fn map_preference_candidate_record(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PreferenceCandidateRecord> {
+    Ok(PreferenceCandidateRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        scope: row.get(2)?,
+        scope_id: row.get(3)?,
+        preference_key: row.get(4)?,
+        candidate_value: row.get(5)?,
+        evidence: row.get(6)?,
+        confidence: row.get(7)?,
+        status: row.get(8)?,
+        redacted: i64_to_bool(row.get(9)?),
+        blocked: i64_to_bool(row.get(10)?),
+        reason: row.get(11)?,
+        decision_comment: row.get(12)?,
+        accepted_memory_id: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        decided_at: row.get(16)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2888,6 +3443,8 @@ mod tests {
             "privacy_ledger_entries",
             "token_budget_records",
             "context_sources",
+            "task_memory_usages",
+            "preference_candidates",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
@@ -3379,6 +3936,164 @@ mod tests {
                 .list_for_task("task-001")
                 .expect("list context sources")[0]
                 .redacted
+        );
+
+        let profiles = PersonalProfileRepository::new(store.connection());
+        let custom_profile = profiles
+            .save(NewPersonalProfile {
+                id: "profile-strict",
+                name: "Strict Testing",
+                scope: "global",
+                scope_id: None,
+                mode: "strict_testing",
+                model_id: Some("model-default"),
+                reasoning_effort: "high",
+                permission_level: "worktree_write",
+                network_policy: "approval_required",
+                privacy_mode: "strict",
+                token_budget_total: 90000,
+                token_budget_per_call: 18000,
+                validation_policy: "required",
+                output_language: "zh-CN",
+                memory_scope: "repository",
+                quality_gate_policy: "strict",
+                is_active: false,
+            })
+            .expect("create custom profile");
+        assert_eq!(custom_profile.name, "Strict Testing");
+        assert!(profiles.list().expect("list profiles").len() >= 2);
+        let active = profiles
+            .activate("profile-strict")
+            .expect("activate custom profile");
+        assert!(active.is_active);
+        assert_eq!(
+            profiles.active_profile().expect("read switched profile").id,
+            "profile-strict"
+        );
+
+        let approvals = ApprovalRepository::new(store.connection());
+        approvals
+            .create(NewApproval {
+                id: "approval-breach-001",
+                task_id: "task-001",
+                approval_type: "contract_breach",
+                risk_level: "high",
+                content: "command: npm install",
+                reason: "Command is outside the stored run contract.",
+            })
+            .expect("create breach approval");
+        let breaches = ContractBreachRepository::new(store.connection());
+        breaches
+            .record(NewContractBreachRecord {
+                id: "breach-001",
+                task_id: "task-001",
+                contract_id: Some(&contract.id),
+                breach_type: "command_policy",
+                requested_value: "command: npm install",
+                policy_value: "[\"npm test\"]",
+                status: "pending_approval",
+                approval_id: Some("approval-breach-001"),
+                reason: "Command requires approval before execution.",
+            })
+            .expect("record contract breach");
+        breaches
+            .update_status_for_approval("approval-breach-001", "approved")
+            .expect("sync approval status to breach");
+        assert_eq!(
+            breaches
+                .list_for_task("task-001")
+                .expect("list contract breaches")[0]
+                .status,
+            "approved"
+        );
+
+        MemoryRepository::new(store.connection())
+            .upsert_memory_item(NewMemoryItem {
+                id: "memory-default-test-command",
+                scope: "repository",
+                scope_id: Some("D:/projects/demo"),
+                key: "defaultTestCommand",
+                value: "npm test",
+                confidence: 0.9,
+                source: "user_setting",
+                is_user_editable: true,
+            })
+            .expect("create memory item used by task");
+        TaskMemoryUsageRepository::new(store.connection())
+            .record(NewTaskMemoryUsage {
+                id: "memory-use-001",
+                task_id: "task-001",
+                memory_id: Some("memory-default-test-command"),
+                memory_key: "defaultTestCommand",
+                memory_scope: "repository",
+                memory_scope_id: Some("D:/projects/demo"),
+                usage_type: "contract_seed",
+                value_preview: "npm test",
+                tokens_estimate: 2,
+                redacted: false,
+                blocked: false,
+                reason: "No sensitive data detected.",
+            })
+            .expect("record memory usage");
+        assert_eq!(
+            TaskMemoryUsageRepository::new(store.connection())
+                .list_for_task("task-001")
+                .expect("list memory usages")[0]
+                .memory_key,
+            "defaultTestCommand"
+        );
+
+        let candidates = PreferenceCandidateRepository::new(store.connection());
+        candidates
+            .record(NewPreferenceCandidate {
+                id: "preference-001",
+                task_id: Some("task-001"),
+                scope: "repository",
+                scope_id: Some("D:/projects/demo"),
+                preference_key: "validationCommand",
+                candidate_value: "npm test",
+                evidence: "User approved npm test for this repository.",
+                confidence: 0.82,
+                status: "pending",
+                redacted: false,
+                blocked: false,
+                reason: "No sensitive data detected.",
+            })
+            .expect("record preference candidate");
+        assert_eq!(
+            candidates
+                .list(Some("task-001"))
+                .expect("list preference candidates")[0]
+                .status,
+            "pending"
+        );
+        MemoryRepository::new(store.connection())
+            .upsert_memory_item(NewMemoryItem {
+                id: "memory-accepted-001",
+                scope: "repository",
+                scope_id: Some("D:/projects/demo"),
+                key: "validationCommand",
+                value: "npm test",
+                confidence: 0.82,
+                source: "preference_candidate",
+                is_user_editable: true,
+            })
+            .expect("accepted preference writes long-term memory");
+        candidates
+            .decide(
+                "preference-001",
+                "accepted",
+                Some("Store as repository default validation command."),
+                Some("memory-accepted-001"),
+            )
+            .expect("decide preference candidate");
+        assert_eq!(
+            candidates
+                .get_required("preference-001")
+                .expect("read decided preference")
+                .accepted_memory_id
+                .as_deref(),
+            Some("memory-accepted-001")
         );
     }
 }

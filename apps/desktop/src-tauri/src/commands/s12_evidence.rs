@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -1163,15 +1163,15 @@ fn artifact_file_path(files: &[ArtifactFileRecord], file_type: &str) -> Option<S
 }
 
 fn validation_status_from_runs(runs: &[CommandRunRecord]) -> String {
-    let validation_runs = runs
-        .iter()
-        .filter(|run| run.purpose == "validation")
-        .collect::<Vec<_>>();
-    if validation_runs.is_empty() {
+    let mut latest_by_command = BTreeMap::new();
+    for run in runs.iter().filter(|run| run.purpose == "validation") {
+        latest_by_command.insert(run.command.clone(), run);
+    }
+    if latest_by_command.is_empty() {
         return "notRun".to_string();
     }
-    if validation_runs
-        .iter()
+    if latest_by_command
+        .values()
         .all(|run| run.status == "passed" && run.exit_code.unwrap_or(0) == 0)
     {
         "passed".to_string()
