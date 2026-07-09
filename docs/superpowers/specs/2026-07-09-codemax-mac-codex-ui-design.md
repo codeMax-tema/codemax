@@ -1,123 +1,534 @@
-# CodeMax Mac Codex Minimal UI 设计
+# CodeMax Mac Codex Minimal 全应用 UI 设计稿
 
-## 1. 背景
+## 1. 设计定位
 
-当前 CodeMax 桌面端已经具备 Codex-like UI 的基础结构，但用户反馈界面显得杂乱，不够像 Codex 桌面版，也缺少 Mac 原生应用的清爽质感。本设计选择方案 A：Mac Codex Minimal，作为默认 UI 方向。
+CodeMax 默认 UI 采用 **Mac Codex Minimal**。它的目标不是做传统后台首页，也不是展示内部框架能力，而是让用户打开应用后立刻进入类似 Codex 桌面版的新对话工作台：左侧是项目与对话，中央是干净的新任务 composer，设置页像 Codex 一样清晰、安静、可配置。
 
-本次设计属于 D 线范围，聚焦桌面产品体验、设置、存储透明、国际化、品牌资源和启动体验。启动动画由用户在外部制作，完成后放入项目文件包，本设计定义接入位置与展示规则。
+本设计覆盖整个桌面应用，包括启动页、首页、任务线程、搜索、技能、设置、模型与思考强度、存储、审批、交付、国际化和可访问性。用户正在制作的 CodeMax 启动动画后续作为资源接入，不影响本设计的落地。
 
-## 2. 目标
+## 2. 核心原则
 
-1. 默认 UI 呈现神似 Codex 桌面版的任务工作台，而不是传统后台仪表盘。
-2. 使用 Mac 风格的浅色、磨砂侧栏、克制边框和轻阴影，减少视觉噪声。
-3. 保持 CodeMax 的核心差异可见：本地、隐私、运行契约、存储透明、可审计交付。
-4. 启动页接入 CodeMax 品牌动画，启动过程中显示真实自检状态。
-5. 所有新增可见文案进入中英文 i18n 字典。
-6. UI 默认简约，并保留后续切换暗色、高对比和局部 Liquid Glass 的空间。
+1. **打开即可工作**：首页只回答“我们该做什么？”，不展示内部系统框架、模块宣传或仪表盘。
+2. **像 Codex 桌面版**：左侧导航 + 项目/对话列表 + 中央 composer，保留 CodeMax 的本地、隐私、技能和交付特性。
+3. **像 Mac 应用**：浅色、留白、细边框、轻阴影、柔和动效，默认克制。
+4. **技能优先**：首页和侧栏展示 Skills，不展示插件。技能来自工作区或全局 `.codemax` 文件夹。
+5. **设置讲人话**：模型强度和思考强度要说明“低在哪儿、高在哪儿、好处和代价是什么”。
+6. **用户可控**：模型、思考强度、权限、存储位置、启动动画、语言和主题都应在设置里透明可调。
 
-## 3. 非目标
+## 3. 全应用结构
 
-1. 不重写任务、仓库、审批、设置的数据模型。
-2. 不改变 Agent 执行链路、Tauri 命令或后端接口语义。
-3. 不把整页做成大面积玻璃拟态或营销页。
-4. 不在长日志、Diff、代码输出区域使用重模糊或强装饰效果。
-5. 不依赖启动动画完成才能进入主界面；动画缺失时必须有静态降级。
+```text
+CodeMax Desktop
+  Splash / Startup
+  Home / New Conversation
+  Conversation / Task Thread
+  Search
+  Skills
+  Project Workspace
+  Approvals
+  Delivery Review
+  Settings
+```
 
-## 4. 信息架构
-
-主应用采用三栏工作台结构：
-
-1. 左侧侧栏：任务入口、搜索、任务列表、仓库、审批、设置。
-2. 中间主工作区：当前任务线程、执行状态、日志、Diff、验证结果和后续输入。
-3. 右侧上下文面板：运行契约、模型、权限、存储占用、隐私摘要、交付证据入口。
-
-右侧上下文面板默认在宽屏展示，在中等宽度下折叠为按钮，在窄屏下进入抽屉。这样用户先看到任务本身，需要细节时再展开上下文哦。
-
-## 5. 布局规格
-
-### 5.1 应用外壳
-
-根布局使用完整桌面窗口模型：
+默认窗口结构：
 
 ```text
 Window
-  Top chrome
-  App body
-    Sidebar
-    Main workspace
-    Context inspector
+  Sidebar
+  Main Canvas
+  Optional Inspector / Drawer
 ```
 
-顶部 chrome 保持轻量，只放返回、前进、侧栏开关、当前仓库和窗口控制。不要在顶部堆积业务按钮。
+主界面不默认显示右侧 inspector。只有进入任务线程、交付审查或用户主动展开详情时才显示，避免首页杂乱哦。
 
-### 5.2 左侧侧栏
+## 4. 首页设计
 
-宽度建议：
+### 4.1 首页目标
+
+打开应用后的首页必须神似用户提供的 Codex 桌面版截图：
+
+1. 左侧固定浅灰侧栏。
+2. 中央大面积留白。
+3. 中央标题：`我们该做什么？`
+4. 标题下方是大 composer。
+5. composer 下方是项目选择行。
+6. 不展示内部架构、系统模块、质量门禁、Proof Pack、存储图表或开发框架。
+
+### 4.2 首页布局
 
 ```text
-默认：304px
-紧凑：84px
+Sidebar 304px
+Main Canvas
+  Window controls top-right
+  Center stack
+    Prompt title
+    Composer
+      text input
+      attachment / add button
+      access control
+      model selector
+      thinking slider shortcut
+      send button
+    Choose project row
 ```
 
-侧栏内容顺序：
-
-1. 新任务按钮
-2. 搜索
-3. 当前仓库
-4. 任务状态筛选
-5. 最近任务线程
-6. 审批与设置入口
-7. 账户或本机状态
-
-任务列表每项只显示标题、状态点和更新时间。详细信息移到主区或右侧面板，避免侧栏过载。
-
-### 5.3 主工作区
-
-任务页改为线程式体验：
-
-1. 顶部显示任务标题、仓库、分支和当前状态。
-2. 中间按时间线展示 Agent 阶段：规划、编辑、验证、修复、等待审批、交付。
-3. 日志、命令输出、Diff 使用可折叠块展示。
-4. 底部固定 follow-up composer，用于继续指令、补充验证或发起审批。
-
-主工作区不使用多个同级大卡片堆叠。优先使用分割线、轻背景和折叠区组织信息。
-
-### 5.4 右侧上下文面板
-
-宽度建议：
+中央 stack 宽度：
 
 ```text
-默认：336px
-最大：380px
+默认：min(912px, calc(100vw - sidebar - 240px))
+最小：640px
+窄屏：calc(100vw - 32px)
 ```
 
-模块顺序：
-
-1. Run Contract
-2. Model & Mode
-3. Permissions
-4. Storage
-5. Privacy
-6. Proof Pack
-
-每个模块使用紧凑标题、状态和一行摘要。高级内容进入详情或设置页。
-
-## 6. 视觉系统
-
-默认主题命名为 `macMinimal`，显示名称为 `Mac Minimal`。
-
-颜色建议：
+标题样式：
 
 ```text
-app background: #F5F5F7
-sidebar: #ECECEF
+font-size: 30px
+font-weight: 500
+color: #1D1D1F
+margin-bottom: 36px
+```
+
+composer 样式：
+
+```text
+height: 124px
+border-radius: 22px
+background: #FFFFFF
+border: 1px solid #E3E3E7
+box-shadow: 0 12px 36px rgb(0 0 0 / 8%)
+```
+
+composer 下方项目行：
+
+```text
+height: 52px
+border-radius: 0 0 22px 22px
+background: #F4F4F5
+```
+
+### 4.3 首页交互
+
+1. 输入任务后，发送按钮从灰色变为品牌蓝。
+2. 未选择项目时，发送会引导用户先选择项目。
+3. `Choose project` 打开项目选择 popover，显示最近项目、工作区路径和新增项目入口。
+4. 模型选择显示为 `模型名 + 思考强度`，例如 `5.5 超高`。
+5. 思考强度可在 composer 中快速切换，也可进入设置详细配置。
+
+## 5. 左侧侧栏
+
+### 5.1 内容顺序
+
+侧栏不展示插件入口，改为技能入口：
+
+```text
+新对话
+搜索
+已安排
+技能
+
+项目
+  D:
+  codemax
+    设计启动动画
+    制定三人并行方案
+    梳理可并行编写项
+    确认D任务归属
+    评估编程智能体差距
+    展开显示
+  LYC
+  C:
+  面试题
+  Blog
+
+对话
+  你好
+  个人博客网站需要后端吗
+  分析自我介绍不足
+
+设置 / 账户
+```
+
+### 5.2 项目与对话规则
+
+1. 项目区展示本地工作区域。
+2. 每个项目下展示最近任务线程。
+3. 对话区展示不绑定项目或历史通用对话。
+4. 时间显示使用短格式：`6 分`、`14 小时`、`3 天`、`1 周`。
+5. 当前选中项使用浅灰背景和左侧细选中条，不使用强色块。
+
+### 5.3 技能入口
+
+`技能` 替代原来的 `插件`。点击后进入 Skills 页面，展示：
+
+1. 当前工作区 `.codemax/skills`
+2. 当前项目 `.codemax/skills`
+3. 用户全局 `.codemax/skills`
+4. 内置系统技能
+
+技能来源优先级：
+
+```text
+workspace > project > user global > built-in
+```
+
+如果同名技能冲突，列表中显示覆盖关系和实际生效来源。
+
+## 6. 搜索设计
+
+搜索只搜对话名字和任务线程标题，不搜全文日志，不搜代码，不搜 Proof Pack。
+
+搜索入口点击后打开居中 command palette：
+
+```text
+Search conversations
+  input
+  results grouped by project
+```
+
+结果项显示：
+
+1. 对话标题
+2. 所属项目
+3. 更新时间
+4. 当前状态
+
+空状态：
+
+```text
+未找到对话
+换一个名字试试
+```
+
+英文：
+
+```text
+No conversations found
+Try another title
+```
+
+## 7. 任务线程页
+
+从首页发送后进入任务线程页。线程页仍然保持 Codex 桌面版风格，不变成 dashboard。
+
+布局：
+
+```text
+Main Thread
+  task title
+  user prompt
+  agent timeline
+  command output collapsibles
+  diff preview collapsible
+  validation result
+  follow-up composer
+Inspector Drawer
+  run contract
+  model & thinking
+  permissions
+  storage
+  privacy
+  proof pack
+```
+
+Inspector 默认折叠，使用右上角按钮展开。用户需要审计、存储、隐私、运行契约时再看。
+
+## 8. 技能页
+
+技能页是插件页的替代品。目标是让用户知道 CodeMax 当前能调用哪些技能，以及它们从哪里来。
+
+### 8.1 技能页布局
+
+```text
+Skills Page
+  header
+    title: 技能
+    subtitle: 工作区和全局 .codemax 技能
+  source tabs
+    当前项目
+    工作区
+    全局
+    内置
+  search/filter
+  skill list
+```
+
+### 8.2 技能卡内容
+
+每个技能项显示：
+
+1. 名称
+2. 简短描述
+3. 来源路径
+4. 启用状态
+5. 最近使用时间
+6. 冲突或覆盖提示
+
+技能项保持列表样式，不使用大卡片瀑布流。
+
+## 9. 设置页总览
+
+设置页必须像 Codex 桌面版设置：左侧分类，右侧详情，留白充足，行式配置，避免拥挤。
+
+分类顺序：
+
+```text
+账户
+模型
+思考强度
+权限
+技能
+存储
+记忆
+外观
+语言
+启动
+关于
+```
+
+设置页布局：
+
+```text
+Settings
+  Sidebar 320px
+  Detail max-width 860px
+```
+
+右侧每个设置组使用：
+
+```text
+Section title
+Section description
+Grouped rows
+```
+
+## 10. 模型与思考强度
+
+### 10.1 概念区分
+
+模型设置负责选择模型提供商、Base URL、API Key、模型名和连接测试。
+
+思考强度负责控制同一任务下 Agent 的推理深度、上下文预算、验证积极性和自动修复耐心。
+
+### 10.2 思考强度等级
+
+提供 5 个等级：
+
+```text
+极低
+低
+中
+高
+超高
+```
+
+英文：
+
+```text
+Minimal
+Low
+Medium
+High
+Max
+```
+
+### 10.3 拖动式控件
+
+思考强度必须使用拖动式 slider，不使用普通下拉框。
+
+控件结构：
+
+```text
+Thinking Strength
+  slider with 5 snap points
+  animated thumb
+  selected level
+  explanation panel
+  impact meters
+```
+
+拖动时：
+
+1. thumb 贴附到 5 个刻度点。
+2. 说明面板跟随切换。
+3. 动效随强度变化。
+4. 保存前可预览变化。
+
+### 10.4 每档说明
+
+极低：
+
+```text
+低在哪儿：只做最少推理，优先快速回答和小改动。
+好处：最快、最省 token、适合明确简单任务。
+代价：复杂任务容易遗漏边界，验证建议较少。
+适合：改文案、简单配置、问答、轻量说明。
+```
+
+低：
+
+```text
+低在哪儿：会做基础分析，但不会大范围探索。
+好处：速度快，适合日常小修和单文件任务。
+代价：跨模块影响判断较保守，可能需要用户补充指令。
+适合：小 bug、样式微调、简单脚本。
+```
+
+中：
+
+```text
+中在哪儿：平衡速度、上下文和验证，是默认推荐。
+好处：适合大多数开发任务，成本和质量平衡。
+代价：极复杂架构问题可能需要切到高或超高。
+适合：常规功能、设置页、接口联调、普通修复。
+```
+
+高：
+
+```text
+高在哪儿：会读取更多上下文，主动分析风险和测试路径。
+好处：更稳，适合多文件、多模块、交付前修改。
+代价：更慢，token 和命令执行成本更高。
+适合：复杂 bug、跨端联调、重构、交付审查。
+```
+
+超高：
+
+```text
+高在哪儿：最大化规划、审计、验证和自我检查。
+好处：质量最稳，适合关键上线、隐私、安全和交付证据。
+代价：最慢、资源占用最高，不适合简单任务。
+适合：上线前验收、架构变更、隐私审计、最终交付。
+```
+
+### 10.5 影响指标
+
+每档展示具体影响：
+
+```text
+推理深度
+上下文预算
+验证强度
+自动修复轮次
+预计速度
+预计成本
+```
+
+显示方式为 6 条横向 meter，不用抽象文案糊弄用户呀。
+
+示例：
+
+```text
+低
+推理深度 2/5
+上下文预算 2/5
+验证强度 2/5
+自动修复 1/5
+速度 5/5
+成本 1/5
+```
+
+## 11. 思考强度动效
+
+每个思考强度对应不同动效，动效要克制且可关闭。
+
+```text
+极低：thumb 轻快滑动，轨道只有单点亮起。
+低：thumb 短滑，轨道出现两段柔和亮光。
+中：thumb 平滑弹性，轨道中段亮起，说明面板淡入。
+高：thumb 带轻微惯性，轨道出现连续扫描线。
+超高：thumb 稳重推进，轨道出现蓝青渐变脉冲，说明面板有轻微层级展开。
+```
+
+减少动态效果时：
+
+1. slider 仍可拖动。
+2. 不使用扫描、脉冲、弹性动效。
+3. 只做即时状态切换。
+
+## 12. Composer 中的强度入口
+
+首页 composer 右侧显示：
+
+```text
+模型名  思考强度
+```
+
+例如：
+
+```text
+5.5 超高
+```
+
+点击后打开小 popover：
+
+1. 当前模型
+2. 当前思考强度 slider
+3. 当前档位一句话说明
+4. 进入设置详情
+
+这和设置页复用同一套强度定义，不能出现首页和设置页含义不一致。
+
+## 13. 启动页与启动动画
+
+启动动画文件由用户制作完成后放入：
+
+```text
+apps/desktop/src/assets/splash/codemax-launch.webm
+apps/desktop/src/assets/splash/codemax-launch.mp4
+apps/desktop/src/assets/splash/codemax-poster.png
+```
+
+静态降级使用：
+
+```text
+D:\codemax\ico\CodeMax.png
+```
+
+启动页顺序：
+
+```text
+0.0s - 0.2s  Mac Minimal 背景
+0.2s - 2.8s  CodeMax 启动动画
+2.8s - 3.5s  启动自检
+3.5s+        首页淡入
+```
+
+启动自检只显示真实状态：
+
+```text
+检查 Agent
+检查存储
+检查模型配置
+```
+
+动画缺失、加载失败或减少动态效果开启时，直接显示静态图标。
+
+## 14. 视觉系统
+
+默认主题：
+
+```text
+theme id: macMinimal
+display: Mac Minimal
+```
+
+颜色：
+
+```text
+app background: #F7F7F8
+sidebar: #EFEFF1
+sidebar border: #DCDCE0
 surface: #FFFFFF
-surface raised: #FAFAFB
+composer surface: #FFFFFF
+composer tray: #F4F4F5
 text: #1D1D1F
 text secondary: #6E6E73
-border: #DCDCE0
+text faint: #9A9AA2
+border: #E3E3E7
 brand blue: #0A84FF
 brand cyan: #18D5F9
+access orange: #FF5A1F
 success: #30D158
 warning: #FF9F0A
 danger: #FF453A
@@ -126,227 +537,174 @@ danger: #FF453A
 圆角：
 
 ```text
-按钮：8px
-输入框：10px
-弹窗：12px
-面板：10px
+sidebar item: 8px
+composer: 22px
+popover: 14px
+settings group: 12px
+dialog: 16px
 ```
 
-阴影只用于弹窗、抽屉和悬浮菜单：
+阴影：
 
 ```text
-0 18px 60px rgb(0 0 0 / 16%)
+composer: 0 12px 36px rgb(0 0 0 / 8%)
+popover: 0 18px 54px rgb(0 0 0 / 14%)
+dialog: 0 24px 80px rgb(0 0 0 / 18%)
 ```
 
-字体使用系统字体栈：
+字体：
 
 ```text
 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif
 ```
 
-字号：
+## 15. 国际化
 
-```text
-主标题：20-24px
-页面标题：18-20px
-正文：14px
-辅助文字：12-13px
-代码与路径：12-13px monospace
-```
-
-## 7. 启动页与启动动画
-
-启动动画文件由用户制作后放入项目文件包。推荐路径：
-
-```text
-apps/desktop/src/assets/splash/codemax-launch.webm
-apps/desktop/src/assets/splash/codemax-launch.mp4
-apps/desktop/src/assets/splash/codemax-poster.png
-```
-
-静态降级资源：
-
-```text
-D:\codemax\ico\CodeMax.png
-```
-
-启动流程：
-
-```text
-0.0s - 0.2s  显示 Mac Minimal 背景
-0.2s - 2.8s  播放 CodeMax 启动动画
-2.8s - 3.5s  显示启动自检状态
-3.5s+        淡入主工作台
-```
-
-启动页只显示必要信息：
-
-```text
-CodeMax
-正在准备本地智能工作台...
-检查 Agent
-检查存储
-检查模型配置
-```
-
-英文：
-
-```text
-CodeMax
-Preparing your local agent workspace...
-Checking Agent
-Checking Storage
-Checking Model Settings
-```
-
-如果动画缺失、加载失败或用户启用减少动态效果，则显示 `CodeMax.png` 静态图标，并直接进入自检状态。
-
-## 8. 关键页面设计
-
-### 8.1 新任务弹窗
-
-新任务弹窗采用 Codex composer 体验：
-
-1. 左侧是大输入框，用户描述任务。
-2. 右侧是运行契约摘要：模式、模型、权限、验证命令、存储位置。
-3. 底部是发送按钮、计划模式、审核模式和设置入口。
-
-弹窗必须保持视觉安静，不堆满说明文字。
-
-### 8.2 设置页
-
-设置页采用 Mac Settings 风格：
-
-1. 左侧分类 rail。
-2. 右侧是单一分类详情。
-3. 表单项按行排列，开关使用 toggle，选项使用 segmented control 或 select。
-
-分类：
-
-1. Models
-2. Modes
-3. Permissions
-4. Storage
-5. Memory
-6. Appearance
-7. Language
-8. Startup
-
-### 8.3 存储页
-
-存储页必须清楚显示：
-
-1. 数据库路径
-2. worktree 路径
-3. 日志占用
-4. 截图占用
-5. 临时上下文占用
-6. 可清理内容
-7. 不可清理永久证据
-
-清理按钮必须解释影响范围，不允许让用户误删 Proof Pack 或永久证据。
-
-## 9. 国际化
-
-新增文案必须加入：
+新增文案进入：
 
 ```text
 apps/desktop/src/i18n/locales/zh-CN.json
 apps/desktop/src/i18n/locales/en-US.json
 ```
 
-新增 key 建议：
+建议 key：
 
 ```text
+home.promptTitle
+home.placeholder
+home.chooseProject
+sidebar.skills
+search.title
+search.placeholder
+search.emptyTitle
+search.emptyHint
+skills.title
+skills.subtitle
+skills.source.workspace
+skills.source.project
+skills.source.global
+skills.source.builtIn
+settings.thinking.title
+settings.thinking.subtitle
+settings.thinking.minimal
+settings.thinking.low
+settings.thinking.medium
+settings.thinking.high
+settings.thinking.max
+settings.thinking.benefit
+settings.thinking.tradeoff
+settings.thinking.bestFor
+settings.thinking.depth
+settings.thinking.contextBudget
+settings.thinking.validation
+settings.thinking.repair
+settings.thinking.speed
+settings.thinking.cost
 splash.title
 splash.subtitle
 splash.check.agent
 splash.check.storage
 splash.check.model
-splash.check.ready
-settings.appearance.macMinimal
-settings.startup.title
-settings.startup.animation
-settings.startup.reducedMotion
-contextInspector.title
-contextInspector.runContract
-contextInspector.storage
-contextInspector.privacy
 ```
 
-## 10. 性能与可访问性
+## 16. 数据与文件来源
 
-1. 启动动画优先使用压缩后的视频资源，避免引入过大的 Lottie 或逐帧图片。
-2. 动画文件建议小于 8 MB。
-3. 支持 `prefers-reduced-motion: reduce`。
-4. 启动动画不可阻塞真实启动自检。
-5. 日志、Diff、长列表必须保持普通背景和高可读文本。
-6. 所有图标按钮必须有 `aria-label`。
-7. 所有状态不能只靠颜色表达。
+### 16.1 技能发现
 
-## 11. 数据流
-
-启动页数据流：
+技能来源路径：
 
 ```text
-App mount
-  -> load splash assets
-  -> run startup health check
-  -> show health status
-  -> mark app ready
-  -> fade into workspace
+<workspace>/.codemax/skills
+<project>/.codemax/skills
+%USERPROFILE%/.codemax/skills
+built-in skills
 ```
 
-主题数据流：
+展示字段：
 
 ```text
-SettingsPage
-  -> setTheme("macMinimal")
-  -> Zustand appStore.theme
-  -> App root class theme-macMinimal
-  -> global.css variables
+id
+name
+description
+source
+path
+enabled
+lastUsedAt
+overrides
 ```
 
-右侧上下文面板数据流：
+### 16.2 搜索数据
+
+搜索只读取：
 
 ```text
-selectedTaskId
-  -> task detail
-  -> run contract summary
-  -> storage summary
-  -> privacy summary
-  -> proof pack status
+conversation_id
+title
+project_name
+updated_at
+status
 ```
 
-## 12. 实施顺序
+不读取对话正文、命令日志或代码内容。
 
-1. 新增 UI 设计验收脚本，锁定主题、启动页、三栏结构和 i18n key。
-2. 引入 `macMinimal` 主题变量，保持默认主题切到 `macMinimal`。
-3. 调整 App shell 为左侧栏、中间主区、右侧上下文面板。
-4. 新增 SplashScreen 组件和启动自检展示。
-5. 接入启动动画资源路径和静态降级。
-6. 整理任务页为线程式布局。
-7. 整理设置页为 Mac Settings 风格。
-8. 更新中英文 i18n。
-9. 运行前端检查、桌面构建和视觉验收。
+### 16.3 思考强度数据
 
-## 13. 验收标准
+建议结构：
 
-1. 默认打开应用时，整体观感接近 Codex 桌面版，并带 Mac 浅色应用质感。
-2. 主界面不再是杂乱 dashboard，而是任务线程式工作台。
-3. 左侧侧栏、主区、右侧上下文面板职责清晰。
-4. 启动动画存在时正常播放，缺失时使用 `CodeMax.png` 降级。
-5. 启动页显示 Agent、存储、模型配置的真实自检状态。
-6. 新增文案全部支持中英文。
-7. 存储路径与占用在设置页透明可见。
-8. 日志、Diff、代码输出保持清晰可读。
-9. 减少动态效果模式下不播放启动动画。
-10. 前端检查和桌面构建通过。
+```text
+thinking_strength:
+  level: minimal | low | medium | high | max
+  reasoning_depth: 1-5
+  context_budget: 1-5
+  validation_strength: 1-5
+  repair_rounds: 0-5
+  speed_bias: 1-5
+  cost_level: 1-5
+```
 
-## 14. 设计自检
+## 17. 性能与可访问性
 
-1. 无未决项或空白内容。
-2. 方案聚焦 D 线 UI、启动页、设置和存储体验，没有改变后端任务链路。
-3. Mac Minimal 是默认体验，Liquid Glass 仅作为未来可选增强，不影响本次范围。
-4. 启动动画缺失、加载失败、减少动态效果三种情况都有降级路径。
-5. 信息层级从任务优先出发，减少侧栏和页面内卡片堆叠，符合用户“不要乱”的反馈。
+1. 首页默认不加载重图表、不拉取大日志、不渲染 Diff。
+2. 启动动画建议小于 8 MB。
+3. 技能扫描要懒加载，先显示来源，再异步读取描述。
+4. 搜索只搜标题，保证即时响应。
+5. slider 支持键盘左右键切换。
+6. 强度动效遵守 `prefers-reduced-motion`。
+7. 所有图标按钮有 `aria-label`。
+8. 状态不能只靠颜色表达。
+
+## 18. 实施顺序
+
+1. 更新 UI 验收脚本，锁定首页 composer、技能入口、对话标题搜索和思考强度 slider。
+2. 将侧栏插件入口替换为技能入口。
+3. 首页改为 Codex-like 新对话 composer，不展示内部框架。
+4. 搜索改为只搜对话名字和任务标题。
+5. 新增 Skills 页面与技能来源展示。
+6. 设置页新增思考强度详情页和拖动式 slider。
+7. Composer 接入模型与思考强度快捷 popover。
+8. 启动页接入动画资源路径和静态降级。
+9. 更新中英文 i18n。
+10. 运行前端检查、桌面构建和视觉验收。
+
+## 19. 验收标准
+
+1. 打开应用后看到的是 Codex-like 首页，不是内部框架首页。
+2. 首页中央有“我们该做什么？”和大 composer。
+3. 左侧显示技能入口，不显示插件入口。
+4. 技能页能展示工作区、项目和全局 `.codemax/skills`。
+5. 搜索只匹配对话名字或任务线程标题。
+6. composer 中能看到模型和思考强度，例如 `5.5 超高`。
+7. 设置页有独立思考强度页，使用拖动式 slider。
+8. 每个思考强度展示具体变化、好处、代价和适用场景。
+9. 每个强度有对应动效，减少动态效果时关闭动画。
+10. 启动动画资源存在时播放，不存在时使用 `CodeMax.png`。
+11. 所有新增文案支持中英文。
+12. 日志、Diff、Proof Pack 等内部细节不出现在首页默认态。
+
+## 20. 设计自检
+
+1. 设计覆盖启动、首页、任务、搜索、技能、设置、存储和模型强度。
+2. 首页符合用户给出的 Codex 桌面版参考图，不展示内部框架。
+3. 插件概念已替换为技能，并明确 `.codemax/skills` 来源。
+4. 思考强度不只是标签，包含指标、说明、好处、代价和动效。
+5. 本设计仍聚焦 UI 与体验，不改变 Agent 后端执行链路。
