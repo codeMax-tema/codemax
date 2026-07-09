@@ -273,6 +273,78 @@
           },
           "required": ["response"]
         },
+        "profile_list": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ActiveProfileView"
+              }
+            }
+          },
+          "required": ["response"]
+        },
+        "profile_create": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ProfileCreateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ActiveProfileView"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "profile_update": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ProfileUpdateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ActiveProfileView"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "profile_activate": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ProfileIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ActiveProfileView"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "privacy_preview": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskStartPreviewRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/PrivacyPreview"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "run_contract_preview": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskStartPreviewRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RunContractPreview"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "run_contract": {
           "type": "object",
           "properties": {
@@ -304,6 +376,21 @@
           },
           "required": ["request", "response"]
         },
+        "privacy_ledger_entries": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PrivacyLedgerEntry"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
         "token_budget_summary": {
           "type": "object",
           "properties": {
@@ -312,6 +399,114 @@
             },
             "response": {
               "$ref": "#/$defs/TokenBudgetSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "context_sources": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContextSource"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "contract_breach_records": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContractBreachRecord"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "record_contract_breach": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordContractBreachRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ContractBreachRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "memory_used_by_task": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/TaskIdRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TaskMemoryUsage"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "record_memory_used_by_task": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordMemoryUsageRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskMemoryUsage"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "preference_candidates": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/PreferenceCandidatesRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PreferenceCandidate"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "preference_candidate_create": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CreatePreferenceCandidateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/PreferenceCandidate"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "preference_candidate_decide": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/DecidePreferenceCandidateRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/PreferenceCandidate"
             }
           },
           "required": ["request", "response"]
@@ -496,9 +691,24 @@
         "get_model_config",
         "save_model_config",
         "active_profile",
+        "profile_list",
+        "profile_create",
+        "profile_update",
+        "profile_activate",
+        "privacy_preview",
+        "run_contract_preview",
         "run_contract",
         "privacy_ledger_summary",
+        "privacy_ledger_entries",
         "token_budget_summary",
+        "context_sources",
+        "contract_breach_records",
+        "record_contract_breach",
+        "memory_used_by_task",
+        "record_memory_used_by_task",
+        "preference_candidates",
+        "preference_candidate_create",
+        "preference_candidate_decide",
         "start_agent_service",
         "stop_agent_service",
         "get_agent_service_status",
@@ -1565,7 +1775,40 @@
       "type": "object",
       "additionalProperties": true
     },
+    "ProfileCreateRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ProfileUpdateRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ProfileIdRequest": {
+      "type": "object",
+      "properties": {
+        "profileId": {
+          "type": "string"
+        }
+      },
+      "required": ["profileId"]
+    },
+    "TaskStartPreviewRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "PrivacyPreview": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RunContractPreview": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "RunContractView": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "PrivacyLedgerEntry": {
       "type": "object",
       "additionalProperties": true
     },
@@ -1574,6 +1817,42 @@
       "additionalProperties": true
     },
     "TokenBudgetSummary": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ContextSource": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ContractBreachRecord": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RecordContractBreachRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "TaskMemoryUsage": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RecordMemoryUsageRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "PreferenceCandidatesRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "PreferenceCandidate": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "CreatePreferenceCandidateRequest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "DecidePreferenceCandidateRequest": {
       "type": "object",
       "additionalProperties": true
     },

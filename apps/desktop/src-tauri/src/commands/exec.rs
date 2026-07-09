@@ -17,11 +17,13 @@ use crate::{
         CommandExecutionError, CommandExecutionResult, CommandExecutor, CommandLogPaths,
         CommandOutputSink, CommandOutputStream, CommandRequest, CommandRunRegistry, LogRedactor,
     },
+    privacy::redact_known_user_paths,
     safety::{self, RiskAssessment},
     storage::{
         AgentEventRepository, ApprovalRecord, ApprovalRepository, CommandRunRecord,
-        CommandRunRepository, ManagedStorage, NewAgentEvent, NewApproval, NewCommandRun,
-        NewValidationRound, StorageError, StoragePolicyRepository, TaskRecord, TaskRepository,
+        CommandRunRepository, ContractBreachRepository, ManagedStorage, NewAgentEvent, NewApproval,
+        NewCommandRun, NewContractBreachRecord, NewValidationRound, RunContractRepository,
+        StorageError, StoragePolicyRepository, TaskRecord, TaskRepository,
         ValidationRoundRepository,
     },
 };
@@ -121,7 +123,11 @@ pub(crate) async fn run_task_command(
         .expect("run id is assigned")
         .to_string();
     let is_validation = is_validation_run(&run_id);
-    let command_stage = if is_validation { "validating" } else { "editing" };
+    let command_stage = if is_validation {
+        "validating"
+    } else {
+        "editing"
+    };
     record_agent_event(
         storage,
         &task.id,
@@ -449,6 +455,7 @@ fn enforce_command_safety(
     }
 
     let approval = create_command_approval(&approvals, &task.id, &content, &assessment)?;
+    let breach = record_command_contract_breach(connection, &task.id, request, &approval)?;
     TaskRepository::new(connection)
         .update_status(&task.id, "awaitingApproval", None)
         .map_err(storage_error)?;
@@ -460,6 +467,7 @@ fn enforce_command_safety(
         "Command requires approval before execution.",
         json!({
             "approval_id": &approval.id,
+            "contract_breach_id": &breach.id,
             "risk_level": &approval.risk_level,
             "content": &approval.content,
         }),
@@ -489,6 +497,44 @@ fn create_command_approval(
             risk_level: assessment.level.as_str(),
             content,
             reason: &approval_reason(assessment),
+        })
+        .map_err(storage_error)
+}
+
+fn record_command_contract_breach(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    request: &CommandRequest,
+    approval: &ApprovalRecord,
+) -> AppResult<crate::storage::ContractBreachRecord> {
+    let contract = RunContractRepository::new(connection)
+        .get_for_task(task_id)
+        .map_err(storage_error)?;
+    let contract_id = contract.as_ref().map(|contract| contract.id.as_str());
+    let policy_value = contract
+        .as_ref()
+        .map(|contract| contract.allowed_commands_json.as_str())
+        .unwrap_or("No stored run contract was found for this task.");
+    let requested_value = redact_known_user_paths(&format!(
+        "command: {}\ncwd: {}",
+        request.command.trim(),
+        request.cwd.trim()
+    ));
+    let policy_value = redact_known_user_paths(policy_value);
+    let reason = "Command execution exceeded the stored run contract and requires approval.";
+    let breach_id = format!("contract-breach-{}", uuid::Uuid::new_v4());
+
+    ContractBreachRepository::new(connection)
+        .record(NewContractBreachRecord {
+            id: &breach_id,
+            task_id,
+            contract_id,
+            breach_type: "command_policy",
+            requested_value: &requested_value,
+            policy_value: &policy_value,
+            status: "pending_approval",
+            approval_id: Some(&approval.id),
+            reason,
         })
         .map_err(storage_error)
 }
@@ -1332,6 +1378,15 @@ mod tests {
             .expect("list approvals");
         assert_eq!(approvals.len(), 1);
         assert_eq!(approvals[0].decision, None);
+        let breaches = ContractBreachRepository::new(store.connection())
+            .list_for_task("task-001")
+            .expect("list contract breaches");
+        assert_eq!(breaches.len(), 1);
+        assert_eq!(
+            breaches[0].approval_id.as_deref(),
+            Some(approvals[0].id.as_str())
+        );
+        assert_eq!(breaches[0].status, "pending_approval");
         assert_eq!(
             TaskRepository::new(store.connection())
                 .get_required("task-001")

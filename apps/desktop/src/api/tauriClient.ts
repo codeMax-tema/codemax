@@ -14,11 +14,16 @@ import type {
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
+  ContextSource,
+  ContractBreachRecord,
   DeliveryReviewState,
   GeneratedTaskDelivery,
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
   ActiveProfile,
+  PreferenceCandidate,
+  PrivacyLedgerEntry,
+  PrivacyPreview,
   PrivacyLedgerSummary,
   QualityGateOverrideResult,
   QualityGateRecord,
@@ -30,8 +35,10 @@ import type {
   RepositoryDirtyStatus,
   RepositorySummary,
   RunContract,
+  RunContractPreview,
   StartupHealthResponse,
   StorageUsageResponse,
+  TaskMemoryUsage,
   TaskBranch,
   TaskDetail,
   TokenBudgetSummary,
@@ -177,6 +184,64 @@ export function getActiveProfile() {
   return invokeCommand<ActiveProfile>('active_profile');
 }
 
+export interface ProfileCreateRequest {
+  id?: string;
+  name: string;
+  scope?: string;
+  scopeId?: string;
+  mode?: string;
+  modelId?: string;
+  reasoningEffort?: string;
+  permissionLevel?: string;
+  networkPolicy?: string;
+  privacyMode?: string;
+  tokenBudgetTotal?: number;
+  tokenBudgetPerCall?: number;
+  validationPolicy?: string;
+  outputLanguage?: string;
+  memoryScope?: string;
+  qualityGatePolicy?: string;
+  activate?: boolean;
+}
+
+export interface ProfileUpdateRequest extends Partial<ProfileCreateRequest> {
+  profileId: string;
+  clearScopeId?: boolean;
+  clearModelId?: boolean;
+}
+
+export function listProfiles() {
+  return invokeCommand<ActiveProfile[]>('profile_list');
+}
+
+export function createProfile(request: ProfileCreateRequest) {
+  return invokeCommand<ActiveProfile>('profile_create', { request });
+}
+
+export function updateProfile(request: ProfileUpdateRequest) {
+  return invokeCommand<ActiveProfile>('profile_update', { request });
+}
+
+export function activateProfile(profileId: string) {
+  return invokeCommand<ActiveProfile>('profile_activate', { profileId });
+}
+
+export interface TaskStartPreviewRequest {
+  repositoryPath: string;
+  title?: string;
+  description: string;
+  modelId?: string;
+  validationCommand?: string;
+}
+
+export function getPrivacyPreview(request: TaskStartPreviewRequest) {
+  return invokeCommand<PrivacyPreview>('privacy_preview', { request });
+}
+
+export function getRunContractPreview(request: TaskStartPreviewRequest) {
+  return invokeCommand<RunContractPreview>('run_contract_preview', { request });
+}
+
 export function getRunContract(taskId: string) {
   return invokeCommand<RunContract | null>('run_contract', { taskId });
 }
@@ -185,8 +250,84 @@ export function getPrivacyLedgerSummary(taskId: string) {
   return invokeCommand<PrivacyLedgerSummary>('privacy_ledger_summary', { taskId });
 }
 
+export function getPrivacyLedgerEntries(taskId: string) {
+  return invokeCommand<PrivacyLedgerEntry[]>('privacy_ledger_entries', { taskId });
+}
+
 export function getTokenBudgetSummary(taskId: string) {
   return invokeCommand<TokenBudgetSummary>('token_budget_summary', { taskId });
+}
+
+export function getContextSources(taskId: string) {
+  return invokeCommand<ContextSource[]>('context_sources', { taskId });
+}
+
+export function getContractBreachRecords(taskId: string) {
+  return invokeCommand<ContractBreachRecord[]>('contract_breach_records', { taskId });
+}
+
+export interface RecordContractBreachRequest {
+  taskId: string;
+  breachType: string;
+  requestedValue: string;
+  policyValue: string;
+  reason?: string;
+  status?: string;
+}
+
+export function recordContractBreach(request: RecordContractBreachRequest) {
+  return invokeCommand<ContractBreachRecord>('record_contract_breach', { request });
+}
+
+export function getMemoryUsedByTask(taskId: string) {
+  return invokeCommand<TaskMemoryUsage[]>('memory_used_by_task', { taskId });
+}
+
+export interface RecordMemoryUsageRequest {
+  taskId: string;
+  memoryId?: string;
+  memoryKey: string;
+  memoryScope: string;
+  memoryScopeId?: string;
+  usageType: string;
+  value: string;
+}
+
+export function recordMemoryUsedByTask(request: RecordMemoryUsageRequest) {
+  return invokeCommand<TaskMemoryUsage>('record_memory_used_by_task', { request });
+}
+
+export interface PreferenceCandidatesRequest {
+  taskId?: string;
+}
+
+export function getPreferenceCandidates(request: PreferenceCandidatesRequest = {}) {
+  return invokeCommand<PreferenceCandidate[]>('preference_candidates', { request });
+}
+
+export interface CreatePreferenceCandidateRequest {
+  taskId?: string;
+  scope: string;
+  scopeId?: string;
+  preferenceKey: string;
+  candidateValue: string;
+  evidence?: string;
+  confidence?: number;
+}
+
+export function createPreferenceCandidate(request: CreatePreferenceCandidateRequest) {
+  return invokeCommand<PreferenceCandidate>('preference_candidate_create', { request });
+}
+
+export interface DecidePreferenceCandidateRequest {
+  candidateId: string;
+  decision: string;
+  editedValue?: string;
+  comment?: string;
+}
+
+export function decidePreferenceCandidate(request: DecidePreferenceCandidateRequest) {
+  return invokeCommand<PreferenceCandidate>('preference_candidate_decide', { request });
 }
 
 export function listPendingApprovals() {

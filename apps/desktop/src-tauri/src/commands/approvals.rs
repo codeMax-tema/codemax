@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::{
     core::error::{AppResult, CommandError},
     storage::{
-        AgentEventRepository, ApprovalRecord, ApprovalRepository, ManagedStorage, NewAgentEvent,
-        StorageError, TaskRepository,
+        AgentEventRepository, ApprovalRecord, ApprovalRepository, ContractBreachRepository,
+        ManagedStorage, NewAgentEvent, StorageError, TaskRepository,
     },
 };
 
@@ -95,6 +95,9 @@ pub fn decide_approval(
     let approvals = ApprovalRepository::new(connection);
     let decided = approvals
         .decide(approval_id, decision, comment)
+        .map_err(storage_error)?;
+    ContractBreachRepository::new(connection)
+        .update_status_for_approval(approval_id, decision)
         .map_err(storage_error)?;
 
     if matches!(decision, "rejected" | "revise") {

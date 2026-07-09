@@ -540,6 +540,101 @@ export interface TokenBudgetSummary {
   contextSources: ContextSource[];
 }
 
+export interface PrivacyPreviewSource {
+  dataKind: string;
+  sourceType: string;
+  sourceRef: string;
+  destination: string;
+  action: string;
+  sensitivityLevel: string;
+  findings: unknown;
+  redacted: boolean;
+  blocked: boolean;
+  included: boolean;
+  reason: string;
+  sizeBytes: number;
+  tokensEstimate: number;
+}
+
+export interface PrivacyPreview {
+  repositoryPath: string;
+  provider: string;
+  modelId?: string | null;
+  totalSources: number;
+  redactedCount: number;
+  blockedCount: number;
+  inputTokensEstimate: number;
+  sources: PrivacyPreviewSource[];
+}
+
+export interface RunContractPreview {
+  sourceProfileId: string;
+  sourceProfileName: string;
+  mode: string;
+  modelId?: string | null;
+  reasoningEffort: string;
+  permissionLevel: string;
+  networkPolicy: string;
+  allowedPaths: string[];
+  allowedCommands: string[];
+  validationCommand?: string | null;
+  tokenBudgetTotal: number;
+  tokenBudgetPerCall: number;
+  outputLanguage: string;
+  memoryScope: string;
+  budgetOverflowPolicy: string;
+  contract: Record<string, unknown> | null;
+}
+
+export interface ContractBreachRecord {
+  id: string;
+  taskId: string;
+  contractId?: string | null;
+  breachType: string;
+  requestedValue: string;
+  policyValue: string;
+  status: string;
+  approvalId?: string | null;
+  reason: string;
+  createdAt: string;
+}
+
+export interface TaskMemoryUsage {
+  id: string;
+  taskId: string;
+  memoryId?: string | null;
+  memoryKey: string;
+  memoryScope: string;
+  memoryScopeId?: string | null;
+  usageType: string;
+  valuePreview: string;
+  tokensEstimate: number;
+  redacted: boolean;
+  blocked: boolean;
+  reason: string;
+  createdAt: string;
+}
+
+export interface PreferenceCandidate {
+  id: string;
+  taskId?: string | null;
+  scope: string;
+  scopeId?: string | null;
+  preferenceKey: string;
+  candidateValue: string;
+  evidence: string;
+  confidence: number;
+  status: string;
+  redacted: boolean;
+  blocked: boolean;
+  reason: string;
+  decisionComment?: string | null;
+  acceptedMemoryId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt?: string | null;
+}
+
 export interface StorageUsageResponse {
   appDataDir: string;
   databasePath: string;

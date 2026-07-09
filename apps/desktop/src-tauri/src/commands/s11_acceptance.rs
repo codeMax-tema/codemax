@@ -13,6 +13,7 @@ use crate::{
         merge::{
             merge_task_inner, prepare_task_merge_inner, MergeTaskRequest, PrepareTaskMergeRequest,
         },
+        s12_evidence::{generate_task_proof_pack_inner, GenerateTaskProofPackRequest},
     },
     exec::{
         CommandExecutor, CommandLogPaths, CommandOutputSink, CommandRequest, CommandRunRegistry,
@@ -81,6 +82,15 @@ async fn s11_mvp_demo_repo_runs_from_worktree_to_local_merge() {
     assert_eq!(delivery.report.failed_count, 0);
     assert!(PathBuf::from(&delivery.report_path).is_file());
     assert!(PathBuf::from(&delivery.delivery_path).is_file());
+
+    let proof_pack = generate_task_proof_pack_inner(
+        &storage,
+        GenerateTaskProofPackRequest {
+            task_id: TASK_ID.to_string(),
+        },
+    )
+    .expect("generate proof pack before merge");
+    assert!(PathBuf::from(&proof_pack.proof_dir).is_dir());
 
     let prepared = prepare_task_merge_inner(
         &storage,
