@@ -666,6 +666,66 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "record_rule_hit": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordRuleHitRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/RuleHitRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "record_hook_run": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordHookRunRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/HookRunRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "request_hook_approval": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RequestHookApprovalRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/HookApprovalRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "resolve_hook_approval": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ResolveHookApprovalRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/HookApprovalRecord"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "record_model_arena_decision": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RecordModelArenaDecisionRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ModelArenaDecisionRecord"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
       "required": [
@@ -722,7 +782,12 @@
         "generate_task_proof_pack",
         "get_delivery_review_state",
         "record_quality_gate_result",
-        "override_quality_gate"
+        "override_quality_gate",
+        "record_rule_hit",
+        "record_hook_run",
+        "request_hook_approval",
+        "resolve_hook_approval",
+        "record_model_arena_decision"
       ]
     }
   },
@@ -1971,6 +2036,45 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "proofPackId": {
+          "type": "string"
+        },
+        "proofDir": {
+          "type": "string"
+        },
+        "manifestPath": {
+          "type": "string"
+        },
+        "summaryPath": {
+          "type": "string"
+        },
+        "capsulePath": {
+          "type": "string"
+        },
+        "proofPackFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "deliveryScoreBreakdown": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "riskFindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "qualityGateBlockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -1983,7 +2087,16 @@
         "proposals",
         "screenshots",
         "qualityGates",
-        "risks"
+        "risks",
+        "proofPackId",
+        "proofDir",
+        "manifestPath",
+        "summaryPath",
+        "capsulePath",
+        "proofPackFiles",
+        "deliveryScoreBreakdown",
+        "riskFindings",
+        "qualityGateBlockers"
       ],
       "additionalProperties": true
     },
@@ -2124,6 +2237,25 @@
           "type": "object",
           "additionalProperties": true
         },
+        "proofPackFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "privacyLedgerSummary": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "runContractSummary": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "tokenBudgetSummary": {
+          "type": "object",
+          "additionalProperties": true
+        },
         "ruleHits": {
           "type": "array",
           "items": {
@@ -2163,6 +2295,10 @@
         "deliveryScore",
         "riskRecords",
         "taskCapsule",
+        "proofPackFiles",
+        "privacyLedgerSummary",
+        "runContractSummary",
+        "tokenBudgetSummary",
         "ruleHits",
         "hookRuns",
         "modelArenaDecision",
@@ -2211,6 +2347,136 @@
       "additionalProperties": true
     },
     "QualityGateOverrideResult": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RecordRuleHitRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId", "rule", "status", "message"]
+    },
+    "RecordHookRunRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "command": {
+          "type": ["string", "null"]
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "approvalId": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId", "hook", "lifecycle", "status", "message"]
+    },
+    "RequestHookApprovalRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "hook", "reason"]
+    },
+    "ResolveHookApprovalRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "approvalId": {
+          "type": "string"
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "reviewer": {
+          "type": ["string", "null"]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "approvalId", "approved", "reason"]
+    },
+    "RecordModelArenaDecisionRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "selectedModel": {
+          "type": ["string", "null"]
+        },
+        "selectedProposalId": {
+          "type": ["string", "null"]
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "comparedModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["taskId", "status", "rationale", "comparedModels"]
+    },
+    "RuleHitRecord": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "HookRunRecord": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "HookApprovalRecord": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ModelArenaDecisionRecord": {
       "type": "object",
       "additionalProperties": true
     }

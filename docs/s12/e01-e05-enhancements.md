@@ -51,3 +51,7 @@ The acceptance rule is that Agent context retrieval must not default to reading 
 The command persists rows in `proof_packs`, `delivery_scores`, and `artifact_files`. Risk radar scans command text and changed file paths for dangerous commands, sensitive files, dependency changes, and schema changes.
 
 Merge preparation now also checks failed quality gates from `quality_gate_results`. Failed gates with no override reason become merge blockers. Existing tasks without gate rows keep the previous S10 behavior.
+
+## C-Line Delivery Review Closure
+
+The 2026-07-09 C-line closure adds durable rule hits, hook runs, hook escalation approvals, and model-arena decisions. These records are stored as SQLite indexes, exposed through IPC, rendered in the delivery review page, included in Proof Pack manifests, and used by merge blockers when a rule or hook remains unresolved.

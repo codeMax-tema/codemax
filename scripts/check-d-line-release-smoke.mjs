@@ -151,7 +151,7 @@ function buildSmokeSections(currentReport) {
     delivery_review_smoke: {
       status: 'pending_integration',
       evidence: [
-        'S12 proof, gate, score, and risk UI markers are present in source checks.',
+        'C-line proof, gate, score, risk, rules, hooks, and model arena UI/API markers are present in source checks.',
         'Installed-app export smoke should be connected after C-line latest work lands.',
       ],
     },

@@ -4508,7 +4508,14 @@ button:disabled {
 .s12-quality-gate,
 .s12-risk-radar,
 .s12-proposal-cards,
-.s12-screenshots-panel {
+.s12-screenshots-panel,
+.s12-privacy-panel,
+.s12-contract-panel,
+.s12-token-budget-panel,
+.s12-proof-files-panel,
+.s12-rules-panel,
+.s12-hooks-panel,
+.s12-model-arena-panel {
   min-width: 0;
 }
 
@@ -4527,7 +4534,14 @@ button:disabled {
 .s12-quality-gate header,
 .s12-risk-radar header,
 .s12-proposal-cards header,
-.s12-screenshots-panel header {
+.s12-screenshots-panel header,
+.s12-privacy-panel header,
+.s12-contract-panel header,
+.s12-token-budget-panel header,
+.s12-proof-files-panel header,
+.s12-rules-panel header,
+.s12-hooks-panel header,
+.s12-model-arena-panel header {
   color: #20242b;
   font-size: 13px;
   font-weight: 650;
@@ -4535,7 +4549,11 @@ button:disabled {
 
 .s12-highlight-heading p,
 .s12-delivery-score p,
-.s12-proposal-cards p {
+.s12-proposal-cards p,
+.s12-privacy-panel p,
+.s12-contract-panel p,
+.s12-token-budget-panel p,
+.s12-model-arena-panel p {
   margin: 4px 0 0;
   color: #73737c;
   font-size: 12px;
@@ -4637,7 +4655,14 @@ button:disabled {
 .s12-quality-gate,
 .s12-risk-radar,
 .s12-proposal-cards,
-.s12-screenshots-panel {
+.s12-screenshots-panel,
+.s12-privacy-panel,
+.s12-contract-panel,
+.s12-token-budget-panel,
+.s12-proof-files-panel,
+.s12-rules-panel,
+.s12-hooks-panel,
+.s12-model-arena-panel {
   display: grid;
   align-content: start;
   gap: 9px;
@@ -4652,7 +4677,14 @@ button:disabled {
 .s12-quality-gate header,
 .s12-risk-radar header,
 .s12-proposal-cards header,
-.s12-screenshots-panel header {
+.s12-screenshots-panel header,
+.s12-privacy-panel header,
+.s12-contract-panel header,
+.s12-token-budget-panel header,
+.s12-proof-files-panel header,
+.s12-rules-panel header,
+.s12-hooks-panel header,
+.s12-model-arena-panel header {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -4663,7 +4695,14 @@ button:disabled {
 .s12-quality-gate svg,
 .s12-risk-radar svg,
 .s12-proposal-cards svg,
-.s12-screenshots-panel svg {
+.s12-screenshots-panel svg,
+.s12-privacy-panel svg,
+.s12-contract-panel svg,
+.s12-token-budget-panel svg,
+.s12-proof-files-panel svg,
+.s12-rules-panel svg,
+.s12-hooks-panel svg,
+.s12-model-arena-panel svg {
   color: #5b5f68;
 }
 
@@ -4682,7 +4721,11 @@ button:disabled {
 
 .s12-proof-pack small,
 .s12-proposal-cards small,
-.s12-screenshots-panel small {
+.s12-screenshots-panel small,
+.s12-privacy-panel small,
+.s12-contract-panel small,
+.s12-token-budget-panel small,
+.s12-model-arena-panel small {
   color: #8b8b94;
   font-size: 11px;
 }
@@ -4752,7 +4795,11 @@ button:disabled {
 }
 
 .s12-proposal-cards section,
-.s12-screenshots-panel section {
+.s12-screenshots-panel section,
+.s12-privacy-panel section,
+.s12-contract-panel section,
+.s12-token-budget-panel section,
+.s12-model-arena-panel section {
   display: grid;
   gap: 4px;
   min-width: 0;
@@ -4763,7 +4810,11 @@ button:disabled {
 }
 
 .s12-proposal-cards strong,
-.s12-screenshots-panel strong {
+.s12-screenshots-panel strong,
+.s12-privacy-panel strong,
+.s12-contract-panel strong,
+.s12-token-budget-panel strong,
+.s12-model-arena-panel strong {
   color: #20242b;
   font-size: 12px;
   font-weight: 650;

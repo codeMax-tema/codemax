@@ -28,6 +28,9 @@ const PRIVACY_CONTRACT_BUDGET_MIGRATION: &str =
 const B_LINE_FULL_CLOSURE_MIGRATION_VERSION: &str = "0006_b_line_full_closure";
 const B_LINE_FULL_CLOSURE_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0006_b_line_full_closure.sql");
+const C_LINE_DELIVERY_REVIEW_MIGRATION_VERSION: &str = "0007_c_line_delivery_review";
+const C_LINE_DELIVERY_REVIEW_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0007_c_line_delivery_review.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -102,6 +105,10 @@ impl SqliteStore {
         self.apply_migration(
             B_LINE_FULL_CLOSURE_MIGRATION_VERSION,
             B_LINE_FULL_CLOSURE_MIGRATION,
+        )?;
+        self.apply_migration(
+            C_LINE_DELIVERY_REVIEW_MIGRATION_VERSION,
+            C_LINE_DELIVERY_REVIEW_MIGRATION,
         )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
@@ -3445,6 +3452,11 @@ mod tests {
             "context_sources",
             "task_memory_usages",
             "preference_candidates",
+            "rule_registry",
+            "rule_hits",
+            "hook_approvals",
+            "hook_runs",
+            "model_arena_decisions",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }
@@ -3504,6 +3516,11 @@ mod tests {
             "agent_events",
             "validation_rounds",
             "merge_records",
+            "rule_registry",
+            "rule_hits",
+            "hook_approvals",
+            "hook_runs",
+            "model_arena_decisions",
         ] {
             assert!(tables.contains(&table.to_string()), "missing {table}");
         }

@@ -22,7 +22,8 @@ use crate::{
     storage::{
         ApprovalRepository, ArtifactRepository, CleanupGuard, CommandRunRepository,
         MemoryRepository, NewApproval, NewArtifactFile, NewCommandRun, NewConversation,
-        NewMemoryItem, NewMessage, NewTask, SqliteStore, StorageRoots, TaskRepository,
+        NewMemoryItem, NewMessage, NewRunContract, NewTask, RunContractRepository, SqliteStore,
+        StorageRoots, TaskRepository,
     },
 };
 
@@ -40,6 +41,7 @@ async fn s11_mvp_demo_repo_runs_from_worktree_to_local_merge() {
     let worktree = git::create_task_worktree(&repository, &storage.roots.worktree_root, TASK_ID)
         .expect("create task worktree");
     persist_worktree(&storage, &worktree.worktree_path, &worktree.branch_name);
+    persist_run_contract(&storage, &repository);
 
     let failing =
         run_validation(&storage, TASK_ID, &worktree.worktree_path, "run-s11-failed").await;
@@ -339,6 +341,46 @@ fn persist_worktree(storage: &crate::storage::ManagedStorage, worktree_path: &st
     TaskRepository::new(store.connection())
         .update_worktree_metadata(TASK_ID, worktree_path, branch)
         .expect("persist worktree metadata");
+}
+
+fn persist_run_contract(storage: &crate::storage::ManagedStorage, repository: &Path) {
+    let repository_path = repository.to_string_lossy().to_string();
+    let allowed_paths_json =
+        serde_json::to_string(&vec![repository_path.clone()]).expect("encode allowed paths");
+    let allowed_commands_json =
+        serde_json::to_string(&vec![VALIDATION_COMMAND.to_string()]).expect("encode commands");
+    let contract_json = serde_json::json!({
+        "mode": "s11_acceptance",
+        "allowedPaths": [repository_path],
+        "allowedCommands": [VALIDATION_COMMAND],
+        "validationCommand": VALIDATION_COMMAND,
+        "tokenBudgetTotal": 4000,
+        "tokenBudgetPerCall": 1200
+    })
+    .to_string();
+
+    let store = storage.store.lock().expect("storage lock");
+    RunContractRepository::new(store.connection())
+        .upsert(NewRunContract {
+            id: "contract-s11-acceptance",
+            task_id: TASK_ID,
+            profile_id: None,
+            mode: "s11_acceptance",
+            model_id: Some("gpt-5-codex"),
+            reasoning_effort: "medium",
+            permission_level: "workspace-write",
+            network_policy: "disabled",
+            allowed_paths_json: &allowed_paths_json,
+            allowed_commands_json: &allowed_commands_json,
+            validation_command: Some(VALIDATION_COMMAND),
+            token_budget_total: 4000,
+            token_budget_per_call: 1200,
+            output_language: "zh-CN",
+            memory_scope: "task",
+            budget_overflow_policy: "block",
+            contract_json: &contract_json,
+        })
+        .expect("persist run contract");
 }
 
 fn record_temporary_context_file(storage: &crate::storage::ManagedStorage) {

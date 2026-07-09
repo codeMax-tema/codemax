@@ -35,4 +35,5 @@
 
 - 本轮按推荐方案采用紧凑增量 UI，没有重做整体视觉风格。
 - Playwright 截图依赖本机浏览器运行环境；缺失或页面不可达时会明确返回失败状态。
-- S12-E06 之后的隐私账本、运行契约、Token 预算、Hooks Studio 等仍属于后续里程碑。
+- 历史边界：S12-E01 至 S12-E05 当时未实现完整 Hooks Studio。
+- 2026-07-09 追补：成员C已新增 Rules/Hooks/Hook 扩权审批/Model Arena 的持久化、IPC、交付审查聚合和基础 UI，详见 `docs/s12/c-line-delivery-review-handoff.md`。

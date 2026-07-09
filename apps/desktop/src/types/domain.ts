@@ -157,6 +157,52 @@ export interface QualityGateOverrideResult {
   reason: string;
 }
 
+export interface RuleHitRecord {
+  id: string;
+  taskId: string;
+  rule: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+  createdAt: string;
+}
+
+export interface HookRunRecord {
+  id: string;
+  taskId: string;
+  hook: string;
+  lifecycle: string;
+  status: string;
+  message: string;
+  command?: string | null;
+  evidencePath?: string | null;
+  approvalId?: string | null;
+  createdAt: string;
+}
+
+export interface HookApprovalRecord {
+  id: string;
+  taskId: string;
+  hook: string;
+  requestReason: string;
+  status: string;
+  reviewer?: string | null;
+  resolvedReason?: string | null;
+  createdAt: string;
+  resolvedAt?: string | null;
+}
+
+export interface ModelArenaDecisionRecord {
+  id: string;
+  taskId: string;
+  status: string;
+  selectedModel?: string | null;
+  selectedProposalId?: string | null;
+  rationale: string;
+  comparedModels: string[];
+  createdAt: string;
+}
+
 export type DeliveryReviewStatus = 'passed' | 'warning' | 'blocked';
 export type ProofPackStatus = 'generated' | 'missing';
 
@@ -184,6 +230,15 @@ export interface GeneratedTaskProofPack {
   screenshots: TaskProofPackScreenshot[];
   qualityGates: TaskProofPackGate[];
   risks: TaskProofPackRisk[];
+  proofPackId: string;
+  proofDir: string;
+  manifestPath: string;
+  summaryPath: string;
+  capsulePath: string;
+  proofPackFiles: ProofPackFileState[];
+  deliveryScoreBreakdown: unknown;
+  riskFindings: RiskFinding[];
+  qualityGateBlockers: string[];
 }
 
 export interface QualityGateResultState {
@@ -215,26 +270,74 @@ export interface TaskCapsuleState {
   capsulePath?: string | null;
 }
 
+export interface ProofPackFileState {
+  fileType: string;
+  path: string;
+  status: string;
+  sizeBytes: number;
+}
+
+export interface PrivacyLedgerSummaryState {
+  entryCount: number;
+  blockedCount: number;
+  redactedCount: number;
+  sensitiveCount: number;
+  latestEntry?: string | null;
+  status: string;
+}
+
+export interface RunContractSummaryState {
+  status: string;
+  contractId?: string | null;
+  mode?: string | null;
+  modelId?: string | null;
+  permissionLevel?: string | null;
+  networkPolicy?: string | null;
+  validationCommand?: string | null;
+  tokenBudgetTotal?: number | null;
+  tokenBudgetPerCall?: number | null;
+  breachCount: number;
+  unresolvedBreachCount: number;
+}
+
+export interface TokenBudgetSummaryState {
+  recordCount: number;
+  totalTokensEstimate: number;
+  budgetLimit: number;
+  budgetRemaining: number;
+  overflowCount: number;
+  status: string;
+}
+
 export interface RuleHitState {
   id: string;
   rule: string;
   status: string;
   message: string;
   evidencePath?: string | null;
+  createdAt?: string | null;
 }
 
 export interface HookRunState {
   id: string;
   hook: string;
+  lifecycle: string;
   status: string;
   message: string;
+  command?: string | null;
   evidencePath?: string | null;
+  approvalId?: string | null;
+  approvalStatus?: string | null;
+  createdAt?: string | null;
 }
 
 export interface ModelArenaDecisionState {
   status: string;
   selectedModel?: string | null;
-  reason: string;
+  selectedProposalId?: string | null;
+  rationale: string;
+  comparedModels: string[];
+  createdAt?: string | null;
 }
 
 export interface DeliveryReviewState {
@@ -254,6 +357,10 @@ export interface DeliveryReviewState {
   deliveryScore: DeliveryScoreState;
   riskRecords: RiskFinding[];
   taskCapsule: TaskCapsuleState;
+  proofPackFiles: ProofPackFileState[];
+  privacyLedgerSummary: PrivacyLedgerSummaryState;
+  runContractSummary: RunContractSummaryState;
+  tokenBudgetSummary: TokenBudgetSummaryState;
   ruleHits: RuleHitState[];
   hookRuns: HookRunState[];
   modelArenaDecision: ModelArenaDecisionState;

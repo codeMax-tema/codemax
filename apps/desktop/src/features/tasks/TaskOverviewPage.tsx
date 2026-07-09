@@ -135,6 +135,13 @@ export function TaskOverviewPage() {
       label: risk.subject || risk.kind,
     }))
     : visibleProofPack?.risks ?? [];
+  const visibleRuleHits = visibleReview?.ruleHits ?? [];
+  const visibleHookRuns = visibleReview?.hookRuns ?? [];
+  const visibleModelArenaDecision = visibleReview?.modelArenaDecision ?? null;
+  const visibleProofPackFiles = visibleReview?.proofPackFiles ?? visibleProofPack?.proofPackFiles ?? [];
+  const visiblePrivacySummary = visibleReview?.privacyLedgerSummary ?? null;
+  const visibleRunContractSummary = visibleReview?.runContractSummary ?? null;
+  const visibleTokenBudgetSummary = visibleReview?.tokenBudgetSummary ?? null;
   const visibleMerge = preparedMerge;
   const taskRecord = taskDetail?.task ?? null;
   const visibleCommandRuns = taskDetail?.commandRuns ?? visibleDelivery?.report.runs ?? [];
@@ -1009,6 +1016,143 @@ export function TaskOverviewPage() {
                 )) : <section>{t('tasks.s12.empty', locale)}</section>}
               </div>
             </article>
+
+            <article className="s12-privacy-panel">
+              <header>
+                <CircleDot className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.privacy.title', locale)}</span>
+              </header>
+              {visiblePrivacySummary ? (
+                <section>
+                  <strong>{formatReviewStatus(visiblePrivacySummary.status, locale)}</strong>
+                  <p>
+                    {visiblePrivacySummary.entryCount} {t('tasks.s12.privacy.entries', locale)}
+                    {' / '}
+                    {visiblePrivacySummary.blockedCount} {t('tasks.s12.privacy.blocked', locale)}
+                    {' / '}
+                    {visiblePrivacySummary.redactedCount} {t('tasks.s12.privacy.redacted', locale)}
+                  </p>
+                  <small>{visiblePrivacySummary.latestEntry ?? t('tasks.s12.empty', locale)}</small>
+                </section>
+              ) : (
+                <section>{t('tasks.s12.empty', locale)}</section>
+              )}
+            </article>
+
+            <article className="s12-contract-panel">
+              <header>
+                <ClipboardCheck className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.contract.title', locale)}</span>
+              </header>
+              {visibleRunContractSummary ? (
+                <section>
+                  <strong>{formatReviewStatus(visibleRunContractSummary.status, locale)}</strong>
+                  <p>
+                    {visibleRunContractSummary.mode ?? '-'}
+                    {' / '}
+                    {visibleRunContractSummary.permissionLevel ?? '-'}
+                    {' / '}
+                    {visibleRunContractSummary.networkPolicy ?? '-'}
+                  </p>
+                  <small>
+                    {visibleRunContractSummary.unresolvedBreachCount}
+                    {' '}
+                    {t('tasks.s12.contract.unresolved', locale)}
+                  </small>
+                </section>
+              ) : (
+                <section>{t('tasks.s12.empty', locale)}</section>
+              )}
+            </article>
+
+            <article className="s12-token-budget-panel">
+              <header>
+                <Gauge className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.tokenBudget.title', locale)}</span>
+              </header>
+              {visibleTokenBudgetSummary ? (
+                <section>
+                  <strong>{formatReviewStatus(visibleTokenBudgetSummary.status, locale)}</strong>
+                  <p>
+                    {visibleTokenBudgetSummary.totalTokensEstimate}
+                    {' / '}
+                    {visibleTokenBudgetSummary.budgetLimit}
+                  </p>
+                  <small>
+                    {t('tasks.s12.tokenBudget.remaining', locale)}
+                    {' '}
+                    {visibleTokenBudgetSummary.budgetRemaining}
+                  </small>
+                </section>
+              ) : (
+                <section>{t('tasks.s12.empty', locale)}</section>
+              )}
+            </article>
+
+            <article className="s12-proof-files-panel">
+              <header>
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.proofFiles.title', locale)}</span>
+              </header>
+              <div className="s12-check-list">
+                {visibleProofPackFiles.length ? visibleProofPackFiles.map((file) => (
+                  <span key={`${file.fileType}-${file.path}`} className={cn('s12-status-pill', `is-${statusTone(file.status)}`)}>
+                    {formatProofFileLabel(file.fileType)}
+                    <em>{formatBytes(file.sizeBytes)}</em>
+                  </span>
+                )) : <span>{t('tasks.s12.empty', locale)}</span>}
+              </div>
+            </article>
+
+            <article className="s12-rules-panel">
+              <header>
+                <ListFilter className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.rules.title', locale)}</span>
+              </header>
+              <div className="s12-check-list">
+                {visibleRuleHits.length ? visibleRuleHits.map((hit) => (
+                  <span key={hit.id} className={cn('s12-status-pill', `is-${statusTone(hit.status)}`)}>
+                    {hit.rule}
+                    <em>{formatReviewStatus(hit.status, locale)}</em>
+                  </span>
+                )) : <span>{t('tasks.s12.empty', locale)}</span>}
+              </div>
+            </article>
+
+            <article className="s12-hooks-panel">
+              <header>
+                <Command className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.hooks.title', locale)}</span>
+              </header>
+              <div className="s12-check-list">
+                {visibleHookRuns.length ? visibleHookRuns.map((run) => (
+                  <span key={run.id} className={cn('s12-status-pill', `is-${statusTone(run.status)}`)}>
+                    {run.hook}
+                    <em>{formatReviewStatus(run.approvalStatus ?? run.status, locale)}</em>
+                  </span>
+                )) : <span>{t('tasks.s12.empty', locale)}</span>}
+              </div>
+            </article>
+
+            <article className="s12-model-arena-panel">
+              <header>
+                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.modelArena.title', locale)}</span>
+              </header>
+              {visibleModelArenaDecision ? (
+                <section>
+                  <strong>{formatReviewStatus(visibleModelArenaDecision.status, locale)}</strong>
+                  <p>{visibleModelArenaDecision.rationale}</p>
+                  <small>
+                    {(visibleModelArenaDecision.selectedModel ?? t('tasks.s12.modelArena.noSelection', locale))}
+                    {' / '}
+                    {visibleModelArenaDecision.comparedModels.length} {t('tasks.s12.modelArena.compared', locale)}
+                  </small>
+                </section>
+              ) : (
+                <section>{t('tasks.s12.empty', locale)}</section>
+              )}
+            </article>
           </div>
         </section>
 
@@ -1544,6 +1688,36 @@ function formatRiskTitle(risk: VisibleRiskItem, locale: Locale) {
   return label === risk.titleKey ? risk.titleKey : label;
 }
 
+function statusTone(status: string) {
+  if (['passed', 'approved', 'selected', 'notRequired', 'generated'].includes(status)) {
+    return 'passed';
+  }
+  if (['blocked', 'failed', 'rejected', 'approvalRequired', 'missing', 'empty'].includes(status)) {
+    return 'blocked';
+  }
+  return 'warning';
+}
+
+function formatReviewStatus(status: string, locale: Locale) {
+  const key = `tasks.s12.status.${status}`;
+  const label = t(key, locale);
+  return label === key ? status : label;
+}
+
+function formatProofFileLabel(fileType: string) {
+  return fileType.replace(/^proof_/, '').replaceAll('_', ' ');
+}
+
+function formatBytes(sizeBytes: number) {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function formatDeliveryReviewBlocker(blocker: string, locale: Locale) {
   const normalized = blocker.toLowerCase();
 
@@ -1564,6 +1738,21 @@ function formatDeliveryReviewBlocker(blocker: string, locale: Locale) {
   }
   if (normalized.includes('quality gate')) {
     return t('tasks.s12.blocker.qualityGate', locale);
+  }
+  if (normalized.includes('rule ')) {
+    return t('tasks.s12.blocker.rule', locale);
+  }
+  if (normalized.includes('hook ')) {
+    return t('tasks.s12.blocker.hook', locale);
+  }
+  if (normalized.includes('privacy ledger')) {
+    return t('tasks.s12.blocker.privacy', locale);
+  }
+  if (normalized.includes('run contract') || normalized.includes('contract breach')) {
+    return t('tasks.s12.blocker.contract', locale);
+  }
+  if (normalized.includes('token budget')) {
+    return t('tasks.s12.blocker.tokenBudget', locale);
   }
 
   return blocker;

@@ -21,12 +21,15 @@ import type {
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
   ActiveProfile,
+  HookApprovalRecord,
+  HookRunRecord,
   PreferenceCandidate,
   PrivacyLedgerEntry,
   PrivacyPreview,
   PrivacyLedgerSummary,
   QualityGateOverrideResult,
   QualityGateRecord,
+  ModelArenaDecisionRecord,
   LogCleanupResult,
   ModelConnectionTestResult,
   ModelConfigView,
@@ -34,6 +37,7 @@ import type {
   RepositoryBranchInfo,
   RepositoryDirtyStatus,
   RepositorySummary,
+  RuleHitRecord,
   RunContract,
   RunContractPreview,
   StartupHealthResponse,
@@ -529,6 +533,68 @@ export interface OverrideQualityGateRequest {
 
 export function overrideQualityGate(request: OverrideQualityGateRequest) {
   return invokeCommand<QualityGateOverrideResult>('override_quality_gate', { request });
+}
+
+export interface RecordRuleHitRequest {
+  taskId: string;
+  rule: string;
+  status: string;
+  message: string;
+  evidencePath?: string | null;
+}
+
+export function recordRuleHit(request: RecordRuleHitRequest) {
+  return invokeCommand<RuleHitRecord>('record_rule_hit', { request });
+}
+
+export interface RecordHookRunRequest {
+  taskId: string;
+  hook: string;
+  lifecycle: string;
+  status: string;
+  message: string;
+  command?: string | null;
+  evidencePath?: string | null;
+  approvalId?: string | null;
+}
+
+export function recordHookRun(request: RecordHookRunRequest) {
+  return invokeCommand<HookRunRecord>('record_hook_run', { request });
+}
+
+export interface RequestHookApprovalRequest {
+  taskId: string;
+  hook: string;
+  reason: string;
+}
+
+export function requestHookApproval(request: RequestHookApprovalRequest) {
+  return invokeCommand<HookApprovalRecord>('request_hook_approval', { request });
+}
+
+export interface ResolveHookApprovalRequest {
+  taskId: string;
+  approvalId: string;
+  approved: boolean;
+  reviewer?: string | null;
+  reason: string;
+}
+
+export function resolveHookApproval(request: ResolveHookApprovalRequest) {
+  return invokeCommand<HookApprovalRecord>('resolve_hook_approval', { request });
+}
+
+export interface RecordModelArenaDecisionRequest {
+  taskId: string;
+  status: string;
+  selectedModel?: string | null;
+  selectedProposalId?: string | null;
+  rationale: string;
+  comparedModels: string[];
+}
+
+export function recordModelArenaDecision(request: RecordModelArenaDecisionRequest) {
+  return invokeCommand<ModelArenaDecisionRecord>('record_model_arena_decision', { request });
 }
 
 export interface PrepareTaskMergeRequest {

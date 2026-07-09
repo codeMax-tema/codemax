@@ -133,6 +133,16 @@ for (const marker of [
   'record_quality_gate_result',
   'overrideQualityGate',
   'override_quality_gate',
+  'recordRuleHit',
+  'record_rule_hit',
+  'recordHookRun',
+  'record_hook_run',
+  'requestHookApproval',
+  'request_hook_approval',
+  'resolveHookApproval',
+  'resolve_hook_approval',
+  'recordModelArenaDecision',
+  'record_model_arena_decision',
   'test_model_connection',
   'get_storage_usage',
   'cleanup_storage',
@@ -146,6 +156,10 @@ for (const marker of [
   'StartupHealthResponse',
   'GeneratedTaskProofPack',
   'QualityGateRecord',
+  'RuleHitRecord',
+  'HookRunRecord',
+  'HookApprovalRecord',
+  'ModelArenaDecisionRecord',
 ]) {
   assertIncludes('tauriClient.ts', tauriClient, marker);
 }
@@ -201,6 +215,9 @@ for (const marker of [
   '.s12-quality-gate',
   '.s12-delivery-score',
   '.s12-risk-radar',
+  '.s12-rules-panel',
+  '.s12-hooks-panel',
+  '.s12-model-arena-panel',
 ]) {
   assertIncludes('global.css', css, marker);
 }
@@ -212,6 +229,9 @@ for (const marker of [
   's12-quality-gate',
   's12-delivery-score',
   's12-risk-radar',
+  's12-rules-panel',
+  's12-hooks-panel',
+  's12-model-arena-panel',
 ]) {
   assertIncludes('TaskOverviewPage.tsx', taskOverview, marker);
 }
@@ -249,6 +269,16 @@ for (const key of [
   'tasks.s12.qualityGate.title',
   'tasks.s12.deliveryScore.title',
   'tasks.s12.riskRadar.title',
+  'tasks.s12.privacy.title',
+  'tasks.s12.contract.title',
+  'tasks.s12.tokenBudget.title',
+  'tasks.s12.proofFiles.title',
+  'tasks.s12.rules.title',
+  'tasks.s12.hooks.title',
+  'tasks.s12.modelArena.title',
+  'tasks.s12.status.generated',
+  'tasks.s12.status.missing',
+  'tasks.s12.status.empty',
 ]) {
   assertJsonKey('zh-CN', zhCN, key);
   assertJsonKey('en-US', enUS, key);
