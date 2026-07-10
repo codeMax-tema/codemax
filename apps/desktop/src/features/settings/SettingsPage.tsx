@@ -3,15 +3,10 @@ import {
   Archive,
   ArrowLeft,
   Bot,
+  Check,
   Code2,
-  Database,
   FolderTree,
   GitBranch,
-  Globe2,
-  Keyboard,
-  Link2,
-  LockKeyhole,
-  Monitor,
   Palette,
   Plug,
   RefreshCw,
@@ -25,12 +20,23 @@ import {
 import { useEffect, useState, type FormEvent } from 'react';
 
 import {
+  activateProfile,
   cleanupStorage,
+  decidePreferenceCandidate,
+  deleteMemoryItem,
+  getActiveProfile,
+  getAppSetting,
   getModelConfig,
+  getSkillSources,
+  getPreferenceCandidates,
   getStartupHealth,
   getStorageRoots,
   getStorageUsage,
+  listMemoryItems,
+  listProfiles,
+  saveMemoryItem,
   saveModelConfig,
+  setAppSetting,
   testModelConnection,
   type StorageRootsResponse,
 } from '@/api/tauriClient';
@@ -38,30 +44,32 @@ import { Button } from '@/components/ui/button';
 import { settingsDefaults } from '@/features/tasks/taskDefaults';
 import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { useAppStore } from '@/state/appStore';
+import { useAppStore, type ThinkingStrength } from '@/state/appStore';
 import type {
+  ActiveProfile,
   CleanupStorageResponse,
+  MemoryItem,
   ModelConfigView,
   ModelConnectionTestResult,
+  PreferenceCandidate,
   StartupHealthResponse,
   StorageUsageResponse,
+  SkillSource,
 } from '@/types/domain';
 
 type SettingsCategory =
   | 'general'
   | 'appearance'
   | 'models'
+  | 'thinking'
   | 'personalization'
-  | 'pets'
-  | 'shortcuts'
-  | 'mcp'
-  | 'browser'
-  | 'computer'
+  | 'skills'
   | 'hooks'
-  | 'connections'
   | 'git'
   | 'environment'
   | 'worktrees'
+  | 'startup'
+  | 'about'
   | 'archived'
   | 'permissions'
   | 'modes'
@@ -85,32 +93,33 @@ const settingsGroups: Array<{
       { id: 'general', icon: Settings, labelKey: 'settings.categories.general' },
       { id: 'appearance', icon: Palette, labelKey: 'settings.categories.appearance' },
       { id: 'models', icon: Bot, labelKey: 'settings.categories.models' },
+      { id: 'thinking', icon: SlidersHorizontal, labelKey: 'settings.categories.thinking' },
       { id: 'personalization', icon: SlidersHorizontal, labelKey: 'settings.categories.personalization' },
-      { id: 'pets', icon: Archive, labelKey: 'settings.categories.pets' },
-      { id: 'shortcuts', icon: Keyboard, labelKey: 'settings.categories.shortcuts' },
-    ],
-  },
-  {
-    headingKey: 'settings.groups.integrations',
-    items: [
-      { id: 'mcp', icon: Plug, labelKey: 'settings.categories.mcp' },
-      { id: 'browser', icon: Globe2, labelKey: 'settings.categories.browser' },
-      { id: 'computer', icon: Monitor, labelKey: 'settings.categories.computer' },
+      { id: 'permissions', icon: Bot, labelKey: 'settings.categories.permissions' },
     ],
   },
   {
     headingKey: 'settings.groups.coding',
     items: [
+      { id: 'skills', icon: Plug, labelKey: 'settings.categories.skills' },
       { id: 'hooks', icon: Workflow, labelKey: 'settings.categories.hooks' },
-      { id: 'connections', icon: Link2, labelKey: 'settings.categories.connections' },
       { id: 'git', icon: GitBranch, labelKey: 'settings.categories.git' },
       { id: 'environment', icon: TerminalSquare, labelKey: 'settings.categories.environment' },
       { id: 'worktrees', icon: FolderTree, labelKey: 'settings.categories.worktrees' },
+      { id: 'storage', icon: Archive, labelKey: 'settings.categories.storage' },
     ],
   },
   {
     headingKey: 'settings.groups.archived',
     items: [{ id: 'archived', icon: Archive, labelKey: 'settings.categories.archived' }],
+  },
+  {
+    headingKey: 'settings.groups.app',
+    items: [
+      { id: 'language', icon: Search, labelKey: 'settings.categories.language' },
+      { id: 'startup', icon: Activity, labelKey: 'settings.categories.startup' },
+      { id: 'about', icon: Archive, labelKey: 'settings.categories.about' },
+    ],
   },
 ];
 
@@ -118,22 +127,38 @@ export function SettingsPage() {
   const locale = useAppStore((state) => state.locale);
   const setCurrentRoute = useAppStore((state) => state.setCurrentRoute);
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>('general');
+  const [searchQuery, setSearchQuery] = useState('');
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  const visibleSettingsGroups = settingsGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) =>
+        !normalizedSearchQuery || t(item.labelKey, locale).toLocaleLowerCase().includes(normalizedSearchQuery),
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <div className="settings-shell codex-settings-page">
       <aside className="settings-rail settings-sidebar" aria-label={t('settings.title', locale)}>
-        <button type="button" className="settings-return-button" onClick={() => setCurrentRoute('tasks')}>
+        <button type="button" className="settings-return-button" onClick={() => setCurrentRoute('home')}>
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           {t('settings.return', locale)}
         </button>
 
         <label className="settings-search-box">
           <Search className="h-4 w-4" aria-hidden="true" />
-          <input type="search" placeholder={t('settings.searchPlaceholder', locale)} />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={t('settings.searchPlaceholder', locale)}
+            aria-label={t('settings.searchPlaceholder', locale)}
+          />
         </label>
 
         <div className="settings-sidebar-scroll">
-          {settingsGroups.map((group) => (
+          {visibleSettingsGroups.map((group) => (
             <section className="settings-sidebar-group" key={group.headingKey}>
               <p className="settings-group-heading">{t(group.headingKey, locale)}</p>
               {group.items.map((category) => {
@@ -152,6 +177,9 @@ export function SettingsPage() {
               })}
             </section>
           ))}
+          {normalizedSearchQuery && visibleSettingsGroups.length === 0 ? (
+            <p className="settings-empty-search">{t('settings.searchEmpty', locale)}</p>
+          ) : null}
         </div>
       </aside>
       <section className="settings-pane settings-detail">{renderSettingsPane(activeCategory)}</section>
@@ -164,6 +192,10 @@ function renderSettingsPane(category: SettingsCategory) {
     return <GeneralSettings />;
   }
 
+  if (category === 'thinking') {
+    return <ThinkingSettings />;
+  }
+
   if (category === 'permissions') {
     return <PermissionsSettings />;
   }
@@ -172,8 +204,20 @@ function renderSettingsPane(category: SettingsCategory) {
     return <ModeSettings />;
   }
 
-  if (category === 'storage' || category === 'environment' || category === 'worktrees') {
+  if (category === 'storage') {
     return <StorageSettings />;
+  }
+
+  if (category === 'skills') {
+    return <SkillsSettings />;
+  }
+
+  if (category === 'environment') {
+    return <EnvironmentSettings />;
+  }
+
+  if (category === 'worktrees') {
+    return <WorktreeSettings />;
   }
 
   if (category === 'memory' || category === 'personalization') {
@@ -208,6 +252,8 @@ function SettingsPaneHeader({ titleKey, bodyKey }: { titleKey: string; bodyKey: 
 
 function GeneralSettings() {
   const locale = useAppStore((state) => state.locale);
+  const workMode = useAppStore((state) => state.workMode);
+  const setWorkMode = useAppStore((state) => state.setWorkMode);
   const [health, setHealth] = useState<StartupHealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
@@ -283,7 +329,11 @@ function GeneralSettings() {
           <p>{t('settings.general.workModeBody', locale)}</p>
         </div>
         <div className="settings-work-mode-grid">
-          <button type="button" className="settings-work-mode-card active">
+          <button
+            type="button"
+            className={cn('settings-work-mode-card', workMode === 'coding' && 'active')}
+            onClick={() => setWorkMode('coding')}
+          >
             <Code2 className="h-5 w-5" aria-hidden="true" />
             <span>
               <strong>{t('settings.general.programming', locale)}</strong>
@@ -291,7 +341,11 @@ function GeneralSettings() {
             </span>
             <em />
           </button>
-          <button type="button" className="settings-work-mode-card">
+          <button
+            type="button"
+            className={cn('settings-work-mode-card', workMode === 'daily' && 'active')}
+            onClick={() => setWorkMode('daily')}
+          >
             <MessageBubbleIcon />
             <span>
               <strong>{t('settings.general.everyday', locale)}</strong>
@@ -308,12 +362,23 @@ function GeneralSettings() {
         </div>
         <div className="settings-card-list">
           <ToggleLine
+            settingKey="general.defaultPermission"
             titleKey="settings.general.defaultPermission"
             bodyKey="settings.general.defaultPermissionBody"
             enabled
           />
-          <ToggleLine titleKey="settings.general.autoReview" bodyKey="settings.general.autoReviewBody" enabled />
-          <ToggleLine titleKey="settings.general.fullAccess" bodyKey="settings.general.fullAccessBody" enabled />
+          <ToggleLine
+            settingKey="general.autoReview"
+            titleKey="settings.general.autoReview"
+            bodyKey="settings.general.autoReviewBody"
+            enabled
+          />
+          <ToggleLine
+            settingKey="general.fullAccess"
+            titleKey="settings.general.fullAccess"
+            bodyKey="settings.general.fullAccessBody"
+            enabled
+          />
         </div>
       </section>
 
@@ -331,6 +396,167 @@ function GeneralSettings() {
           </button>
         </section>
       </section>
+    </>
+  );
+}
+
+function ThinkingSettings() {
+  const locale = useAppStore((state) => state.locale);
+  const thinkingStrength = useAppStore((state) => state.thinkingStrength);
+  const setThinkingStrength = useAppStore((state) => state.setThinkingStrength);
+  const [allowOverride, setAllowOverride] = useState(true);
+
+  const levels: Array<{
+    id: ThinkingStrength;
+    reasoningDepth: number;
+    contextBudget: number;
+    validationStrength: number;
+    repairRounds: number;
+    speedBias: number;
+    costLevel: number;
+    benefit: string;
+    tradeoff: string;
+    bestFor: string;
+  }> = [
+    {
+      id: 'minimal',
+      reasoningDepth: 1,
+      contextBudget: 1,
+      validationStrength: 1,
+      repairRounds: 0,
+      speedBias: 5,
+      costLevel: 1,
+      benefit: 'settings.thinking.minimalBenefit',
+      tradeoff: 'settings.thinking.minimalTradeoff',
+      bestFor: 'settings.thinking.minimalBestFor',
+    },
+    {
+      id: 'low',
+      reasoningDepth: 2,
+      contextBudget: 2,
+      validationStrength: 2,
+      repairRounds: 1,
+      speedBias: 5,
+      costLevel: 1,
+      benefit: 'settings.thinking.lowBenefit',
+      tradeoff: 'settings.thinking.lowTradeoff',
+      bestFor: 'settings.thinking.lowBestFor',
+    },
+    {
+      id: 'medium',
+      reasoningDepth: 3,
+      contextBudget: 3,
+      validationStrength: 3,
+      repairRounds: 2,
+      speedBias: 3,
+      costLevel: 2,
+      benefit: 'settings.thinking.mediumBenefit',
+      tradeoff: 'settings.thinking.mediumTradeoff',
+      bestFor: 'settings.thinking.mediumBestFor',
+    },
+    {
+      id: 'high',
+      reasoningDepth: 4,
+      contextBudget: 4,
+      validationStrength: 4,
+      repairRounds: 3,
+      speedBias: 2,
+      costLevel: 4,
+      benefit: 'settings.thinking.highBenefit',
+      tradeoff: 'settings.thinking.highTradeoff',
+      bestFor: 'settings.thinking.highBestFor',
+    },
+    {
+      id: 'max',
+      reasoningDepth: 5,
+      contextBudget: 5,
+      validationStrength: 5,
+      repairRounds: 5,
+      speedBias: 1,
+      costLevel: 5,
+      benefit: 'settings.thinking.maxBenefit',
+      tradeoff: 'settings.thinking.maxTradeoff',
+      bestFor: 'settings.thinking.maxBestFor',
+    },
+  ];
+  const selectedIndex = Math.max(
+    0,
+    levels.findIndex((level) => level.id === thinkingStrength),
+  );
+  const selectedLevel = levels[selectedIndex] ?? levels[2];
+  const metrics = [
+    { label: t('settings.thinking.depth', locale), value: selectedLevel.reasoningDepth },
+    { label: t('settings.thinking.contextBudget', locale), value: selectedLevel.contextBudget },
+    { label: t('settings.thinking.validation', locale), value: selectedLevel.validationStrength },
+    { label: t('settings.thinking.repair', locale), value: selectedLevel.repairRounds },
+    { label: t('settings.thinking.speed', locale), value: selectedLevel.speedBias },
+    { label: t('settings.thinking.cost', locale), value: selectedLevel.costLevel },
+  ];
+
+  return (
+    <>
+      <SettingsPaneHeader titleKey="settings.thinking.title" bodyKey="settings.thinking.subtitle" />
+      <div className="settings-thinking-strength-page">
+        <section className="settings-block">
+          <div className="settings-block-heading">
+            <h4>{t(`settings.thinking.${selectedLevel.id}`, locale)}</h4>
+            <p>{t('settings.thinking.body', locale)}</p>
+          </div>
+
+          <div className="thinking-strength-slider">
+            <input
+              type="range"
+              min={0}
+              max={levels.length - 1}
+              step={1}
+              value={selectedIndex}
+              onChange={(event) => setThinkingStrength(levels[Number(event.target.value)]?.id ?? 'medium')}
+              aria-label={t('settings.thinking.title', locale)}
+            />
+            <div className="thinking-strength-scale">
+              {levels.map((level) => (
+                <button
+                  key={level.id}
+                  type="button"
+                  className={cn(level.id === thinkingStrength && 'active')}
+                  onClick={() => setThinkingStrength(level.id)}
+                >
+                  {t(`settings.thinking.${level.id}`, locale)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="thinking-strength-copy">
+            <section>
+              <strong>{t('settings.thinking.benefit', locale)}</strong>
+              <p>{t(selectedLevel.benefit, locale)}</p>
+            </section>
+            <section>
+              <strong>{t('settings.thinking.tradeoff', locale)}</strong>
+              <p>{t(selectedLevel.tradeoff, locale)}</p>
+            </section>
+            <section>
+              <strong>{t('settings.thinking.bestFor', locale)}</strong>
+              <p>{t(selectedLevel.bestFor, locale)}</p>
+            </section>
+          </div>
+
+          <div className="thinking-strength-meter-grid">
+            {metrics.map((metric) => (
+              <div key={metric.label} className="thinking-strength-meter">
+                <span>{metric.label}</span>
+                <strong>{metric.value}/5</strong>
+              </div>
+            ))}
+          </div>
+
+          <label className="toggle-row thinking-strength-allow-override">
+            <input type="checkbox" checked={allowOverride} onChange={(event) => setAllowOverride(event.target.checked)} />
+            <span>{t('settings.thinking.allowOverride', locale)}</span>
+          </label>
+        </section>
+      </div>
     </>
   );
 }
@@ -584,6 +810,176 @@ function ModeSettings() {
   );
 }
 
+function SkillsSettings() {
+  const locale = useAppStore((state) => state.locale);
+  const currentRepository = useAppStore((state) => state.currentRepository);
+  const [sources, setSources] = useState<SkillSource[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getSkillSources(currentRepository?.path ?? null)
+      .then((nextSources) => {
+        if (!cancelled) {
+          setSources(nextSources);
+          setError(null);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setSources([]);
+          setError(readErrorMessage(loadError));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRepository?.path]);
+
+  return (
+    <>
+      <SettingsPaneHeader titleKey="settings.categories.skills" bodyKey="skills.subtitle" />
+      <div className="settings-section-list">
+        {loading ? <section className="settings-line-section"><strong>{t('skills.status.ready', locale)}</strong></section> : null}
+        {error ? (
+          <section className="settings-line-section vertical">
+            <strong>{t('settings.storage.pathError', locale)}</strong>
+            <code>{error}</code>
+          </section>
+        ) : null}
+        {sources.map((source) => (
+          <section className="settings-line-section vertical" key={source.id}>
+            <span>
+              <strong>{t(`skills.source.${source.id}`, locale)}</strong>
+              <small>{t(`skills.status.${source.status}`, locale)} · {source.skillCount} {t('skills.countLabel', locale)}</small>
+            </span>
+            <code>{source.path ?? t('skills.note.selectProject', locale)}</code>
+            {source.entries.length ? (
+              <div className="settings-chip-list">
+                {source.entries.slice(0, 8).map((entry) => <span key={entry.id}>{entry.name}</span>)}
+              </div>
+            ) : <small>{t('skills.emptyHint', locale)}</small>}
+          </section>
+        ))}
+        {!loading && !error && !sources.length ? (
+          <section className="settings-line-section vertical">
+            <strong>{t('skills.emptyTitle', locale)}</strong>
+            <small>{t('skills.emptyHint', locale)}</small>
+          </section>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function EnvironmentSettings() {
+  const locale = useAppStore((state) => state.locale);
+  const currentRepository = useAppStore((state) => state.currentRepository);
+  const [roots, setRoots] = useState<StorageRootsResponse | null>(null);
+  const [usage, setUsage] = useState<StorageUsageResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getStorageRoots(), getStorageUsage()])
+      .then(([nextRoots, nextUsage]) => {
+        if (!cancelled) {
+          setRoots(nextRoots);
+          setUsage(nextUsage);
+          setError(null);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setError(readErrorMessage(loadError));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <SettingsPaneHeader titleKey="settings.environment.title" bodyKey="settings.environment.body" />
+      <div className="settings-section-list">
+        {error ? <section className="settings-line-section vertical"><strong>{t('settings.storage.pathError', locale)}</strong><code>{error}</code></section> : null}
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.environment.repository', locale)}</strong>
+          <code>{currentRepository?.path ?? t('repository.emptyShort', locale)}</code>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.environment.runtimeRoots', locale)}</strong>
+          <code>{roots?.appDataDir ?? t('settings.storage.loading', locale)}</code>
+          <small>{roots?.artifactRoot ?? t('settings.storage.loading', locale)}</small>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.environment.usage', locale)}</strong>
+          <div className="settings-usage-grid">
+            <UsageMetric labelKey="settings.storage.totalBytes" value={usage?.totalBytes} />
+            <UsageMetric labelKey="settings.storage.worktreeBytes" value={usage?.worktreeBytes} />
+            <UsageMetric labelKey="settings.storage.contextBytes" value={usage?.temporaryContextBytes} />
+          </div>
+        </section>
+        <PolicyLine titleKey="settings.permissions.network" valueKey="settings.permissions.networkValue" />
+        <PolicyLine titleKey="settings.permissions.commands" valueKey="settings.permissions.commandsValue" />
+      </div>
+    </>
+  );
+}
+
+function WorktreeSettings() {
+  const locale = useAppStore((state) => state.locale);
+  const currentRepository = useAppStore((state) => state.currentRepository);
+  const [roots, setRoots] = useState<StorageRootsResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getStorageRoots()
+      .then((nextRoots) => {
+        if (!cancelled) {
+          setRoots(nextRoots);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <SettingsPaneHeader titleKey="settings.worktrees.title" bodyKey="settings.worktrees.body" />
+      <div className="settings-section-list">
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.worktrees.root', locale)}</strong>
+          <code>{roots?.worktreeRoot ?? t('settings.storage.loading', locale)}</code>
+        </section>
+        <section className="settings-line-section vertical">
+          <strong>{t('settings.worktrees.repository', locale)}</strong>
+          <code>{currentRepository?.path ?? t('repository.emptyShort', locale)}</code>
+          <small>{currentRepository?.branch ?? t('settings.worktrees.noBranch', locale)}</small>
+        </section>
+        <ToggleLine
+          settingKey="worktrees.autoCleanup"
+          titleKey="settings.worktrees.autoCleanup"
+          bodyKey="settings.worktrees.autoCleanupBody"
+          enabled={false}
+        />
+        <PolicyLine titleKey="settings.worktrees.isolated" valueKey="settings.worktrees.isolatedValue" />
+      </div>
+    </>
+  );
+}
+
 function StorageSettings() {
   const locale = useAppStore((state) => state.locale);
   const [roots, setRoots] = useState<StorageRootsResponse | null>(null);
@@ -756,13 +1152,272 @@ function StorageSettings() {
 }
 
 function MemorySettings() {
+  const locale = useAppStore((state) => state.locale);
+  const [profileList, setProfileList] = useState<ActiveProfile[]>([]);
+  const [activeProfile, setActiveProfile] = useState<ActiveProfile | null>(null);
+  const [preferenceCandidateList, setPreferenceCandidateList] = useState<PreferenceCandidate[]>([]);
+  const [memoryItemList, setMemoryItemList] = useState<MemoryItem[]>([]);
+  const [draftKey, setDraftKey] = useState('');
+  const [draftValue, setDraftValue] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadMemoryCockpit();
+  }, []);
+
+  async function loadMemoryCockpit() {
+    setLoading(true);
+    setError(null);
+    try {
+      const [profiles, currentProfile, candidates, memories] = await Promise.all([
+        listProfiles(),
+        getActiveProfile(),
+        getPreferenceCandidates(),
+        listMemoryItems({ limit: 100 }),
+      ]);
+      setProfileList(profiles);
+      setActiveProfile(currentProfile);
+      setPreferenceCandidateList(candidates);
+      setMemoryItemList(memories);
+    } catch (loadError) {
+      setError(readErrorMessage(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleActivateProfile(profileId: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      await activateProfile(profileId);
+      await loadMemoryCockpit();
+    } catch (actionError) {
+      setError(readErrorMessage(actionError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handlePreferenceDecision(candidateId: string, decision: 'accepted' | 'rejected') {
+    setSaving(true);
+    setError(null);
+    try {
+      await decidePreferenceCandidate({ candidateId, decision });
+      await loadMemoryCockpit();
+    } catch (actionError) {
+      setError(readErrorMessage(actionError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSaveMemory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const key = draftKey.trim();
+    const value = draftValue.trim();
+    if (!key || !value) {
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await saveMemoryItem({
+        scope: activeProfile?.scope ?? 'global',
+        scopeId: activeProfile?.scopeId ?? undefined,
+        key,
+        value,
+        source: 'user_manual',
+        isUserEditable: true,
+      });
+      setDraftKey('');
+      setDraftValue('');
+      await loadMemoryCockpit();
+    } catch (actionError) {
+      setError(readErrorMessage(actionError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteMemory(memoryId: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      await deleteMemoryItem({ memoryId });
+      await loadMemoryCockpit();
+    } catch (actionError) {
+      setError(readErrorMessage(actionError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
       <SettingsPaneHeader titleKey="settings.memory.title" bodyKey="settings.memory.body" />
-      <div className="settings-section-list">
-        <PolicyLine titleKey="settings.memory.recentWindow" valueKey="settings.memory.recentWindowValue" />
-        <PolicyLine titleKey="settings.memory.longTerm" valueKey="settings.memory.longTermValue" />
-        <PolicyLine titleKey="settings.memory.preference" valueKey="settings.memory.preferenceValue" />
+      {error ? (
+        <div className="diff-error-banner" role="alert">
+          <span>{error}</span>
+        </div>
+      ) : null}
+      <div className="memory-cockpit-grid">
+        <section className="settings-diagnostic-list">
+          <div className="settings-line-section vertical">
+            <strong>{t('settings.memory.activeProfile', locale)}</strong>
+            <small>{activeProfile ? activeProfile.name : t('settings.memory.noActiveProfile', locale)}</small>
+            {activeProfile ? (
+              <div className="memory-inline-meta">
+                <StatusPill status="ready" label={activeProfile.mode} />
+                <span>{activeProfile.scope}</span>
+                <span>{activeProfile.memoryScope}</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="settings-profile-list">
+            <div className="settings-line-section">
+              <span>
+                <strong>{t('settings.memory.profiles', locale)}</strong>
+                <small>{loading ? t('settings.memory.loading', locale) : `${profileList.length}`}</small>
+              </span>
+            </div>
+            {profileList.length ? profileList.map((profile) => (
+              <section className="settings-line-section" key={profile.id}>
+                <span>
+                  <strong>{profile.name}</strong>
+                  <small>{profile.scope}{profile.scopeId ? ` · ${profile.scopeId}` : ''}</small>
+                </span>
+                {profile.isActive ? (
+                  <StatusPill status="ready" label={t('settings.memory.active', locale)} />
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={saving}
+                    onClick={() => handleActivateProfile(profile.id)}
+                  >
+                    {t('settings.memory.activateProfile', locale)}
+                  </Button>
+                )}
+              </section>
+            )) : (
+              <section className="settings-line-section">
+                <small>{t('settings.memory.emptyProfiles', locale)}</small>
+              </section>
+            )}
+          </div>
+        </section>
+
+        <section className="settings-diagnostic-list">
+          <div className="settings-line-section">
+            <span>
+              <strong>{t('settings.memory.preferenceCandidates', locale)}</strong>
+              <small>{t('settings.memory.preferenceValue', locale)}</small>
+            </span>
+          </div>
+          <div className="preference-candidate-list">
+            {preferenceCandidateList.length ? preferenceCandidateList.map((candidate) => (
+              <article className="settings-line-section vertical" key={candidate.id}>
+                <div className="memory-inline-meta">
+                  <StatusPill
+                    status={candidate.blocked ? 'blocked' : candidate.redacted ? 'warning' : 'ready'}
+                    label={candidate.status}
+                  />
+                  <span>{candidate.scope}</span>
+                  <span>{candidate.confidence.toFixed(2)}</span>
+                </div>
+                <strong>{candidate.preferenceKey}</strong>
+                <small>{candidate.candidateValue}</small>
+                <code>{candidate.evidence || t('approvals.noReason', locale)}</code>
+                <div className="memory-inline-actions">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={saving || candidate.status !== 'pending' || candidate.blocked}
+                    onClick={() => handlePreferenceDecision(candidate.id, 'rejected')}
+                  >
+                    {t('approvals.reject', locale)}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={saving || candidate.status !== 'pending' || candidate.blocked}
+                    onClick={() => handlePreferenceDecision(candidate.id, 'accepted')}
+                  >
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                    {t('settings.memory.saveMemory', locale)}
+                  </Button>
+                </div>
+              </article>
+            )) : (
+              <section className="settings-line-section">
+                <small>{t('settings.memory.emptyCandidates', locale)}</small>
+              </section>
+            )}
+          </div>
+        </section>
+
+        <section className="settings-diagnostic-list">
+          <form className="settings-card-list" onSubmit={handleSaveMemory}>
+            <div className="settings-line-section">
+              <span>
+                <strong>{t('settings.memory.savedMemories', locale)}</strong>
+                <small>{t('settings.memory.longTermValue', locale)}</small>
+              </span>
+            </div>
+            <label className="settings-form-field">
+              <span>{t('settings.memory.key', locale)}</span>
+              <input value={draftKey} onChange={(event) => setDraftKey(event.target.value)} placeholder="tone / defaults" />
+            </label>
+            <label className="settings-form-field">
+              <span>{t('settings.memory.value', locale)}</span>
+              <input value={draftValue} onChange={(event) => setDraftValue(event.target.value)} placeholder="Prefer concise summaries" />
+            </label>
+            <div className="settings-form-actions">
+              <span>{activeProfile ? `${t('settings.memory.activeProfile', locale)}: ${activeProfile.name}` : t('settings.memory.recentWindowValue', locale)}</span>
+              <Button type="submit" disabled={saving || !draftKey.trim() || !draftValue.trim()}>
+                {t('settings.memory.addMemory', locale)}
+              </Button>
+            </div>
+          </form>
+
+          <div className="memory-item-list">
+            {memoryItemList.length ? memoryItemList.map((memory) => (
+              <article className="settings-line-section vertical" key={memory.id}>
+                <div className="memory-inline-meta">
+                  <StatusPill status={memory.isUserEditable ? 'ready' : 'warning'} label={memory.source} />
+                  <span>{memory.scope}</span>
+                  <span>{memory.confidence.toFixed(2)}</span>
+                </div>
+                <strong>{memory.key}</strong>
+                <small>{memory.scopeId ?? t('settings.memory.noActiveProfile', locale)}</small>
+                <code>{memory.value}</code>
+                <div className="memory-inline-actions">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={saving}
+                    onClick={() => handleDeleteMemory(memory.id)}
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    {t('settings.memory.deleteMemory', locale)}
+                  </Button>
+                </div>
+              </article>
+            )) : (
+              <section className="settings-line-section">
+                <small>{t('settings.memory.emptyMemories', locale)}</small>
+              </section>
+            )}
+          </div>
+        </section>
       </div>
     </>
   );
@@ -855,15 +1510,55 @@ function PlaceholderSettings({ category }: { category: SettingsCategory }) {
 }
 
 function ToggleLine({
+  settingKey,
   titleKey,
   bodyKey,
-  enabled,
+  enabled: defaultEnabled,
 }: {
+  settingKey?: string;
   titleKey: string;
   bodyKey: string;
   enabled: boolean;
 }) {
   const locale = useAppStore((state) => state.locale);
+  const [enabled, setEnabled] = useState(defaultEnabled);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!settingKey) {
+      return;
+    }
+
+    let cancelled = false;
+    getAppSetting(settingKey)
+      .then((setting) => {
+        if (!cancelled && setting.value != null) {
+          setEnabled(setting.value === 'true');
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settingKey]);
+
+  async function handleToggle() {
+    if (!settingKey || saving) {
+      return;
+    }
+
+    const nextValue = !enabled;
+    setEnabled(nextValue);
+    setSaving(true);
+    try {
+      await setAppSetting(settingKey, String(nextValue));
+    } catch {
+      setEnabled(!nextValue);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <section className="settings-line-section">
@@ -875,7 +1570,9 @@ function ToggleLine({
         type="button"
         role="switch"
         aria-checked={enabled}
+        aria-disabled={saving}
         className={cn('settings-toggle-switch', enabled && 'active')}
+        onClick={() => void handleToggle()}
       >
         <span />
       </button>

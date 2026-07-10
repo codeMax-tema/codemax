@@ -3868,6 +3868,11 @@ mod tests {
                 repository_path: "D:/codemax",
                 worktree_path: Some("D:/codemax/.worktrees/task-s12-proof"),
                 branch_name: Some("codex/task-s12-proof"),
+                target_branch: "main",
+                workspace_kind: "git_worktree",
+                source_path: "D:/codemax",
+                original_write_authorized: false,
+                workspace_estimated_bytes: 0,
                 model_id: None,
             })
             .expect("create task");

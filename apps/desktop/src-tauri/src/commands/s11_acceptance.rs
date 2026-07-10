@@ -28,7 +28,16 @@ use crate::{
 };
 
 const TASK_ID: &str = "task-s11-e2e";
-const VALIDATION_COMMAND: &str = "python validate.py";
+
+#[cfg(windows)]
+fn validation_command() -> String {
+    "powershell -NoProfile -File validate.ps1".to_string()
+}
+
+#[cfg(not(windows))]
+fn validation_command() -> String {
+    "sh validate.sh".to_string()
+}
 
 #[tokio::test]
 async fn s11_mvp_demo_repo_runs_from_worktree_to_local_merge() {
@@ -239,7 +248,7 @@ fn s11_acceptance_covers_repository_approval_and_memory_edges() {
                 scope: "repository",
                 scope_id: Some(repository.to_string_lossy().as_ref()),
                 key: "defaultValidationCommand",
-                value: VALIDATION_COMMAND,
+                value: &validation_command(),
                 confidence: 0.9,
                 source: "s11_acceptance",
                 is_user_editable: true,
@@ -273,10 +282,11 @@ async fn run_validation(
             CommandRequest {
                 task_id: task_id.to_string(),
                 run_id: Some(run_id.to_string()),
-                command: VALIDATION_COMMAND.to_string(),
+                command: validation_command(),
                 cwd: cwd.to_string(),
                 env: BTreeMap::new(),
                 timeout_ms: Some(30_000),
+                purpose: Some("validation".to_string()),
             },
             CommandLogPaths {
                 stdout_path: paths.logs_dir.join(format!("{run_id}.stdout.log")),
@@ -320,6 +330,7 @@ fn acceptance_storage(root: &Path) -> crate::storage::ManagedStorage {
 }
 
 fn create_task_record(storage: &crate::storage::ManagedStorage, repository: &Path) {
+    let target_branch = git::current_branch(repository).expect("read acceptance target branch");
     let store = storage.store.lock().expect("storage lock");
     TaskRepository::new(store.connection())
         .create(NewTask {
@@ -331,6 +342,11 @@ fn create_task_record(storage: &crate::storage::ManagedStorage, repository: &Pat
             repository_path: repository.to_string_lossy().as_ref(),
             worktree_path: None,
             branch_name: None,
+            target_branch: &target_branch,
+            workspace_kind: "git_worktree",
+            source_path: repository.to_string_lossy().as_ref(),
+            original_write_authorized: false,
+            workspace_estimated_bytes: 0,
             model_id: None,
         })
         .expect("create task");
@@ -347,13 +363,14 @@ fn persist_run_contract(storage: &crate::storage::ManagedStorage, repository: &P
     let repository_path = repository.to_string_lossy().to_string();
     let allowed_paths_json =
         serde_json::to_string(&vec![repository_path.clone()]).expect("encode allowed paths");
+    let validation_command = validation_command();
     let allowed_commands_json =
-        serde_json::to_string(&vec![VALIDATION_COMMAND.to_string()]).expect("encode commands");
+        serde_json::to_string(&vec![validation_command.clone()]).expect("encode commands");
     let contract_json = serde_json::json!({
         "mode": "s11_acceptance",
         "allowedPaths": [repository_path],
-        "allowedCommands": [VALIDATION_COMMAND],
-        "validationCommand": VALIDATION_COMMAND,
+        "allowedCommands": [validation_command],
+        "validationCommand": validation_command,
         "tokenBudgetTotal": 4000,
         "tokenBudgetPerCall": 1200
     })
@@ -372,7 +389,7 @@ fn persist_run_contract(storage: &crate::storage::ManagedStorage, repository: &P
             network_policy: "disabled",
             allowed_paths_json: &allowed_paths_json,
             allowed_commands_json: &allowed_commands_json,
-            validation_command: Some(VALIDATION_COMMAND),
+            validation_command: Some(validation_command.as_str()),
             token_budget_total: 4000,
             token_budget_per_call: 1200,
             output_language: "zh-CN",
@@ -421,18 +438,23 @@ fn demo_repository(label: &str) -> PathBuf {
     )
     .expect("write feature fixture");
     fs::write(
-        repository.join("validate.py"),
+        repository.join("validate.ps1"),
         "\
-from pathlib import Path
-text = Path('src/feature.py').read_text(encoding='utf-8')
-if 'return True' in text:
-    print('feature enabled')
-    raise SystemExit(0)
-print('feature disabled')
-raise SystemExit(1)
+$text = Get-Content 'src/feature.py' -Raw
+if ($text -match 'return True') {
+    Write-Output 'feature enabled'
+    exit 0
+}
+Write-Output 'feature disabled'
+exit 1
 ",
     )
-    .expect("write validation fixture");
+    .expect("write PowerShell validation fixture");
+    fs::write(
+        repository.join("validate.sh"),
+        "#!/bin/sh\nif grep -q 'return True' src/feature.py; then\n  echo 'feature enabled'\n  exit 0\nfi\necho 'feature disabled'\nexit 1\n",
+    )
+    .expect("write shell validation fixture");
     run_git(&repository, &["add", "."]);
     run_git(&repository, &["commit", "-m", "initial demo fixture"]);
 

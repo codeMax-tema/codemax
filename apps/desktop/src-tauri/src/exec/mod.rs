@@ -33,6 +33,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub purpose: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +90,7 @@ pub struct CommandExecutionResult {
     pub duration_ms: u64,
     pub timed_out: bool,
     pub cancelled: bool,
+    pub purpose: String,
 }
 
 #[derive(Debug, Error)]
@@ -98,6 +101,8 @@ pub enum CommandExecutionError {
     DuplicateRun(String),
     #[error("command run registry is unavailable")]
     RegistryUnavailable,
+    #[error("unsupported command purpose: {0}")]
+    InvalidPurpose(String),
     #[error("failed to create log file: {0}")]
     LogFile(#[from] std::io::Error),
     #[error("failed to spawn command: {0}")]
@@ -163,6 +168,7 @@ impl CommandExecutor {
         output_sink: CommandOutputSink,
         additional_redaction_values: Vec<String>,
     ) -> CommandExecutionResultType<CommandExecutionResult> {
+        let purpose = normalize_command_purpose(request.purpose.as_deref(), request.run_id.as_deref())?;
         let request = request.with_run_id();
         let command_text = request.command.trim();
         if command_text.is_empty() {
@@ -280,6 +286,7 @@ impl CommandExecutor {
             duration_ms: started_at.elapsed().as_millis() as u64,
             timed_out,
             cancelled,
+            purpose,
         })
     }
 }
@@ -428,6 +435,31 @@ fn shell_command(command: &str) -> Command {
     }
 }
 
+fn is_validation_run_id(run_id: &str) -> bool {
+    run_id.starts_with("validation-")
+}
+
+fn normalize_command_purpose(
+    purpose: Option<&str>,
+    run_id: Option<&str>,
+) -> CommandExecutionResultType<String> {
+    let value = purpose
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if run_id.is_some_and(is_validation_run_id) {
+                "validation"
+            } else {
+                "diagnostic"
+            }
+        });
+
+    match value {
+        "validation" | "edit" | "diagnostic" => Ok(value.to_string()),
+        other => Err(CommandExecutionError::InvalidPurpose(other.to_string())),
+    }
+}
+
 fn command_status(exit_code: Option<i32>, timed_out: bool, cancelled: bool) -> &'static str {
     if timed_out {
         "timedOut"
@@ -511,6 +543,24 @@ mod tests {
         std::env::temp_dir().join(format!("codemax-exec-{label}-{}", Uuid::new_v4()))
     }
 
+    #[test]
+    fn explicit_command_purpose_overrides_legacy_run_id_fallback() {
+        assert_eq!(
+            normalize_command_purpose(Some("edit"), Some("validation-legacy"))
+                .expect("explicit purpose is valid"),
+            "edit"
+        );
+        assert_eq!(
+            normalize_command_purpose(None, Some("validation-legacy"))
+                .expect("legacy validation purpose is inferred"),
+            "validation"
+        );
+        assert!(matches!(
+            normalize_command_purpose(Some("unknown"), None),
+            Err(CommandExecutionError::InvalidPurpose(value)) if value == "unknown"
+        ));
+    }
+
     fn test_command() -> String {
         if cfg!(windows) {
             "echo out && echo err 1>&2 && exit /b 7".to_string()
@@ -554,6 +604,7 @@ mod tests {
                     cwd: root.to_string_lossy().to_string(),
                     env: BTreeMap::new(),
                     timeout_ms: Some(30_000),
+                    purpose: None,
                 },
                 log_paths(&root),
                 CommandRunRegistry::default(),
@@ -598,6 +649,7 @@ mod tests {
                     cwd: root.to_string_lossy().to_string(),
                     env: BTreeMap::new(),
                     timeout_ms: Some(100),
+                    purpose: None,
                 },
                 log_paths(&root),
                 CommandRunRegistry::default(),

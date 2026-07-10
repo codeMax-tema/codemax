@@ -116,13 +116,24 @@ pub(crate) fn merge_task_inner(
     }
 
     let commit_message = request.commit_message.trim().to_string();
-    let prepared = prepare_task_merge_inner(
+    let prepared = match prepare_task_merge_inner(
         &storage,
         PrepareTaskMergeRequest {
             task_id: task_id.clone(),
             target_branch: request.target_branch,
         },
-    )?;
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if matches!(
+                error.code.as_str(),
+                "merge.targetBranchChanged" | "merge.sourceBranchChanged"
+            ) {
+                set_task_status(&storage, &task_id, "needsIntervention", None)?;
+            }
+            return Err(error);
+        }
+    };
     let mut blockers = merge_blockers(prepared.target_dirty, &commit_message);
     blockers.extend(
         crate::commands::s12_evidence::delivery_review_blockers_for_task(storage, &task_id)?,
@@ -258,11 +269,14 @@ pub(crate) fn prepare_task_merge_inner(
             format!("Task {task_id} does not have a saved worktree path."),
         )
     })?;
-    let target_branch = match request.target_branch.as_deref().map(str::trim) {
-        Some(branch) if !branch.is_empty() => branch.to_string(),
-        _ => git::current_branch(&task.repository_path).map_err(merge_git_error)?,
-    };
+    let target_branch = frozen_target_branch(&task, request.target_branch.as_deref())?;
     let source_branch = git::current_branch(&worktree_path).map_err(merge_git_error)?;
+    if task.branch_name.as_deref() != Some(source_branch.as_str()) {
+        return Err(CommandError::new(
+            "merge.sourceBranchChanged",
+            "The task worktree branch no longer matches the branch saved for this task.",
+        ));
+    }
     let target_dirty =
         git::has_uncommitted_changes(&task.repository_path).map_err(merge_git_error)?;
     let worktree_dirty = git::has_uncommitted_changes(&worktree_path).map_err(merge_git_error)?;
@@ -297,6 +311,26 @@ pub(crate) fn prepare_task_merge_inner(
         can_merge: blockers.is_empty(),
         blockers,
     })
+}
+
+fn frozen_target_branch(task: &TaskRecord, requested: Option<&str>) -> AppResult<String> {
+    let saved = task.target_branch.trim();
+    let target_branch = if saved.is_empty() {
+        git::current_branch(&task.repository_path).map_err(merge_git_error)?
+    } else {
+        saved.to_string()
+    };
+
+    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        if requested != target_branch {
+            return Err(CommandError::new(
+                "merge.targetBranchChanged",
+                "The requested target branch does not match the branch saved for this task.",
+            ));
+        }
+    }
+
+    Ok(target_branch)
 }
 
 fn require_merge_confirmation(confirmed: bool) -> AppResult<()> {
@@ -804,12 +838,25 @@ mod tests {
         repository_path: &Path,
         worktree_path: &Path,
         branch_name: &str,
+        target_branch: &str,
     ) -> (ManagedStorage, PathBuf) {
         let root = temp_path("storage");
         let store = SqliteStore::open_in_memory().expect("open sqlite");
         store.migrate().expect("run migrations");
         {
             let connection = store.connection();
+            let allowed_paths_json =
+                serde_json::to_string(&vec![worktree_path.to_string_lossy().to_string()])
+                    .expect("serialize allowed paths");
+            let allowed_commands_json =
+                serde_json::to_string(&vec!["cargo test"]).expect("serialize allowed commands");
+            let contract_json = json!({
+                "mode": "agent",
+                "validationCommand": "cargo test",
+                "allowedPaths": [worktree_path.to_string_lossy().to_string()],
+                "allowedCommands": ["cargo test"],
+            })
+            .to_string();
             TaskRepository::new(connection)
                 .create(NewTask {
                     id: "task-merge-error",
@@ -820,9 +867,35 @@ mod tests {
                     repository_path: &repository_path.to_string_lossy(),
                     worktree_path: Some(&worktree_path.to_string_lossy()),
                     branch_name: Some(branch_name),
+                    target_branch,
+                    workspace_kind: "git_worktree",
+                    source_path: &repository_path.to_string_lossy(),
+                    original_write_authorized: false,
+                    workspace_estimated_bytes: 0,
                     model_id: None,
                 })
                 .expect("create merge task");
+            crate::storage::RunContractRepository::new(connection)
+                .upsert(crate::storage::NewRunContract {
+                    id: "contract-merge-ready",
+                    task_id: "task-merge-error",
+                    profile_id: None,
+                    mode: "agent",
+                    model_id: Some("model-default"),
+                    reasoning_effort: "balanced",
+                    permission_level: "workspace-write",
+                    network_policy: "restricted",
+                    allowed_paths_json: &allowed_paths_json,
+                    allowed_commands_json: &allowed_commands_json,
+                    validation_command: Some("cargo test"),
+                    token_budget_total: 4000,
+                    token_budget_per_call: 1200,
+                    output_language: "zh-CN",
+                    memory_scope: "task",
+                    budget_overflow_policy: "pause_for_approval",
+                    contract_json: &contract_json,
+                })
+                .expect("record merge run contract");
             CommandRunRepository::new(connection)
                 .record(NewCommandRun {
                     id: "run-merge-passed",
@@ -880,10 +953,15 @@ mod tests {
         let worktree_root = temp_path("worktree-root");
         let worktree = git::create_task_worktree(&repository, &worktree_root, "task-merge-error")
             .expect("create task worktree");
+        let target_branch = git::current_branch(&repository).expect("read target branch");
         let worktree_path = PathBuf::from(&worktree.worktree_path);
         fs::write(worktree_path.join("modified.txt"), "after").expect("modify worktree file");
-        let (storage, storage_root) =
-            merge_test_storage(&repository, &worktree_path, &worktree.branch_name);
+        let (storage, storage_root) = merge_test_storage(
+            &repository,
+            &worktree_path,
+            &worktree.branch_name,
+            &target_branch,
+        );
 
         let error = merge_task_inner(
             &storage,
@@ -899,6 +977,42 @@ mod tests {
         assert_eq!(error.code, "merge.targetBranchChanged");
         let stored_task = load_task(&storage, "task-merge-error").expect("load task");
         assert_eq!(stored_task.status, "needsIntervention");
+
+        fs::remove_dir_all(worktree_path).expect("clean worktree");
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean repository");
+        if storage_root.exists() {
+            fs::remove_dir_all(storage_root).expect("clean storage root");
+        }
+    }
+
+    #[test]
+    fn merge_preview_keeps_saved_target_after_repository_checkout_changes() {
+        let repository = committed_repository("saved-target-branch");
+        let worktree_root = temp_path("saved-target-worktree-root");
+        let worktree = git::create_task_worktree(&repository, &worktree_root, "task-merge-error")
+            .expect("create task worktree");
+        let target_branch = git::current_branch(&repository).expect("read saved target branch");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        fs::write(worktree_path.join("modified.txt"), "after").expect("modify worktree file");
+        let (storage, storage_root) = merge_test_storage(
+            &repository,
+            &worktree_path,
+            &worktree.branch_name,
+            &target_branch,
+        );
+        run_test_git(&repository, &["checkout", "release"]);
+
+        let prepared = prepare_task_merge_inner(
+            &storage,
+            PrepareTaskMergeRequest {
+                task_id: "task-merge-error".to_string(),
+                target_branch: None,
+            },
+        )
+        .expect("prepare merge with saved target branch");
+
+        assert_eq!(prepared.target_branch, target_branch);
 
         fs::remove_dir_all(worktree_path).expect("clean worktree");
         fs::remove_dir_all(worktree_root).expect("clean worktree root");

@@ -15,8 +15,8 @@ use crate::{
         sanitize_for_model_context, ContextObservation, SanitizedContent, TokenBudgetObservation,
     },
     storage::{
-        AgentEventRepository, AgentSessionRepository, ManagedStorage, NewAgentEvent,
-        NewAgentSession, NewTodo, RunContractRepository, StorageError, TaskRepository,
+        AgentEventRepository, AgentSessionRepository, CommandRunRepository, ManagedStorage,
+        NewAgentEvent, NewAgentSession, NewTodo, RunContractRepository, StorageError, TaskRepository,
         TodoRepository,
     },
 };
@@ -193,15 +193,27 @@ pub async fn get_agent_task_state(
 #[tauri::command]
 pub async fn advance_agent_task(
     agent: State<'_, AgentService>,
+    storage: State<'_, ManagedStorage>,
     task_id: String,
     request: AgentTaskAdvanceRequest,
 ) -> AppResult<Value> {
+    let task_id = task_id.trim().to_string();
+    if task_id.is_empty() {
+        return Err(CommandError::new(
+            "agent.taskIdRequired",
+            "Agent task id is required.",
+        ));
+    }
     let path = format!("/api/v1/tasks/{}/advance", encode_path_segment(&task_id));
     let body = serde_json::to_value(request).map_err(json_error)?;
-    agent
+    let response = agent
         .api_json("POST", &path, Some(body))
         .await
-        .map_err(agent_error)
+        .map_err(agent_error)?;
+    if let Ok(state) = response_state(&response) {
+        sync_agent_state(storage.inner(), &task_id, state)?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -282,6 +294,7 @@ pub async fn run_agent_validation_cycle(
                 cwd: validation.cwd.clone(),
                 env: BTreeMap::new(),
                 timeout_ms: Some(timeout_ms),
+                purpose: Some("validation".to_string()),
             },
         )
         .await?;
@@ -343,21 +356,70 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
         .get("repairRound")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    let max_repair_rounds = state
+        .get("maxRepairRounds")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let validation_request = state
+        .get("validationRequest")
+        .cloned()
+        .filter(|request| !request.is_null())
+        .unwrap_or_else(|| json!({}));
+    let validation_request_json = serde_json::to_string(&validation_request).map_err(json_error)?;
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let connection = store.connection();
+    let previous_session = AgentSessionRepository::new(connection)
+        .get_for_task(task_id)
+        .map_err(storage_error)?;
+    let validation_runs = CommandRunRepository::new(connection)
+        .list_for_task(task_id)
+        .map_err(storage_error)?;
+    let validation_round = validation_runs
+        .iter()
+        .filter(|run| run.purpose == "validation")
+        .count() as i64;
+    let iterations = state
+        .get("iterations")
+        .and_then(Value::as_i64)
+        .unwrap_or(validation_round);
 
     TaskRepository::new(connection)
         .update_status(task_id, task_status, None)
         .map_err(storage_error)?;
+    let session_id = previous_session
+        .as_ref()
+        .map(|session| session.id.clone())
+        .unwrap_or_else(|| format!("agent-session-{task_id}"));
     AgentSessionRepository::new(connection)
         .upsert(NewAgentSession {
-            id: &format!("agent-session-{task_id}"),
+            id: &session_id,
             task_id,
             status: phase,
             stage: task_status,
             checkpoint_id: checkpoint_id.as_deref(),
+            iterations,
+            repair_round,
+            max_repair_rounds,
+            validation_request_json: &validation_request_json,
+            validation_round,
         })
         .map_err(storage_error)?;
+
+    if should_record_stage_change(previous_session.as_ref(), phase, checkpoint_id.as_deref()) {
+        record_agent_event_with_connection(
+            &AgentEventRepository::new(connection),
+            task_id,
+            "task.stage.changed",
+            task_status,
+            &format!("Agent moved into {phase}."),
+            json!({
+                "phase": phase,
+                "task_status": task_status,
+                "checkpoint_id": checkpoint_id,
+                "repair_round": repair_round,
+            }),
+        )?;
+    }
 
     if let Some(Value::Array(todos)) = state.get("todos") {
         let todos_repo = TodoRepository::new(connection);
@@ -403,7 +465,17 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
         }
     }
 
-    if phase == "repairing" {
+    let repair_started = phase == "repairing"
+        && previous_session.as_ref().map_or(true, |session| {
+            session.status != phase || session.repair_round != repair_round
+        });
+    let repair_finished = phase == "validating"
+        && repair_round > 0
+        && previous_session.as_ref().map_or(true, |session| {
+            session.status != phase || session.repair_round != repair_round
+        });
+
+    if repair_started {
         record_agent_event_with_connection(
             &AgentEventRepository::new(connection),
             task_id,
@@ -412,10 +484,11 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
             "Agent started an automatic repair round.",
             json!({
                 "repair_round": repair_round,
+                "max_repair_rounds": max_repair_rounds,
                 "repair_plan": state.get("repairPlan").cloned().unwrap_or_else(|| json!({})),
             }),
         )?;
-    } else if phase == "validating" && repair_round > 0 {
+    } else if repair_finished {
         record_agent_event_with_connection(
             &AgentEventRepository::new(connection),
             task_id,
@@ -424,12 +497,23 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
             "Agent finished a repair round and requested validation.",
             json!({
                 "repair_round": repair_round,
-                "validation_request": state.get("validationRequest").cloned().unwrap_or_else(|| json!({})),
+                "validation_round": validation_round,
+                "validation_request": validation_request,
             }),
         )?;
     }
 
     Ok(())
+}
+
+fn should_record_stage_change(
+    previous_session: Option<&crate::storage::AgentSessionRecord>,
+    phase: &str,
+    checkpoint_id: Option<&str>,
+) -> bool {
+    previous_session.map_or(true, |session| {
+        session.status != phase || session.checkpoint_id.as_deref() != checkpoint_id
+    })
 }
 
 fn task_status_from_agent_phase(phase: &str) -> &'static str {
@@ -937,6 +1021,11 @@ fn storage_error(error: StorageError) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::{
+        AgentEventRepository, ManagedStorage, NewTask, SqliteStore, StorageRoots, TaskRepository,
+    };
+    use std::{fs, path::PathBuf, sync::Mutex};
+    use uuid::Uuid;
 
     #[test]
     fn validation_request_ignores_terminal_or_paused_phases() {
@@ -954,5 +1043,78 @@ mod tests {
     #[test]
     fn encode_path_segment_escapes_slashes_and_spaces() {
         assert_eq!(encode_path_segment("task 1/a"), "task%201%2Fa");
+    }
+
+    #[test]
+    fn sync_agent_state_records_stage_change_event_once() {
+        let storage = test_storage("agent-stage-events");
+        seed_task(&storage, "task-stage-events");
+        let state = json!({
+            "phase": "editing",
+            "checkpointIndex": 2,
+            "todos": [{
+                "id": "todo-1",
+                "title": "Edit task files",
+                "description": "Apply the requested changes",
+                "status": "in_progress"
+            }]
+        });
+
+        sync_agent_state(&storage, "task-stage-events", &state).expect("first sync succeeds");
+        sync_agent_state(&storage, "task-stage-events", &state).expect("second sync succeeds");
+
+        let store = storage.store.lock().expect("storage lock");
+        let events = AgentEventRepository::new(store.connection())
+            .list_for_task("task-stage-events")
+            .expect("list task events");
+        let stage_events: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "task.stage.changed")
+            .collect();
+
+        assert_eq!(stage_events.len(), 1);
+        assert_eq!(stage_events[0].stage, "editing");
+        assert!(stage_events[0].message.contains("editing"));
+    }
+
+    fn test_storage(label: &str) -> ManagedStorage {
+        let root = temp_path(label);
+        let roots = StorageRoots::from_app_data_dir(&root);
+        roots.ensure_base_dirs().expect("create storage roots");
+        let store = SqliteStore::open_in_memory().expect("open sqlite");
+        store.migrate().expect("run migrations");
+
+        ManagedStorage {
+            roots,
+            store: Mutex::new(store),
+        }
+    }
+
+    fn seed_task(storage: &ManagedStorage, task_id: &str) {
+        let store = storage.store.lock().expect("storage lock");
+        TaskRepository::new(store.connection())
+            .create(NewTask {
+                id: task_id,
+                title: "Agent state sync fixture",
+                description: "Fixture task for Agent stage sync tests.",
+                task_type: "custom",
+                status: "queued",
+                repository_path: "D:/codemax",
+                worktree_path: Some("D:/codemax/.worktrees/task-stage-events"),
+                branch_name: Some("codemax/task-stage-events"),
+                target_branch: "main",
+                workspace_kind: "git_worktree",
+                source_path: "D:/codemax",
+                original_write_authorized: false,
+                workspace_estimated_bytes: 0,
+                model_id: None,
+            })
+            .expect("create fixture task");
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("codemax-agent-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create temp root");
+        root
     }
 }

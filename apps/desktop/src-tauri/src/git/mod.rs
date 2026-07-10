@@ -19,6 +19,16 @@ pub struct RepositoryInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    pub path: String,
+    pub name: String,
+    pub is_git_repository: bool,
+    pub branch: Option<String>,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskBranch {
     pub task_id: String,
     pub branch_name: String,
@@ -127,6 +137,102 @@ pub enum GitError {
 }
 
 pub type GitResult<T> = Result<T, GitError>;
+
+pub fn inspect_project(path: impl AsRef<Path>) -> GitResult<ProjectInfo> {
+    let selected_path = path.as_ref();
+    ensure_directory(selected_path)?;
+    let selected_path = selected_path
+        .canonicalize()
+        .unwrap_or_else(|_| selected_path.to_path_buf());
+    let is_git_repository = is_inside_git_work_tree(&selected_path)?;
+    let project_path = if is_git_repository {
+        repository_root(&selected_path)?
+    } else {
+        selected_path
+    };
+
+    let (branch, dirty) = if is_git_repository {
+        (
+            Some(current_branch_in_repository(&project_path)?),
+            is_dirty(&project_path)?,
+        )
+    } else {
+        (None, false)
+    };
+
+    Ok(ProjectInfo {
+        name: repository_name(&project_path),
+        path: project_path.to_string_lossy().to_string(),
+        is_git_repository,
+        branch,
+        dirty,
+    })
+}
+
+pub fn initialize_repository_with_baseline(path: impl AsRef<Path>) -> GitResult<ProjectInfo> {
+    let selected_path = path.as_ref();
+    ensure_directory(selected_path)?;
+    let selected_path = selected_path
+        .canonicalize()
+        .unwrap_or_else(|_| selected_path.to_path_buf());
+    let git_metadata = selected_path.join(".git");
+    if git_metadata.exists() {
+        return Err(GitError::CommandFailed {
+            path: selected_path,
+            args: "initialize repository".to_string(),
+            stderr: ".git already exists".to_string(),
+        });
+    }
+
+    let initialize_result = run_required_git(&selected_path, &["init"]);
+    if let Err(error) = initialize_result {
+        let _ = remove_initialized_repository_metadata(&selected_path);
+        return Err(error);
+    }
+
+    let baseline_result = (|| {
+        run_required_git(&selected_path, &["add", "-A"])?;
+        run_required_git(
+            &selected_path,
+            &[
+                "-c",
+                "user.name=CodeMax",
+                "-c",
+                "user.email=codemax@localhost",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "chore: create CodeMax baseline",
+            ],
+        )?;
+        inspect_project(&selected_path)
+    })();
+
+    if baseline_result.is_err() {
+        let _ = remove_initialized_repository_metadata(&selected_path);
+    }
+    baseline_result
+}
+
+pub fn remove_initialized_repository_metadata(path: impl AsRef<Path>) -> GitResult<()> {
+    let selected_path = path.as_ref();
+    ensure_directory(selected_path)?;
+    let git_metadata = selected_path.join(".git");
+    let metadata = match fs::symlink_metadata(&git_metadata) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(GitError::Io(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(GitError::CommandFailed {
+            path: selected_path.to_path_buf(),
+            args: "remove initialized Git metadata".to_string(),
+            stderr: ".git is not a regular directory".to_string(),
+        });
+    }
+    fs::remove_dir_all(git_metadata)?;
+    Ok(())
+}
 
 pub fn validate_repository(path: impl AsRef<Path>) -> GitResult<RepositoryInfo> {
     let root = repository_root(path.as_ref())?;
@@ -401,14 +507,42 @@ pub fn remove_task_worktree(
     Ok(())
 }
 
+pub fn delete_task_branch(
+    repository_path: impl AsRef<Path>,
+    task_id: &str,
+    branch_name: &str,
+) -> GitResult<()> {
+    let repository_root = repository_root(repository_path.as_ref())?;
+    let expected_branch = task_branch_name(task_id)?;
+    if branch_name != expected_branch {
+        return Err(GitError::CommandFailed {
+            path: repository_root,
+            args: "delete task branch".to_string(),
+            stderr: "stored task branch does not match the task id".to_string(),
+        });
+    }
+
+    if !branch_exists(&repository_root, &expected_branch)? {
+        return Ok(());
+    }
+    let output = run_git(&repository_root, &["branch", "-D", &expected_branch])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_root,
+            args: format!("branch -D {expected_branch}"),
+            stderr: output.stderr,
+        });
+    }
+    Ok(())
+}
+
 fn repository_root(path: &Path) -> GitResult<PathBuf> {
     ensure_directory(path)?;
 
-    let inside_work_tree = run_git(path, &["rev-parse", "--is-inside-work-tree"])?;
-    if !inside_work_tree.status_success || inside_work_tree.stdout.trim() != "true" {
+    if !is_inside_git_work_tree_strict(path)? {
         return Err(GitError::NotRepository {
             path: path.to_path_buf(),
-            stderr: inside_work_tree.stderr,
+            stderr: "fatal: not a git repository".to_string(),
         });
     }
 
@@ -422,6 +556,21 @@ fn repository_root(path: &Path) -> GitResult<PathBuf> {
 
     let raw_root = PathBuf::from(root_output.stdout.trim());
     Ok(raw_root.canonicalize().unwrap_or(raw_root))
+}
+
+fn is_inside_git_work_tree(path: &Path) -> GitResult<bool> {
+    let inside_work_tree = match run_git(path, &["rev-parse", "--is-inside-work-tree"]) {
+        Ok(output) => output,
+        Err(GitError::GitUnavailable(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+
+    Ok(inside_work_tree.status_success && inside_work_tree.stdout.trim() == "true")
+}
+
+fn is_inside_git_work_tree_strict(path: &Path) -> GitResult<bool> {
+    let inside_work_tree = run_git(path, &["rev-parse", "--is-inside-work-tree"])?;
+    Ok(inside_work_tree.status_success && inside_work_tree.stdout.trim() == "true")
 }
 
 fn ensure_directory(path: &Path) -> GitResult<()> {
@@ -930,6 +1079,19 @@ fn run_git(path: &Path, args: &[&str]) -> GitResult<GitCommandOutput> {
     })
 }
 
+fn run_required_git(path: &Path, args: &[&str]) -> GitResult<GitCommandOutput> {
+    let output = run_git(path, args)?;
+    if output.status_success {
+        Ok(output)
+    } else {
+        Err(GitError::CommandFailed {
+            path: path.to_path_buf(),
+            args: args.join(" "),
+            stderr: output.stderr,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,6 +1129,24 @@ mod tests {
         run_test_git(&path, &["commit", "-m", "initial fixture"]);
 
         path
+    }
+
+    #[test]
+    fn inspect_project_resolves_a_repository_subdirectory_to_the_git_root() {
+        let repository = committed_repository("inspect-project-subdirectory");
+        let nested = repository.join("src/nested");
+        fs::create_dir_all(&nested).expect("create nested directory");
+
+        let project = inspect_project(&nested).expect("inspect nested project path");
+
+        assert!(project.is_git_repository);
+        assert_eq!(
+            PathBuf::from(project.path).canonicalize().expect("canonical project path"),
+            repository.canonicalize().expect("canonical repository path")
+        );
+        assert!(project.branch.is_some_and(|branch| !branch.trim().is_empty()));
+
+        fs::remove_dir_all(repository).expect("clean repository");
     }
 
     #[test]

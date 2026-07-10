@@ -1,14 +1,14 @@
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.model_gateway import ModelGatewayError, build_model_gateway
 from app.providers import (
     ModelConfigError,
     ModelConfigView,
     ModelMessage,
     ProviderSpec,
-    build_chat_client,
     load_model_config,
     model_config_view,
 )
@@ -31,6 +31,7 @@ class ChatCompletionRequest(AgentModel):
     messages: list[ChatMessage] = Field(min_length=1)
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, alias="maxTokens", ge=1)
+    response_format: dict[str, Any] | None = Field(default=None, alias="responseFormat")
 
 
 class UsageResponse(AgentModel):
@@ -41,10 +42,12 @@ class UsageResponse(AgentModel):
 
 class ChatCompletionResponse(AgentModel):
     id: str
+    request_id: str = Field(alias="requestId")
     model: str
     content: str
     finish_reason: str | None = Field(default=None, alias="finishReason")
-    usage: UsageResponse | None = None
+    latency_ms: float = Field(alias="latencyMs")
+    usage: UsageResponse
 
 
 @router.get("/config", response_model=ModelConfigView)
@@ -52,7 +55,8 @@ def get_model_config() -> ModelConfigView:
     try:
         return model_config_view(load_model_config())
     except ModelConfigError as error:
-        raise model_config_http_error(error) from error
+        http_error = model_config_http_error(error)
+    raise http_error from None
 
 
 @router.get("/providers", response_model=list[ProviderSpec])
@@ -64,40 +68,48 @@ def list_model_providers() -> tuple[ProviderSpec, ...]:
 def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
     try:
         config = load_model_config()
-        client = build_chat_client(config)
-        result = client.chat(
+        gateway = build_model_gateway(config)
+        result = gateway.chat(
             messages=[
                 ModelMessage(role=message.role, content=message.content)
                 for message in request.messages
             ],
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            response_format=request.response_format,
         )
     except ModelConfigError as error:
-        raise model_config_http_error(error) from error
-    except ModelProviderError as error:
-        raise model_provider_http_error(error) from error
+        http_error = model_config_http_error(error)
+    except ModelGatewayError as error:
+        http_error = model_gateway_http_error(error)
 
-    usage = None
-    if result.usage is not None:
-        usage = UsageResponse(
-            promptTokens=result.usage.prompt_tokens,
-            completionTokens=result.usage.completion_tokens,
-            totalTokens=result.usage.total_tokens,
-        )
-
+    if "http_error" in locals():
+        raise http_error from None
     return ChatCompletionResponse(
         id=result.id,
+        requestId=result.request_id,
         model=result.model,
         content=result.content,
         finishReason=result.finish_reason,
-        usage=usage,
+        latencyMs=result.latency_ms,
+        usage=UsageResponse(
+            promptTokens=result.usage.prompt_tokens,
+            completionTokens=result.usage.completion_tokens,
+            totalTokens=result.usage.total_tokens,
+        ),
     )
 
 
 def model_config_http_error(error: ModelConfigError) -> HTTPException:
     return HTTPException(
         status_code=400,
+        detail={"code": error.code, "message": error.message},
+    )
+
+
+def model_gateway_http_error(error: ModelGatewayError) -> HTTPException:
+    return HTTPException(
+        status_code=error.http_status,
         detail={"code": error.code, "message": error.message},
     )
 

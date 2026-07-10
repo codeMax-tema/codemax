@@ -1,0 +1,66 @@
+- generic [ref=e2]:
+  - main [ref=e3]:
+    - heading "Agent 任务控制台" [level=1] [ref=e4]
+    - generic "窗口菜单" [ref=e5]:
+      - generic [ref=e6]:
+        - button "主导航" [ref=e7] [cursor=pointer]
+        - button "后退" [ref=e10] [cursor=pointer]
+        - button "前进" [disabled] [ref=e13]
+        - navigation "窗口菜单" [ref=e16]:
+          - button "文件" [ref=e17] [cursor=pointer]
+          - button "编辑" [ref=e18] [cursor=pointer]
+          - button "视图" [ref=e19] [cursor=pointer]
+          - button "帮助" [ref=e20] [cursor=pointer]
+    - generic [ref=e28]:
+      - complementary "主导航" [ref=e29]:
+        - navigation [ref=e30]:
+          - button "新对话" [ref=e31] [cursor=pointer]
+          - button "搜索" [ref=e36] [cursor=pointer]
+          - button "已安排" [ref=e41] [cursor=pointer]
+          - button "技能" [ref=e47] [cursor=pointer]
+        - generic [ref=e51]:
+          - paragraph [ref=e52]: 项目
+          - button "未选择项目" [ref=e53] [cursor=pointer]
+          - generic [ref=e57]:
+            - generic [ref=e58]: 状态筛选
+            - combobox "状态筛选" [ref=e59]:
+              - option "全部状态" [selected]
+              - option "已排队"
+              - option "规划中"
+              - option "编辑中"
+              - option "验证中"
+              - option "修复中"
+              - option "等待审批"
+              - option "等待审查"
+              - option "可合并"
+              - option "需要人工介入"
+              - option "已合并"
+              - option "失败"
+              - option "已取消"
+          - generic "最近任务" [ref=e60]:
+            - alert [ref=e61]: Cannot read properties of undefined (reading 'invoke')
+        - generic [ref=e62]:
+          - paragraph [ref=e63]: 对话
+          - generic [ref=e64]: 暂无独立对话记录。
+        - button "设 设置 账户" [ref=e66] [cursor=pointer]:
+          - generic [ref=e67]: 设
+          - generic [ref=e68]:
+            - strong [ref=e69]: 设置
+            - generic [ref=e70]: 账户
+      - region "我们该做什么？" [ref=e73]:
+        - generic [ref=e74]:
+          - heading "我们该做什么？" [level=2] [ref=e75]
+          - generic [ref=e76]:
+            - textbox "描述你想让 CodeMax 处理的任务" [ref=e77]
+            - generic [ref=e78]:
+              - button [ref=e79] [cursor=pointer]
+              - button "GPT-5 Codex 中" [ref=e81] [cursor=pointer]:
+                - generic [ref=e82]: GPT-5 Codex
+                - generic [ref=e83]: 中
+              - button "思考强度" [ref=e86] [cursor=pointer]
+              - button "创建任务" [disabled] [ref=e88]
+            - button "选择项目 未选择项目" [ref=e91] [cursor=pointer]:
+              - generic [ref=e92]: 选择项目
+              - strong [ref=e93]: 未选择项目
+  - region "Notifications (F8)":
+    - list

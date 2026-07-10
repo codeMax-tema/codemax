@@ -44,20 +44,23 @@ pub async fn select_repository_path(app: AppHandle) -> AppResult<Option<Reposito
 }
 
 #[tauri::command]
-pub fn validate_repository_path(path: String) -> AppResult<git::RepositoryInfo> {
-    git::validate_repository(path).map_err(repository_error)
+pub fn validate_repository_path(path: String) -> AppResult<git::ProjectInfo> {
+    git::inspect_project(path).map_err(repository_error)
 }
 
 #[tauri::command]
 pub fn get_repository_current_branch(path: String) -> AppResult<RepositoryBranchInfo> {
-    let branch = git::current_branch(path).map_err(repository_error)?;
+    let branch = git::inspect_project(path)
+        .map_err(repository_error)?
+        .branch
+        .unwrap_or_default();
 
     Ok(RepositoryBranchInfo { branch })
 }
 
 #[tauri::command]
 pub fn get_repository_dirty_status(path: String) -> AppResult<RepositoryDirtyStatus> {
-    let dirty = git::has_uncommitted_changes(path).map_err(repository_error)?;
+    let dirty = git::inspect_project(path).map_err(repository_error)?.dirty;
 
     Ok(RepositoryDirtyStatus { dirty })
 }
@@ -204,5 +207,16 @@ mod tests {
 
         assert_eq!(error.code, "repository.notGitRepository");
         assert!(error.message.contains("not a Git repository"));
+    }
+
+    #[test]
+    fn repository_path_selection_accepts_existing_non_git_directory() {
+        let path = std::env::temp_dir().join(format!("codemax-project-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create project directory");
+
+        let selection = repository_path_selection(&path).expect("non-git directory is selectable");
+
+        assert_eq!(selection.path, path.to_string_lossy());
+        std::fs::remove_dir_all(path).expect("clean project directory");
     }
 }

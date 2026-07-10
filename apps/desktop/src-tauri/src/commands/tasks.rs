@@ -21,11 +21,170 @@ use crate::{
         PersonalProfileRepository, RunContractRepository, StorageError, TaskRecord, TaskRepository,
         TodoRecord, TodoRepository, ValidationRoundRecord, ValidationRoundRepository,
     },
+    workspace,
 };
 
 const DEFAULT_TASK_TYPE: &str = "custom";
 const DEFAULT_TASK_STATUS: &str = "queued";
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
+
+#[derive(Debug, Clone, Copy)]
+struct RunContractOverrides<'a> {
+    mode: Option<&'a str>,
+    reasoning_effort: Option<&'a str>,
+    permission_level: Option<&'a str>,
+    network_policy: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedWorkspaceStrategy {
+    GitWorktree,
+    InitializeGit,
+    IsolatedCopy,
+    DirectOriginal,
+}
+
+#[derive(Debug)]
+struct PreparedTaskWorkspace {
+    path: String,
+    task_branch: Option<String>,
+    target_branch: String,
+    kind: &'static str,
+    source_path: String,
+    original_write_authorized: bool,
+    estimated_bytes: i64,
+    initialized_git: bool,
+}
+
+fn resolve_workspace_strategy(
+    is_git_repository: bool,
+    work_mode: Option<&str>,
+    requested_strategy: Option<&str>,
+    original_write_authorized: bool,
+) -> AppResult<ResolvedWorkspaceStrategy> {
+    let work_mode = work_mode.unwrap_or("coding").trim();
+    if !matches!(work_mode, "daily" | "coding") {
+        return Err(CommandError::new(
+            "workspace.invalidWorkMode",
+            "Work mode must be daily or coding.",
+        ));
+    }
+
+    if is_git_repository {
+        return Ok(ResolvedWorkspaceStrategy::GitWorktree);
+    }
+
+    let requested_strategy = requested_strategy.map(str::trim).filter(|value| !value.is_empty());
+    match (work_mode, requested_strategy) {
+        ("daily", Some("initialize_git")) => Ok(ResolvedWorkspaceStrategy::InitializeGit),
+        ("daily", Some("isolated_copy")) => Ok(ResolvedWorkspaceStrategy::IsolatedCopy),
+        ("daily", None) => Err(CommandError::new(
+            "workspace.strategyRequired",
+            "Daily mode requires choosing Git initialization or an isolated copy.",
+        )),
+        ("coding", None | Some("isolated_copy")) => Ok(ResolvedWorkspaceStrategy::IsolatedCopy),
+        ("coding", Some("direct_original")) if original_write_authorized => {
+            Ok(ResolvedWorkspaceStrategy::DirectOriginal)
+        }
+        (_, Some("direct_original")) => Err(CommandError::new(
+            "workspace.directOriginalNotAuthorized",
+            "Direct edits require coding mode and explicit authorization.",
+        )),
+        (_, Some(_)) => Err(CommandError::new(
+            "workspace.invalidStrategy",
+            "The selected workspace strategy is not available for this work mode.",
+        )),
+        (_, None) => Err(CommandError::new(
+            "workspace.invalidWorkMode",
+            "Work mode must be daily or coding.",
+        )),
+    }
+}
+
+fn prepare_task_workspace(
+    storage: &ManagedStorage,
+    project: &git::ProjectInfo,
+    task_id: &str,
+    strategy: ResolvedWorkspaceStrategy,
+    workspace_exclusions: &[String],
+) -> AppResult<PreparedTaskWorkspace> {
+    match strategy {
+        ResolvedWorkspaceStrategy::GitWorktree => {
+            let worktree = git::create_task_worktree(
+                &project.path,
+                storage.roots.worktree_root.clone(),
+                task_id,
+            )
+            .map_err(task_git_error)?;
+            Ok(PreparedTaskWorkspace {
+                path: worktree.worktree_path,
+                task_branch: Some(worktree.branch_name),
+                target_branch: project.branch.clone().unwrap_or_default(),
+                kind: "git_worktree",
+                source_path: project.path.clone(),
+                original_write_authorized: false,
+                estimated_bytes: 0,
+                initialized_git: false,
+            })
+        }
+        ResolvedWorkspaceStrategy::IsolatedCopy => {
+            let isolated = workspace::prepare_isolated_copy_with_exclusions(
+                &project.path,
+                &storage.roots.worktree_root,
+                task_id,
+                workspace_exclusions,
+            )
+            .map_err(workspace_io_error)?;
+            Ok(PreparedTaskWorkspace {
+                path: isolated.workspace_path.to_string_lossy().to_string(),
+                task_branch: None,
+                target_branch: String::new(),
+                kind: "isolated_copy",
+                source_path: isolated.source_path.to_string_lossy().to_string(),
+                original_write_authorized: false,
+                estimated_bytes: i64::try_from(isolated.estimated_bytes).unwrap_or(i64::MAX),
+                initialized_git: false,
+            })
+        }
+        ResolvedWorkspaceStrategy::DirectOriginal => Ok(PreparedTaskWorkspace {
+            path: project.path.clone(),
+            task_branch: None,
+            target_branch: String::new(),
+            kind: "direct_original",
+            source_path: project.path.clone(),
+            original_write_authorized: true,
+            estimated_bytes: 0,
+            initialized_git: false,
+        }),
+        ResolvedWorkspaceStrategy::InitializeGit => {
+            let estimate = workspace::estimate_isolated_copy(&project.path)
+                .map_err(workspace_io_error)?;
+            let initialized = git::initialize_repository_with_baseline(&project.path)
+                .map_err(task_git_error)?;
+            let worktree = match git::create_task_worktree(
+                &initialized.path,
+                storage.roots.worktree_root.clone(),
+                task_id,
+            ) {
+                Ok(worktree) => worktree,
+                Err(error) => {
+                    let _ = git::remove_initialized_repository_metadata(&initialized.path);
+                    return Err(task_git_error(error));
+                }
+            };
+            Ok(PreparedTaskWorkspace {
+                path: worktree.worktree_path,
+                task_branch: Some(worktree.branch_name),
+                target_branch: initialized.branch.unwrap_or_default(),
+                kind: "git_initialized_worktree",
+                source_path: initialized.path,
+                original_write_authorized: false,
+                estimated_bytes: i64::try_from(estimate.estimated_bytes).unwrap_or(i64::MAX),
+                initialized_git: true,
+            })
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +195,38 @@ pub struct CreateTaskRecordRequest {
     pub task_type: Option<String>,
     pub model_id: Option<String>,
     pub validation_command: Option<String>,
+    pub mode: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub permission_level: Option<String>,
+    pub network_policy: Option<String>,
+    pub work_mode: Option<String>,
+    pub workspace_strategy: Option<String>,
+    #[serde(default)]
+    pub original_write_authorized: bool,
+    #[serde(default)]
+    pub workspace_exclusions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstimateTaskWorkspaceRequest {
+    pub repository_path: String,
+    pub workspace_strategy: Option<String>,
+    #[serde(default)]
+    pub workspace_exclusions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskWorkspaceEstimateView {
+    pub source_path: String,
+    pub destination_root: String,
+    pub workspace_kind: String,
+    pub estimated_bytes: u64,
+    pub estimated_files: u64,
+    pub available_bytes: u64,
+    pub sufficient_space: bool,
+    pub cleanup_policy: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +253,10 @@ pub struct TaskSummaryView {
     pub branch_name: Option<String>,
     pub task_branch: Option<String>,
     pub target_branch: String,
+    pub workspace_kind: String,
+    pub source_path: String,
+    pub original_write_authorized: bool,
+    pub workspace_estimated_bytes: i64,
     pub agent_stage: String,
     pub latest_validation_status: String,
     pub latest_diff_summary: String,
@@ -177,6 +372,11 @@ pub struct AgentSessionView {
     pub status: String,
     pub stage: String,
     pub checkpoint_id: Option<String>,
+    pub iterations: i64,
+    pub repair_round: i64,
+    pub max_repair_rounds: i64,
+    pub validation_request: Value,
+    pub validation_round: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -199,6 +399,7 @@ pub struct ValidationRoundView {
     pub id: String,
     pub task_id: String,
     pub round_index: i64,
+    pub repair_round: i64,
     pub status: String,
     pub command_run_id: Option<String>,
     pub analysis: String,
@@ -240,13 +441,98 @@ pub fn create_task_record(
     create_task_record_inner(&storage, request)
 }
 
+#[tauri::command]
+pub fn estimate_task_workspace(
+    storage: State<'_, ManagedStorage>,
+    request: EstimateTaskWorkspaceRequest,
+) -> AppResult<TaskWorkspaceEstimateView> {
+    estimate_task_workspace_inner(&storage, request)
+}
+
+#[tauri::command]
+pub fn delete_task_record(
+    storage: State<'_, ManagedStorage>,
+    task_id: String,
+    rollback_initialization: Option<bool>,
+) -> AppResult<()> {
+    let task_id = require_non_empty(task_id.trim(), "task.taskIdRequired")?;
+    delete_task_record_with_options(&storage, task_id, rollback_initialization.unwrap_or(false))
+}
+
+fn estimate_task_workspace_inner(
+    storage: &ManagedStorage,
+    request: EstimateTaskWorkspaceRequest,
+) -> AppResult<TaskWorkspaceEstimateView> {
+    let project = git::inspect_project(request.repository_path.trim()).map_err(task_git_error)?;
+    let requested_strategy = request.workspace_strategy.as_deref().map(str::trim);
+    let (workspace_kind, destination_root, estimate, cleanup_policy) = if project.is_git_repository {
+        (
+            "git_worktree",
+            storage.roots.worktree_root.to_string_lossy().to_string(),
+            workspace::estimate_isolated_copy(&project.path)
+                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+            "remove_workspace_keep_source",
+        )
+    } else {
+        match requested_strategy {
+            Some("direct_original") => (
+                "direct_original",
+                project.path.clone(),
+                workspace::IsolatedCopyEstimate::default(),
+                "keep_original",
+            ),
+            Some("initialize_git") => (
+                "git_initialized_worktree",
+                storage.roots.worktree_root.to_string_lossy().to_string(),
+                workspace::estimate_isolated_copy(&project.path)
+                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+                "remove_worktree_keep_repository",
+            ),
+            None | Some("isolated_copy") => (
+                "isolated_copy",
+                storage.roots.worktree_root.to_string_lossy().to_string(),
+                workspace::estimate_isolated_copy_with_exclusions(
+                    &project.path,
+                    &request.workspace_exclusions,
+                )
+                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+                "remove_workspace_keep_source",
+            ),
+            Some(_) => {
+                return Err(CommandError::new(
+                    "workspace.invalidStrategy",
+                    "The selected workspace strategy cannot be estimated.",
+                ))
+            }
+        }
+    };
+    let available_bytes = workspace_available_space(Path::new(&destination_root)).map_err(|error| {
+        workspace_operation_error(error, "inspect target space", Path::new(&destination_root))
+    })?;
+    Ok(TaskWorkspaceEstimateView {
+        source_path: project.path,
+        destination_root,
+        workspace_kind: workspace_kind.to_string(),
+        estimated_bytes: estimate.estimated_bytes,
+        estimated_files: estimate.estimated_files,
+        available_bytes,
+        sufficient_space: available_bytes >= estimate.estimated_bytes,
+        cleanup_policy: cleanup_policy.to_string(),
+    })
+}
+
 pub(crate) fn create_task_record_inner(
     storage: &ManagedStorage,
     request: CreateTaskRecordRequest,
 ) -> AppResult<TaskSummaryView> {
-    let repository =
-        git::validate_repository(request.repository_path.trim()).map_err(task_git_error)?;
-    let repository_id = repository_id(&repository.path);
+    let project = git::inspect_project(request.repository_path.trim()).map_err(task_git_error)?;
+    let workspace_strategy = resolve_workspace_strategy(
+        project.is_git_repository,
+        request.work_mode.as_deref(),
+        request.workspace_strategy.as_deref(),
+        request.original_write_authorized,
+    )?;
+    let repository_id = repository_id(&project.path);
     let raw_description =
         require_non_empty(request.description.trim(), "task.descriptionRequired")?;
     let sanitized_description = sanitize_for_model_context(raw_description, "task.description");
@@ -279,32 +565,44 @@ pub(crate) fn create_task_record_inner(
         .as_ref()
         .map(|command| command.content.as_str())
         .filter(|command| !command.trim().is_empty());
+    let contract_overrides = RunContractOverrides {
+        mode: clean_optional(request.mode.as_deref()),
+        reasoning_effort: clean_optional(request.reasoning_effort.as_deref()),
+        permission_level: clean_optional(request.permission_level.as_deref()),
+        network_policy: clean_optional(request.network_policy.as_deref()),
+    };
     let task_id = format!("task-{}", Uuid::new_v4());
     let paths = storage
         .roots
         .ensure_task_artifact_dirs(&task_id)
         .map_err(storage_error)?;
-    let worktree = match git::create_task_worktree(
-        &repository.path,
-        storage.roots.worktree_root.clone(),
+    let workspace = match prepare_task_workspace(
+        storage,
+        &project,
         &task_id,
+        workspace_strategy,
+        &request.workspace_exclusions,
     ) {
-        Ok(worktree) => worktree,
+        Ok(workspace) => workspace,
         Err(error) => {
             let _ = fs::remove_dir_all(&paths.root);
-            return Err(task_git_error(error));
+            return Err(error);
         }
     };
-    let session_id = format!("agent-session-{}", Uuid::new_v4());
+    let session_id = format!("agent-session-{task_id}");
     let session_path = paths.artifacts_dir.join("agent-session.json");
     let session_payload = json!({
         "session_id": session_id,
         "task_id": task_id,
         "repository_id": repository_id,
-        "repository_path": repository.path,
-        "worktree_path": worktree.worktree_path,
-        "task_branch": worktree.branch_name,
-        "target_branch": repository.branch,
+        "repository_path": project.path,
+        "worktree_path": workspace.path,
+        "task_branch": workspace.task_branch,
+        "target_branch": workspace.target_branch,
+        "workspace_kind": workspace.kind,
+        "source_path": workspace.source_path,
+        "original_write_authorized": workspace.original_write_authorized,
+        "workspace_estimated_bytes": workspace.estimated_bytes,
         "model_id": model_id,
         "validation_command": validation_command,
         "status": "created",
@@ -312,7 +610,22 @@ pub(crate) fn create_task_record_inner(
     });
 
     if let Err(error) = write_json_file(&session_path, &session_payload) {
-        rollback_created_task_files(&repository.path, &worktree, &paths.root);
+        if let Err(cleanup_error) = rollback_created_task_files(
+            &task_id,
+            &project.path,
+            Some(&workspace.path),
+            workspace.task_branch.as_deref(),
+            workspace.kind,
+            workspace.initialized_git,
+            &paths.root,
+        ) {
+            return Err(CommandError::new(
+                "storage.rollbackFailed",
+                format!(
+                    "Task creation failed and rollback left residual files: {error}; cleanup error: {cleanup_error}"
+                ),
+            ));
+        }
         return Err(storage_error(error));
     }
 
@@ -324,18 +637,41 @@ pub(crate) fn create_task_record_inner(
         &task_type,
         model_id,
         validation_command,
+        contract_overrides,
         &sanitized_description,
         &sanitized_title,
         sanitized_validation_command.as_ref(),
-        &repository,
+        &project,
         &repository_id,
-        &worktree,
+        &workspace.path,
+        workspace.task_branch.as_deref(),
+        &workspace.target_branch,
+        workspace.kind,
+        &workspace.source_path,
+        workspace.original_write_authorized,
+        workspace.estimated_bytes,
         &session_id,
         &session_path,
     );
 
     if let Err(error) = result {
-        rollback_created_task_files(&repository.path, &worktree, &paths.root);
+        if let Err(cleanup_error) = rollback_created_task_files(
+            &task_id,
+            &project.path,
+            Some(&workspace.path),
+            workspace.task_branch.as_deref(),
+            workspace.kind,
+            workspace.initialized_git,
+            &paths.root,
+        ) {
+            return Err(CommandError::new(
+                "storage.rollbackFailed",
+                format!(
+                    "{} Cleanup after the failed task creation also failed: {cleanup_error}",
+                    error.message
+                ),
+            ));
+        }
         return Err(error);
     }
 
@@ -386,6 +722,37 @@ pub fn get_task_record(
     let record = load_task(&storage, task_id)?;
 
     summarize_task(&storage, record)
+}
+
+#[cfg(test)]
+fn delete_task_record_inner(storage: &ManagedStorage, task_id: &str) -> AppResult<()> {
+    delete_task_record_with_options(storage, task_id, false)
+}
+
+fn delete_task_record_with_options(
+    storage: &ManagedStorage,
+    task_id: &str,
+    rollback_initialization: bool,
+) -> AppResult<()> {
+    let task = load_task(storage, task_id)?;
+    let task_paths = storage.roots.task_artifact_paths(task_id);
+    {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        TaskRepository::new(store.connection())
+            .delete(task_id)
+            .map_err(storage_error)?;
+    }
+
+    rollback_created_task_files(
+        &task.id,
+        &task.repository_path,
+        task.worktree_path.as_deref(),
+        task.branch_name.as_deref(),
+        &task.workspace_kind,
+        rollback_initialization && task.workspace_kind == "git_initialized_worktree",
+        &task_paths.root,
+    )
+    .map_err(storage_error)
 }
 
 #[tauri::command]
@@ -479,12 +846,19 @@ fn persist_created_task(
     task_type: &str,
     model_id: Option<&str>,
     validation_command: Option<&str>,
+    contract_overrides: RunContractOverrides<'_>,
     sanitized_description: &SanitizedContent,
     sanitized_title: &SanitizedContent,
     sanitized_validation_command: Option<&SanitizedContent>,
-    repository: &git::RepositoryInfo,
+    project: &git::ProjectInfo,
     repository_id: &str,
-    worktree: &git::TaskWorktree,
+    worktree_path: &str,
+    task_branch: Option<&str>,
+    target_branch: &str,
+    workspace_kind: &str,
+    source_path: &str,
+    original_write_authorized: bool,
+    workspace_estimated_bytes: i64,
     session_id: &str,
     session_path: &Path,
 ) -> AppResult<()> {
@@ -504,9 +878,14 @@ fn persist_created_task(
             description,
             task_type,
             status: DEFAULT_TASK_STATUS,
-            repository_path: &repository.path,
-            worktree_path: Some(&worktree.worktree_path),
-            branch_name: Some(&worktree.branch_name),
+            repository_path: &project.path,
+            worktree_path: Some(worktree_path),
+            branch_name: task_branch,
+            target_branch,
+            workspace_kind,
+            source_path,
+            original_write_authorized,
+            workspace_estimated_bytes,
             model_id,
         })
         .map_err(storage_error)?;
@@ -518,6 +897,11 @@ fn persist_created_task(
             status: "created",
             stage: DEFAULT_TASK_STATUS,
             checkpoint_id: None,
+            iterations: 0,
+            repair_round: 0,
+            max_repair_rounds: 0,
+            validation_request_json: "{}",
+            validation_round: 0,
         })
         .map_err(storage_error)?;
 
@@ -539,7 +923,17 @@ fn persist_created_task(
         .active_profile()
         .map_err(storage_error)?;
     let effective_model_id = model_id.or(profile.model_id.as_deref());
-    let allowed_paths = vec![worktree.worktree_path.clone()];
+    let mode = contract_overrides.mode.unwrap_or(&profile.mode);
+    let reasoning_effort = contract_overrides
+        .reasoning_effort
+        .unwrap_or(&profile.reasoning_effort);
+    let permission_level = contract_overrides
+        .permission_level
+        .unwrap_or(&profile.permission_level);
+    let network_policy = contract_overrides
+        .network_policy
+        .unwrap_or(&profile.network_policy);
+    let allowed_paths = vec![worktree_path.to_string()];
     let allowed_commands = validation_command
         .map(|command| vec![command.to_string()])
         .unwrap_or_default();
@@ -548,11 +942,11 @@ fn persist_created_task(
     let contract_payload = json!({
         "taskId": task_id,
         "profileId": profile.id,
-        "mode": profile.mode,
+        "mode": mode,
         "modelId": effective_model_id,
-        "reasoningEffort": profile.reasoning_effort,
-        "permissionLevel": profile.permission_level,
-        "networkPolicy": profile.network_policy,
+        "reasoningEffort": reasoning_effort,
+        "permissionLevel": permission_level,
+        "networkPolicy": network_policy,
         "allowedPaths": allowed_paths,
         "allowedCommands": allowed_commands,
         "validationCommand": validation_command,
@@ -569,11 +963,11 @@ fn persist_created_task(
             id: &format!("run-contract-{task_id}"),
             task_id,
             profile_id: Some(&profile.id),
-            mode: &profile.mode,
+            mode,
             model_id: effective_model_id,
-            reasoning_effort: &profile.reasoning_effort,
-            permission_level: &profile.permission_level,
-            network_policy: &profile.network_policy,
+            reasoning_effort,
+            permission_level,
+            network_policy,
             allowed_paths_json: &allowed_paths_json,
             allowed_commands_json: &allowed_commands_json,
             validation_command,
@@ -663,18 +1057,28 @@ fn persist_created_task(
     .map_err(storage_error)?;
 
     let events = AgentEventRepository::new(&transaction);
+    let created_message = if project.is_git_repository {
+        "Task created with isolated branch, worktree, and local Agent session."
+    } else {
+        "Task created from a local project directory and local Agent session."
+    };
     record_event(
         &events,
         task_id,
         "task.created",
         DEFAULT_TASK_STATUS,
-        "Task created with isolated branch, worktree, and local Agent session.",
+        created_message,
         json!({
             "repository_id": repository_id,
-            "repository_path": repository.path,
-            "target_branch": repository.branch,
-            "task_branch": worktree.branch_name,
-            "worktree_path": worktree.worktree_path,
+            "repository_path": project.path,
+            "target_branch": target_branch,
+            "task_branch": task_branch,
+            "worktree_path": worktree_path,
+            "workspace_kind": workspace_kind,
+            "source_path": source_path,
+            "original_write_authorized": original_write_authorized,
+            "workspace_estimated_bytes": workspace_estimated_bytes,
+            "is_git_repository": project.is_git_repository,
             "agent_session_id": session_id,
             "validation_command": validation_command,
             "run_contract_id": format!("run-contract-{task_id}"),
@@ -717,7 +1121,14 @@ fn persist_created_task(
 
 fn summarize_task(storage: &ManagedStorage, record: TaskRecord) -> AppResult<TaskSummaryView> {
     let repository_id = repository_id(&record.repository_path);
-    let target_branch = git::current_branch(&record.repository_path).unwrap_or_default();
+    let target_branch = if record.target_branch.trim().is_empty() {
+        git::inspect_project(&record.repository_path)
+            .ok()
+            .and_then(|project| project.branch)
+            .unwrap_or_default()
+    } else {
+        record.target_branch.clone()
+    };
     let runtime = runtime_summary(storage, &record, &target_branch);
     let agent_stage = runtime
         .agent_stage
@@ -743,6 +1154,10 @@ fn summarize_task(storage: &ManagedStorage, record: TaskRecord) -> AppResult<Tas
         task_branch: record.branch_name.clone(),
         branch_name: record.branch_name,
         target_branch,
+        workspace_kind: record.workspace_kind,
+        source_path: record.source_path,
+        original_write_authorized: record.original_write_authorized,
+        workspace_estimated_bytes: record.workspace_estimated_bytes,
         agent_stage,
         latest_validation_status: runtime.latest_validation_status,
         latest_diff_summary: runtime.latest_diff_summary,
@@ -984,12 +1399,64 @@ fn file_size(path: &Path) -> std::io::Result<u64> {
 }
 
 fn rollback_created_task_files(
+    task_id: &str,
     repository_path: &str,
-    worktree: &git::TaskWorktree,
+    worktree_path: Option<&str>,
+    task_branch: Option<&str>,
+    workspace_kind: &str,
+    remove_initialized_git: bool,
     artifact_root: &Path,
-) {
-    let _ = git::remove_task_worktree(repository_path, &worktree.worktree_path);
-    let _ = fs::remove_dir_all(artifact_root);
+) -> Result<(), StorageError> {
+    let mut cleanup_failures = Vec::new();
+
+    if let Some(worktree_path) = worktree_path {
+        let workspace_root = Path::new(worktree_path);
+        if workspace_root.exists()
+            && matches!(workspace_kind, "git_worktree" | "git_initialized_worktree")
+        {
+            if let Err(error) = git::remove_task_worktree(repository_path, workspace_root) {
+                cleanup_failures.push(format!("failed to remove worktree {worktree_path}: {error}"));
+            }
+        } else if workspace_root.exists() && workspace_kind == "isolated_copy" {
+            if let Err(error) = fs::remove_dir_all(workspace_root) {
+                cleanup_failures.push(format!(
+                    "failed to remove isolated workspace {worktree_path}: {error}"
+                ));
+            }
+        }
+    }
+
+    if matches!(workspace_kind, "git_worktree" | "git_initialized_worktree") {
+        if let Some(task_branch) = task_branch {
+            if let Err(error) = git::delete_task_branch(repository_path, task_id, task_branch) {
+                cleanup_failures.push(format!("failed to delete task branch {task_branch}: {error}"));
+            }
+        }
+    }
+
+    if remove_initialized_git {
+        if let Err(error) = git::remove_initialized_repository_metadata(repository_path) {
+            cleanup_failures.push(format!("failed to remove initialized Git metadata: {error}"));
+        }
+    }
+
+    if artifact_root.exists() {
+        if let Err(error) = fs::remove_dir_all(artifact_root) {
+            cleanup_failures.push(format!(
+                "failed to remove artifact directory {}: {error}",
+                artifact_root.display()
+            ));
+        }
+    }
+
+    if cleanup_failures.is_empty() {
+        Ok(())
+    } else {
+        Err(StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            cleanup_failures.join("; "),
+        )))
+    }
 }
 
 impl From<TodoRecord> for TodoView {
@@ -1082,6 +1549,12 @@ impl From<AgentSessionRecord> for AgentSessionView {
             status: record.status,
             stage: record.stage,
             checkpoint_id: record.checkpoint_id,
+            iterations: record.iterations,
+            repair_round: record.repair_round,
+            max_repair_rounds: record.max_repair_rounds,
+            validation_request: serde_json::from_str(&record.validation_request_json)
+                .unwrap_or_else(|_| json!({})),
+            validation_round: record.validation_round,
             created_at: record.created_at,
             updated_at: record.updated_at,
         }
@@ -1108,6 +1581,7 @@ impl From<ValidationRoundRecord> for ValidationRoundView {
             id: record.id,
             task_id: record.task_id,
             round_index: record.round_index,
+            repair_round: record.repair_round,
             status: record.status,
             command_run_id: record.command_run_id,
             analysis: record.analysis,
@@ -1162,6 +1636,14 @@ mod a_line_tests {
                 task_type: Some("custom".to_string()),
                 model_id: Some("model-default".to_string()),
                 validation_command: Some("npm run check".to_string()),
+                mode: None,
+                reasoning_effort: None,
+                permission_level: None,
+                network_policy: None,
+                work_mode: Some("coding".to_string()),
+                workspace_strategy: None,
+                original_write_authorized: false,
+                workspace_exclusions: Vec::new(),
             },
         )
         .expect("create task through real command inner");
@@ -1212,6 +1694,263 @@ mod a_line_tests {
             .expect("list artifact files")
             .iter()
             .any(|file| file.file_type == "agent_session" && Path::new(&file.path).is_file()));
+        let task_branch = summary.task_branch.clone().expect("task branch");
+        let worktree_path = PathBuf::from(summary.worktree_path.as_deref().expect("worktree path"));
+        drop(store);
+
+        delete_task_record_inner(&storage, &summary.id).expect("delete Git task");
+        assert!(!worktree_path.exists());
+        let branches = Command::new("git")
+            .arg("-C")
+            .arg(&repository)
+            .args(["branch", "--list", &task_branch])
+            .output()
+            .expect("list task branch");
+        assert!(branches.status.success());
+        assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty());
+
+        fs::remove_dir_all(repository).expect("clean repository");
+    }
+
+    #[test]
+    fn create_task_record_inner_persists_contract_overrides_from_task_dialog() {
+        let repository = committed_repository("a-line-contract-override");
+        let storage = test_storage("a-line-contract-storage");
+
+        let summary = create_task_record_inner(
+            &storage,
+            CreateTaskRecordRequest {
+                repository_path: repository.to_string_lossy().to_string(),
+                description: "Persist chosen mode and permissions into the task contract.".to_string(),
+                title: Some("Contract override task".to_string()),
+                task_type: Some("custom".to_string()),
+                model_id: Some("gpt-5-codex".to_string()),
+                validation_command: Some("npm run check".to_string()),
+                mode: Some("review".to_string()),
+                reasoning_effort: Some("max".to_string()),
+                permission_level: Some("read_only".to_string()),
+                network_policy: Some("enabled".to_string()),
+                work_mode: Some("coding".to_string()),
+                workspace_strategy: None,
+                original_write_authorized: false,
+                workspace_exclusions: Vec::new(),
+            },
+        )
+        .expect("create task with contract overrides");
+
+        let store = storage.store.lock().expect("storage lock");
+        let contract = RunContractRepository::new(store.connection())
+            .get_for_task(&summary.id)
+            .expect("load run contract")
+            .expect("run contract exists");
+
+        assert_eq!(contract.mode, "review");
+        assert_eq!(contract.reasoning_effort, "max");
+        assert_eq!(contract.permission_level, "read_only");
+        assert_eq!(contract.network_policy, "enabled");
+    }
+
+    #[test]
+    fn create_task_record_inner_accepts_non_git_project_directory() {
+        let project = non_git_temp_path("a-line-project");
+        fs::create_dir_all(&project).expect("create project");
+        fs::write(project.join("README.md"), "# Plain project\n").expect("write readme");
+        fs::create_dir_all(project.join("coverage")).expect("create custom excluded directory");
+        fs::write(project.join("coverage/report.json"), "{}\n").expect("write excluded report");
+        let storage = test_storage("a-line-non-git-storage");
+
+        let summary = create_task_record_inner(
+            &storage,
+            CreateTaskRecordRequest {
+                repository_path: project.to_string_lossy().to_string(),
+                description: "Run Agent inside a plain local project directory.".to_string(),
+                title: Some("Plain project task".to_string()),
+                task_type: Some("custom".to_string()),
+                model_id: Some("model-default".to_string()),
+                validation_command: Some("python -m unittest".to_string()),
+                mode: None,
+                reasoning_effort: None,
+                permission_level: None,
+                network_policy: None,
+                work_mode: Some("coding".to_string()),
+                workspace_strategy: None,
+                original_write_authorized: false,
+                workspace_exclusions: vec!["coverage".to_string()],
+            },
+        )
+        .expect("create task for non-git project");
+
+        assert_eq!(summary.status, DEFAULT_TASK_STATUS);
+        assert_eq!(
+            Path::new(&summary.repository_path)
+                .canonicalize()
+                .expect("canonical summary path"),
+            project.canonicalize().expect("canonical project path")
+        );
+        let workspace_path = summary
+            .worktree_path
+            .as_deref()
+            .map(PathBuf::from)
+            .expect("isolated workspace path");
+        assert_ne!(
+            workspace_path.canonicalize().expect("canonical workspace"),
+            project.canonicalize().expect("canonical project")
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_path.join("README.md")).expect("read copied file"),
+            "# Plain project\n"
+        );
+        assert!(!workspace_path.join("coverage").exists());
+        assert_eq!(summary.task_branch, None);
+        assert_eq!(summary.target_branch, "");
+        assert!(summary.workspace_estimated_bytes > 0);
+
+        let store = storage.store.lock().expect("storage lock");
+        let connection = store.connection();
+        let task = TaskRepository::new(connection)
+            .get_required(&summary.id)
+            .expect("task record exists");
+        assert_eq!(task.workspace_kind, "isolated_copy");
+        assert_eq!(
+            Path::new(&task.source_path)
+                .canonicalize()
+                .expect("canonical source path"),
+            project.canonicalize().expect("canonical project source")
+        );
+        assert!(!task.original_write_authorized);
+        assert_eq!(task.workspace_estimated_bytes, summary.workspace_estimated_bytes);
+        assert_eq!(task.branch_name, None);
+        drop(store);
+
+        delete_task_record_inner(&storage, &summary.id).expect("delete isolated-copy task");
+        assert!(!workspace_path.exists());
+        assert!(project.join("README.md").is_file());
+
+        fs::remove_dir_all(project).expect("clean project");
+    }
+
+    #[test]
+    fn estimates_non_git_workspace_with_custom_exclusions_before_creation() {
+        let project = non_git_temp_path("workspace-estimate-project");
+        fs::create_dir_all(project.join("coverage")).expect("create project directories");
+        fs::write(project.join("README.md"), "estimate me\n").expect("write source file");
+        fs::write(project.join("coverage/report.json"), "{}\n").expect("write excluded file");
+        let storage = test_storage("workspace-estimate-storage");
+
+        let estimate = estimate_task_workspace_inner(
+            &storage,
+            EstimateTaskWorkspaceRequest {
+                repository_path: project.to_string_lossy().to_string(),
+                workspace_strategy: Some("isolated_copy".to_string()),
+                workspace_exclusions: vec!["coverage".to_string()],
+            },
+        )
+        .expect("estimate isolated workspace");
+
+        assert_eq!(estimate.workspace_kind, "isolated_copy");
+        assert_eq!(estimate.estimated_files, 1);
+        assert!(estimate.estimated_bytes > 0);
+        assert!(estimate.available_bytes >= estimate.estimated_bytes);
+        assert!(estimate.sufficient_space);
+        assert_eq!(
+            PathBuf::from(&estimate.destination_root)
+                .canonicalize()
+                .expect("canonical destination root"),
+            storage
+                .roots
+                .worktree_root
+                .canonicalize()
+                .expect("canonical storage worktree root")
+        );
+
+        fs::remove_dir_all(project).expect("clean project");
+    }
+
+    #[test]
+    fn daily_mode_can_initialize_git_and_create_an_isolated_worktree() {
+        let project = non_git_temp_path("daily-init-git-project");
+        fs::create_dir_all(&project).expect("create project");
+        fs::write(project.join("README.md"), "# Daily project\n").expect("write readme");
+        let storage = test_storage("daily-init-git-storage");
+
+        let summary = create_task_record_inner(
+            &storage,
+            CreateTaskRecordRequest {
+                repository_path: project.to_string_lossy().to_string(),
+                description: "Initialize Git before starting the daily task.".to_string(),
+                title: Some("Daily initialized task".to_string()),
+                task_type: Some("custom".to_string()),
+                model_id: Some("model-default".to_string()),
+                validation_command: None,
+                mode: None,
+                reasoning_effort: None,
+                permission_level: None,
+                network_policy: None,
+                work_mode: Some("daily".to_string()),
+                workspace_strategy: Some("initialize_git".to_string()),
+                original_write_authorized: false,
+                workspace_exclusions: Vec::new(),
+            },
+        )
+        .expect("initialize Git and create task worktree");
+
+        assert!(project.join(".git").is_dir());
+        assert!(summary.task_branch.is_some());
+        assert!(!summary.target_branch.is_empty());
+        assert_eq!(summary.workspace_kind, "git_initialized_worktree");
+        let workspace_path = PathBuf::from(summary.worktree_path.as_deref().expect("worktree path"));
+        assert_ne!(
+            workspace_path.canonicalize().expect("canonical worktree"),
+            project.canonicalize().expect("canonical source")
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_path.join("README.md"))
+                .expect("read worktree file")
+                .replace("\r\n", "\n"),
+            "# Daily project\n"
+        );
+
+        delete_task_record_inner(&storage, &summary.id).expect("delete initialized Git task");
+        assert!(!workspace_path.exists());
+        assert!(project.join(".git").is_dir());
+
+        fs::remove_dir_all(project).expect("clean project");
+    }
+
+    #[test]
+    fn task_creation_rollback_removes_new_git_metadata() {
+        let project = non_git_temp_path("rollback-init-git-project");
+        fs::create_dir_all(&project).expect("create project");
+        fs::write(project.join("README.md"), "# Rollback project\n").expect("write readme");
+        let storage = test_storage("rollback-init-git-storage");
+
+        let summary = create_task_record_inner(
+            &storage,
+            CreateTaskRecordRequest {
+                repository_path: project.to_string_lossy().to_string(),
+                description: "Rollback Git initialization when Agent startup fails.".to_string(),
+                title: Some("Rollback initialized task".to_string()),
+                task_type: Some("custom".to_string()),
+                model_id: None,
+                validation_command: None,
+                mode: None,
+                reasoning_effort: None,
+                permission_level: None,
+                network_policy: None,
+                work_mode: Some("daily".to_string()),
+                workspace_strategy: Some("initialize_git".to_string()),
+                original_write_authorized: false,
+                workspace_exclusions: Vec::new(),
+            },
+        )
+        .expect("create initialized task");
+
+        delete_task_record_with_options(&storage, &summary.id, true)
+            .expect("rollback task creation");
+
+        assert!(!project.join(".git").exists());
+        assert!(project.join("README.md").is_file());
+        fs::remove_dir_all(project).expect("clean project");
     }
 
     #[test]
@@ -1294,6 +2033,14 @@ mod a_line_tests {
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("codemax-{label}-{}", Uuid::new_v4()))
     }
+
+    fn non_git_temp_path(label: &str) -> PathBuf {
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("CodeMaxTests")
+            .join(format!("codemax-{label}-{}", Uuid::new_v4()))
+    }
 }
 
 fn normalize_task_type(task_type: Option<&str>) -> AppResult<String> {
@@ -1313,6 +2060,10 @@ fn normalize_task_type(task_type: Option<&str>) -> AppResult<String> {
         "task.invalidType",
         format!("Unsupported task type: {task_type}"),
     ))
+}
+
+fn clean_optional(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn require_non_empty<'a>(value: &'a str, code: &'static str) -> AppResult<&'a str> {
@@ -1364,6 +2115,60 @@ fn storage_error(error: impl Into<StorageError>) -> CommandError {
             format!("Filesystem error: {error}"),
         ),
     }
+}
+
+fn workspace_available_space(path: &Path) -> std::io::Result<u64> {
+    let mut existing = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "workspace root has no existing parent",
+                )
+            })?
+            .to_path_buf();
+    }
+    match fs2::available_space(&existing) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            fs2::free_space(existing)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn workspace_operation_error(
+    error: std::io::Error,
+    operation: &str,
+    path: &Path,
+) -> CommandError {
+    let code = match error.kind() {
+        std::io::ErrorKind::AlreadyExists => "workspace.alreadyExists",
+        std::io::ErrorKind::InvalidInput => "workspace.invalidPath",
+        std::io::ErrorKind::PermissionDenied => "workspace.permissionDenied",
+        std::io::ErrorKind::StorageFull => "workspace.insufficientSpace",
+        _ => "workspace.copyFailed",
+    };
+    CommandError::new(
+        code,
+        format!("Unable to {operation} at {}: {error}", path.display()),
+    )
+}
+
+fn workspace_io_error(error: std::io::Error) -> CommandError {
+    let code = match error.kind() {
+        std::io::ErrorKind::AlreadyExists => "workspace.alreadyExists",
+        std::io::ErrorKind::InvalidInput => "workspace.invalidPath",
+        std::io::ErrorKind::PermissionDenied => "workspace.permissionDenied",
+        _ => "workspace.copyFailed",
+    };
+    CommandError::new(code, format!("Unable to create isolated workspace: {error}"))
 }
 
 fn task_git_error(error: GitError) -> CommandError {
@@ -1480,5 +2285,68 @@ mod tests {
     fn repository_id_is_stable_and_prefixed() {
         assert_eq!(repository_id("E:/codemax"), repository_id("E:/codemax"));
         assert!(repository_id("E:/codemax").starts_with("repo-"));
+    }
+
+    #[test]
+    fn git_projects_always_use_isolated_worktrees() {
+        assert_eq!(
+            resolve_workspace_strategy(true, Some("daily"), None, false)
+                .expect("resolve Git strategy"),
+            ResolvedWorkspaceStrategy::GitWorktree
+        );
+    }
+
+    #[test]
+    fn non_git_modes_resolve_to_user_approved_safe_strategies() {
+        assert_eq!(
+            resolve_workspace_strategy(
+                false,
+                Some("daily"),
+                Some("initialize_git"),
+                false,
+            )
+            .expect("daily Git initialization"),
+            ResolvedWorkspaceStrategy::InitializeGit
+        );
+        assert_eq!(
+            resolve_workspace_strategy(
+                false,
+                Some("daily"),
+                Some("isolated_copy"),
+                false,
+            )
+            .expect("daily isolated copy"),
+            ResolvedWorkspaceStrategy::IsolatedCopy
+        );
+        assert_eq!(
+            resolve_workspace_strategy(false, Some("coding"), None, false)
+                .expect("coding defaults to isolated copy"),
+            ResolvedWorkspaceStrategy::IsolatedCopy
+        );
+    }
+
+    #[test]
+    fn direct_original_requires_coding_mode_and_explicit_authorization() {
+        for (mode, authorized) in [("daily", true), ("coding", false)] {
+            let error = resolve_workspace_strategy(
+                false,
+                Some(mode),
+                Some("direct_original"),
+                authorized,
+            )
+            .expect_err("unsafe direct original strategy must fail");
+            assert_eq!(error.code, "workspace.directOriginalNotAuthorized");
+        }
+
+        assert_eq!(
+            resolve_workspace_strategy(
+                false,
+                Some("coding"),
+                Some("direct_original"),
+                true,
+            )
+            .expect("authorized coding direct edit"),
+            ResolvedWorkspaceStrategy::DirectOriginal
+        );
     }
 }

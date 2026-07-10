@@ -16,11 +16,83 @@
           },
           "required": ["response"]
         },
+        "ping": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/PingResponse"
+            }
+          },
+          "required": ["response"]
+        },
         "get_storage_roots": {
           "type": "object",
           "properties": {
             "response": {
               "$ref": "#/$defs/StorageRootsResponse"
+            }
+          },
+          "required": ["response"]
+        },
+        "get_app_setting": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/AppSettingKeyRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AppSettingValue"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "set_app_setting": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/SetAppSettingRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/AppSettingValue"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_startup_health": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/StartupHealthResponse"
+            }
+          },
+          "required": ["response"]
+        },
+        "get_storage_usage": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "$ref": "#/$defs/StorageUsageResponse"
+            }
+          },
+          "required": ["response"]
+        },
+        "cleanup_storage": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CleanupStorageRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/CleanupStorageResponse"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "emit_app_ready": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "type": "null"
             }
           },
           "required": ["response"]
@@ -164,6 +236,18 @@
           },
           "required": ["request", "response"]
         },
+        "delete_task_record": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/DeleteTaskRecordRequest"
+            },
+            "response": {
+              "type": "null"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "cleanup_task_worktree": {
           "type": "object",
           "properties": {
@@ -260,6 +344,18 @@
             },
             "response": {
               "$ref": "#/$defs/ModelConfigView"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "test_model_connection": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ModelConfigIdRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ModelConnectionTestResult"
             }
           },
           "required": ["request", "response"]
@@ -472,6 +568,45 @@
           },
           "required": ["request", "response"]
         },
+        "memory_items": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/MemoryItemsRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MemoryItem"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "save_memory_item": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/SaveMemoryItemRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/MemoryItem"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "delete_memory_item": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/DeleteMemoryItemRequest"
+            },
+            "response": {
+              "type": "null"
+            }
+          },
+          "required": ["request", "response"]
+        },
         "preference_candidates": {
           "type": "object",
           "properties": {
@@ -507,6 +642,60 @@
             },
             "response": {
               "$ref": "#/$defs/PreferenceCandidate"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "list_pending_approvals": {
+          "type": "object",
+          "properties": {
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ApprovalSummary"
+              }
+            }
+          },
+          "required": ["response"]
+        },
+        "list_task_approvals": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ListTaskApprovalsRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ApprovalSummary"
+              }
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "decide_approval": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/DecideApprovalRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ApprovalSummary"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "get_skill_sources": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/GetSkillSourcesRequest"
+            },
+            "response": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SkillSource"
+              }
             }
           },
           "required": ["request", "response"]
@@ -603,6 +792,42 @@
             },
             "response": {
               "$ref": "#/$defs/RunAgentValidationCycleResponse"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "generate_task_diff": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/GenerateTaskDiffRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/GeneratedTaskDiff"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "prepare_task_merge": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/PrepareTaskMergeRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/PreparedTaskMerge"
+            }
+          },
+          "required": ["request", "response"]
+        },
+        "merge_task": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/MergeTaskRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskMergeCommandResult"
             }
           },
           "required": ["request", "response"]
@@ -726,11 +951,30 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "estimate_task_workspace": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/EstimateTaskWorkspaceRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/TaskWorkspaceEstimate"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
       "required": [
         "health",
+        "ping",
         "get_storage_roots",
+        "get_app_setting",
+        "set_app_setting",
+        "get_startup_health",
+        "get_storage_usage",
+        "cleanup_storage",
+        "emit_app_ready",
         "select_repository_path",
         "validate_repository_path",
         "get_repository_current_branch",
@@ -739,9 +983,11 @@
         "create_task_worktree",
         "get_task_worktree_status",
         "create_task_record",
+        "estimate_task_workspace",
         "list_tasks",
         "get_task_record",
         "get_task_detail",
+        "delete_task_record",
         "cleanup_task_worktree",
         "execute_task_command",
         "cancel_task_command",
@@ -750,6 +996,7 @@
         "cleanup_expired_task_logs",
         "get_model_config",
         "save_model_config",
+        "test_model_connection",
         "active_profile",
         "profile_list",
         "profile_create",
@@ -766,9 +1013,16 @@
         "record_contract_breach",
         "memory_used_by_task",
         "record_memory_used_by_task",
+        "memory_items",
+        "save_memory_item",
+        "delete_memory_item",
         "preference_candidates",
         "preference_candidate_create",
         "preference_candidate_decide",
+        "list_pending_approvals",
+        "list_task_approvals",
+        "decide_approval",
+        "get_skill_sources",
         "start_agent_service",
         "stop_agent_service",
         "get_agent_service_status",
@@ -778,6 +1032,9 @@
         "advance_agent_task",
         "submit_agent_validation_result",
         "run_agent_validation_cycle",
+        "generate_task_diff",
+        "prepare_task_merge",
+        "merge_task",
         "generate_task_delivery",
         "generate_task_proof_pack",
         "get_delivery_review_state",
@@ -807,6 +1064,730 @@
         }
       },
       "required": ["service", "status", "version"]
+    },
+    "PingResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    },
+    "AppSettingKeyRequest": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": ["key"],
+      "additionalProperties": false
+    },
+    "SetAppSettingRequest": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": ["key", "value"],
+      "additionalProperties": false
+    },
+    "AppSettingValue": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["key", "value"],
+      "additionalProperties": false
+    },
+    "StartupHealthItem": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["ready", "warning", "blocked"]
+        },
+        "messageKey": {
+          "type": "string"
+        },
+        "detail": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["key", "status", "messageKey", "detail"],
+      "additionalProperties": false
+    },
+    "StartupHealthResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": ["ready", "degraded", "blocked"]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StartupHealthItem"
+          }
+        }
+      },
+      "required": ["status", "items"],
+      "additionalProperties": false
+    },
+    "StorageUsageResponse": {
+      "type": "object",
+      "properties": {
+        "appDataDir": {
+          "type": "string"
+        },
+        "databasePath": {
+          "type": "string"
+        },
+        "artifactRoot": {
+          "type": "string"
+        },
+        "worktreeRoot": {
+          "type": "string"
+        },
+        "databaseBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifactBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "worktreeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logsBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "screenshotsBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temporaryContextBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "permanentEvidenceBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "appDataDir",
+        "databasePath",
+        "artifactRoot",
+        "worktreeRoot",
+        "databaseBytes",
+        "artifactBytes",
+        "worktreeBytes",
+        "logsBytes",
+        "screenshotsBytes",
+        "temporaryContextBytes",
+        "permanentEvidenceBytes",
+        "totalBytes"
+      ],
+      "additionalProperties": false
+    },
+    "CleanupStorageRequest": {
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "boolean"
+        },
+        "screenshots": {
+          "type": "boolean"
+        },
+        "temporaryContext": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        }
+      },
+      "required": ["logs", "screenshots", "temporaryContext"],
+      "additionalProperties": false
+    },
+    "CleanupStorageResponse": {
+      "type": "object",
+      "properties": {
+        "dryRun": {
+          "type": "boolean"
+        },
+        "scannedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protectedBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["dryRun", "scannedFiles", "deletedFiles", "deletedBytes", "protectedBytes"],
+      "additionalProperties": false
+    },
+    "ModelConnectionTestResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": ["ready", "warning", "blocked"]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": "string"
+        },
+        "baseUrlHost": {
+          "type": ["string", "null"]
+        },
+        "latencyMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "messageKey": {
+          "type": "string"
+        },
+        "detail": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "status",
+        "provider",
+        "modelName",
+        "baseUrlHost",
+        "latencyMs",
+        "messageKey",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryItemsRequest": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "MemoryItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": ["string", "null"]
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "isUserEditable": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "scopeId",
+        "key",
+        "value",
+        "confidence",
+        "source",
+        "isUserEditable",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "SaveMemoryItemRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "isUserEditable": {
+          "type": "boolean"
+        }
+      },
+      "required": ["scope", "key", "value"],
+      "additionalProperties": false
+    },
+    "DeleteMemoryItemRequest": {
+      "type": "object",
+      "properties": {
+        "memoryId": {
+          "type": "string"
+        }
+      },
+      "required": ["memoryId"],
+      "additionalProperties": false
+    },
+    "ListTaskApprovalsRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "DecideApprovalRequest": {
+      "type": "object",
+      "properties": {
+        "approvalId": {
+          "type": "string"
+        },
+        "decision": {
+          "enum": ["approved", "rejected", "revise"]
+        },
+        "comment": {
+          "type": "string"
+        }
+      },
+      "required": ["approvalId", "decision"],
+      "additionalProperties": false
+    },
+    "ApprovalSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "approvalType": {
+          "type": "string"
+        },
+        "riskLevel": {
+          "enum": ["low", "medium", "high"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": ["approved", "rejected", "revise"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comment": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "approvalType",
+        "riskLevel",
+        "content",
+        "reason",
+        "decision",
+        "comment",
+        "createdAt",
+        "decidedAt"
+      ],
+      "additionalProperties": false
+    },
+    "GetSkillSourcesRequest": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["projectPath"],
+      "additionalProperties": false
+    },
+    "SkillEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "description", "path"],
+      "additionalProperties": false
+    },
+    "SkillSource": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": ["project", "workspace", "global", "builtIn"]
+        },
+        "path": {
+          "type": ["string", "null"]
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "skillCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": ["ready", "missing", "unavailable", "virtual"]
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillEntry"
+          }
+        }
+      },
+      "required": ["id", "path", "exists", "skillCount", "status", "entries"],
+      "additionalProperties": false
+    },
+    "GenerateTaskDiffRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "baseRef": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "TaskDiffFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["added", "modified", "deleted"]
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "patch": {
+          "type": "string"
+        }
+      },
+      "required": ["path", "status", "additions", "deletions", "patch"],
+      "additionalProperties": false
+    },
+    "GeneratedTaskDiff": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "baseRef": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "branchName": {
+          "type": "string"
+        },
+        "artifactId": {
+          "type": "string"
+        },
+        "diffPath": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskDiffFile"
+          }
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "patch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "baseRef",
+        "worktreePath",
+        "branchName",
+        "artifactId",
+        "diffPath",
+        "files",
+        "additions",
+        "deletions",
+        "patch"
+      ],
+      "additionalProperties": false
+    },
+    "PrepareTaskMergeRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "targetBranch": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "PreparedTaskMerge": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "sourceBranch": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        },
+        "targetDirty": {
+          "type": "boolean"
+        },
+        "worktreeDirty": {
+          "type": "boolean"
+        },
+        "validationStatus": {
+          "enum": ["passed", "failed", "notRun"]
+        },
+        "validationRunCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "validationSummary": {
+          "type": "string"
+        },
+        "diffFileCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diffPath": {
+          "type": ["string", "null"]
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "canMerge": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "taskId",
+        "targetBranch",
+        "sourceBranch",
+        "worktreePath",
+        "targetDirty",
+        "worktreeDirty",
+        "validationStatus",
+        "validationRunCount",
+        "validationSummary",
+        "diffFileCount",
+        "additions",
+        "deletions",
+        "diffPath",
+        "commitMessage",
+        "blockers",
+        "canMerge"
+      ],
+      "additionalProperties": false
+    },
+    "MergeTaskRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "targetBranch": {
+          "type": ["string", "null"]
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId", "commitMessage", "confirmed"],
+      "additionalProperties": false
+    },
+    "TaskMergeCommandResult": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["merged", "conflicted"]
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "sourceBranch": {
+          "type": "string"
+        },
+        "commitSha": {
+          "type": "string"
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "conflictFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errorReason": {
+          "type": ["string", "null"]
+        },
+        "mergeRecordPath": {
+          "type": ["string", "null"]
+        },
+        "taskStatus": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "status",
+        "targetBranch",
+        "sourceBranch",
+        "commitSha",
+        "commitMessage",
+        "conflictFiles",
+        "errorReason",
+        "mergeRecordPath",
+        "taskStatus"
+      ],
+      "additionalProperties": false
     },
     "AgentHealthResponse": {
       "type": "object",
@@ -917,13 +1898,24 @@
           "type": "string"
         },
         "branch": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "dirty": {
           "type": "boolean"
+        },
+        "isGitRepository": {
+          "type": "boolean"
         }
       },
-      "required": ["path", "name", "branch", "dirty"]
+      "required": ["path", "name", "branch", "dirty", "isGitRepository"],
+      "additionalProperties": false
     },
     "RepositoryBranchInfo": {
       "type": "object",
@@ -952,6 +1944,19 @@
       },
       "required": ["taskId"]
     },
+    "DeleteTaskRecordRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "rollbackInitialization": {
+          "type": "boolean"
+        }
+      },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
     "CreateTaskRecordRequest": {
       "type": "object",
       "properties": {
@@ -972,9 +1977,38 @@
         },
         "validationCommand": {
           "type": ["string", "null"]
+        },
+        "mode": {
+          "type": ["string", "null"]
+        },
+        "reasoningEffort": {
+          "type": ["string", "null"]
+        },
+        "permissionLevel": {
+          "type": ["string", "null"]
+        },
+        "networkPolicy": {
+          "type": ["string", "null"]
+        },
+        "workMode": {
+          "enum": ["daily", "coding", null]
+        },
+        "workspaceStrategy": {
+          "enum": ["initialize_git", "isolated_copy", "direct_original", null]
+        },
+        "originalWriteAuthorized": {
+          "type": "boolean"
+        },
+        "workspaceExclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
-      "required": ["repositoryPath", "description"]
+      "required": ["repositoryPath", "description"],
+      "additionalProperties": false
     },
     "ListTasksRequest": {
       "type": "object",
@@ -1007,7 +2041,7 @@
           "type": "string"
         },
         "status": {
-          "type": "string"
+          "enum": ["passed", "warning", "blocked"]
         },
         "taskStatus": {
           "type": "string"
@@ -1029,6 +2063,19 @@
         },
         "targetBranch": {
           "type": "string"
+        },
+        "workspaceKind": {
+          "type": "string"
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "originalWriteAuthorized": {
+          "type": "boolean"
+        },
+        "workspaceEstimatedBytes": {
+          "type": "integer",
+          "minimum": 0
         },
         "agentStage": {
           "type": "string"
@@ -1062,6 +2109,10 @@
         "branchName",
         "taskBranch",
         "targetBranch",
+        "workspaceKind",
+        "sourcePath",
+        "originalWriteAuthorized",
+        "workspaceEstimatedBytes",
         "agentStage",
         "latestValidationStatus",
         "latestDiffSummary",
@@ -1106,43 +2157,37 @@
         "todos": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TodoView"
           }
         },
         "commandRuns": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/CommandRunView"
           }
         },
         "approvals": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ApprovalView"
           }
         },
         "artifacts": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ArtifactView"
           }
         },
         "artifactFiles": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ArtifactFileView"
           }
         },
         "agentSession": {
           "anyOf": [
             {
-              "type": "object",
-              "additionalProperties": true
+              "$ref": "#/$defs/AgentSessionView"
             },
             {
               "type": "null"
@@ -1152,22 +2197,19 @@
         "timeline": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/AgentEventView"
           }
         },
         "validationRounds": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ValidationRoundView"
           }
         },
         "mergeRecords": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/MergeRecordView"
           }
         },
         "deliveryReviewState": {
@@ -1186,7 +2228,433 @@
         "validationRounds",
         "mergeRecords",
         "deliveryReviewState"
-      ]
+      ],
+      "additionalProperties": false
+    },
+    "TodoView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": ["string", "null"]
+        },
+        "completedAt": {
+          "type": ["string", "null"]
+        },
+        "errorMessage": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "title",
+        "description",
+        "status",
+        "startedAt",
+        "completedAt",
+        "errorMessage"
+      ],
+      "additionalProperties": false
+    },
+    "CommandRunView": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "purpose": {
+          "enum": ["validation", "edit", "diagnostic"]
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["passed", "failed", "timedOut", "cancelled"]
+        },
+        "stdoutPath": {
+          "type": ["string", "null"]
+        },
+        "stderrPath": {
+          "type": ["string", "null"]
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "durationMs": {
+          "type": ["integer", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId",
+        "taskId",
+        "purpose",
+        "command",
+        "cwd",
+        "status",
+        "stdoutPath",
+        "stderrPath",
+        "exitCode",
+        "durationMs",
+        "createdAt"
+      ],
+      "additionalProperties": false
+    },
+    "ApprovalView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "approvalType": {
+          "type": "string"
+        },
+        "riskLevel": {
+          "enum": ["low", "medium", "high"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": ["approved", "rejected", "revise"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comment": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "approvalType",
+        "riskLevel",
+        "content",
+        "reason",
+        "decision",
+        "comment",
+        "createdAt",
+        "decidedAt"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "changedFiles": {
+          "type": "string"
+        },
+        "diffPath": {
+          "type": ["string", "null"]
+        },
+        "testReportPath": {
+          "type": ["string", "null"]
+        },
+        "screenshots": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "commitMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "changedFiles",
+        "diffPath",
+        "testReportPath",
+        "screenshots",
+        "summary",
+        "commitMessage"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactFileView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "artifactId": {
+          "type": ["string", "null"]
+        },
+        "fileType": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer"
+        },
+        "compressed": {
+          "type": "boolean"
+        },
+        "retentionClass": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "artifactId",
+        "fileType",
+        "path",
+        "sizeBytes",
+        "compressed",
+        "retentionClass",
+        "createdAt",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "AgentSessionView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "checkpointId": {
+          "type": ["string", "null"]
+        },
+        "iterations": {
+          "type": "integer"
+        },
+        "repairRound": {
+          "type": "integer"
+        },
+        "maxRepairRounds": {
+          "type": "integer"
+        },
+        "validationRequest": {},
+        "validationRound": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "status",
+        "stage",
+        "checkpointId",
+        "iterations",
+        "repairRound",
+        "maxRepairRounds",
+        "validationRequest",
+        "validationRound",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "AgentEventView": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": ["eventId", "taskId", "eventType", "stage", "message", "createdAt", "payload"],
+      "additionalProperties": false
+    },
+    "ValidationRoundView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "roundIndex": {
+          "type": "integer"
+        },
+        "repairRound": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "commandRunId": {
+          "type": ["string", "null"]
+        },
+        "analysis": {
+          "type": "string"
+        },
+        "repairSummary": {
+          "type": "string"
+        },
+        "validationSummary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "roundIndex",
+        "repairRound",
+        "status",
+        "commandRunId",
+        "analysis",
+        "repairSummary",
+        "validationSummary",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "MergeRecordView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["merged", "conflicted", "failed"]
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "sourceBranch": {
+          "type": "string"
+        },
+        "commitSha": {
+          "type": "string"
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "conflictFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errorReason": {
+          "type": ["string", "null"]
+        },
+        "recordPath": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "status",
+        "targetBranch",
+        "sourceBranch",
+        "commitSha",
+        "commitMessage",
+        "conflictFiles",
+        "errorReason",
+        "recordPath",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "AgentTaskCreateRequest": {
       "type": "object",
@@ -1352,6 +2820,37 @@
             }
           ]
         },
+        "validationCandidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "language": {
+                "type": "string"
+              },
+              "ecosystem": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "priority": {
+                "type": "integer"
+              }
+            },
+            "required": ["language", "ecosystem", "command", "reason", "evidence", "priority"],
+            "additionalProperties": false
+          }
+        },
         "repairRound": {
           "type": "integer",
           "minimum": 0
@@ -1362,7 +2861,7 @@
         }
       },
       "required": ["taskId", "repositoryPath", "worktreePath", "title", "description", "phase"],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "AgentTaskResponse": {
       "type": "object",
@@ -1461,6 +2960,9 @@
         "timeoutMs": {
           "type": "integer",
           "minimum": 1
+        },
+        "purpose": {
+          "enum": ["validation", "edit", "diagnostic"]
         }
       },
       "required": ["taskId", "command", "cwd"]
@@ -1633,6 +3135,9 @@
         },
         "cancelled": {
           "type": "boolean"
+        },
+        "purpose": {
+          "enum": ["validation", "edit", "diagnostic"]
         }
       },
       "required": [
@@ -1646,7 +3151,8 @@
         "exitCode",
         "durationMs",
         "timedOut",
-        "cancelled"
+        "cancelled",
+        "purpose"
       ]
     },
     "CommandCancelResult": {
@@ -1834,19 +3340,214 @@
         "secretLocation",
         "createdAt",
         "updatedAt"
-      ]
+      ],
+      "additionalProperties": false
     },
     "ActiveProfileView": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": ["string", "null"]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        },
+        "privacyMode": {
+          "type": "string"
+        },
+        "tokenBudgetTotal": {
+          "type": "integer"
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer"
+        },
+        "validationPolicy": {
+          "type": "string"
+        },
+        "outputLanguage": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "qualityGatePolicy": {
+          "type": "string"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scope",
+        "scopeId",
+        "mode",
+        "modelId",
+        "reasoningEffort",
+        "permissionLevel",
+        "networkPolicy",
+        "privacyMode",
+        "tokenBudgetTotal",
+        "tokenBudgetPerCall",
+        "validationPolicy",
+        "outputLanguage",
+        "memoryScope",
+        "qualityGatePolicy",
+        "isActive",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
     },
     "ProfileCreateRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        },
+        "privacyMode": {
+          "type": "string"
+        },
+        "tokenBudgetTotal": {
+          "type": "integer"
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer"
+        },
+        "validationPolicy": {
+          "type": "string"
+        },
+        "outputLanguage": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "qualityGatePolicy": {
+          "type": "string"
+        },
+        "activate": {
+          "type": "boolean"
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
     },
     "ProfileUpdateRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "profileId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "clearScopeId": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "clearModelId": {
+          "type": "boolean"
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        },
+        "privacyMode": {
+          "type": "string"
+        },
+        "tokenBudgetTotal": {
+          "type": "integer"
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer"
+        },
+        "validationPolicy": {
+          "type": "string"
+        },
+        "outputLanguage": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "qualityGatePolicy": {
+          "type": "string"
+        },
+        "activate": {
+          "type": "boolean"
+        }
+      },
+      "required": ["profileId"],
+      "additionalProperties": false
     },
     "ProfileIdRequest": {
       "type": "object",
@@ -1859,67 +3560,962 @@
     },
     "TaskStartPreviewRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "repositoryPath": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "validationCommand": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        }
+      },
+      "required": ["repositoryPath", "description"],
+      "additionalProperties": false
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
+    "PrivacyPreviewSource": {
+      "type": "object",
+      "properties": {
+        "dataKind": {
+          "type": "string"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "sourceRef": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "sensitivityLevel": {
+          "type": "string"
+        },
+        "findings": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer"
+        },
+        "tokensEstimate": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dataKind",
+        "sourceType",
+        "sourceRef",
+        "destination",
+        "action",
+        "sensitivityLevel",
+        "findings",
+        "redacted",
+        "blocked",
+        "included",
+        "reason",
+        "sizeBytes",
+        "tokensEstimate"
+      ],
+      "additionalProperties": false
     },
     "PrivacyPreview": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "repositoryPath": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "totalSources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redactedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputTokensEstimate": {
+          "type": "integer"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrivacyPreviewSource"
+          }
+        }
+      },
+      "required": [
+        "repositoryPath",
+        "provider",
+        "modelId",
+        "totalSources",
+        "redactedCount",
+        "blockedCount",
+        "inputTokensEstimate",
+        "sources"
+      ],
+      "additionalProperties": false
     },
     "RunContractPreview": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "sourceProfileId": {
+          "type": "string"
+        },
+        "sourceProfileName": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        },
+        "allowedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validationCommand": {
+          "type": ["string", "null"]
+        },
+        "tokenBudgetTotal": {
+          "type": "integer"
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer"
+        },
+        "outputLanguage": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "budgetOverflowPolicy": {
+          "type": "string"
+        },
+        "contract": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sourceProfileId",
+        "sourceProfileName",
+        "mode",
+        "modelId",
+        "reasoningEffort",
+        "permissionLevel",
+        "networkPolicy",
+        "allowedPaths",
+        "allowedCommands",
+        "validationCommand",
+        "tokenBudgetTotal",
+        "tokenBudgetPerCall",
+        "outputLanguage",
+        "memoryScope",
+        "budgetOverflowPolicy",
+        "contract"
+      ],
+      "additionalProperties": false
     },
     "RunContractView": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "profileId": {
+          "type": ["string", "null"]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "reasoningEffort": {
+          "type": "string"
+        },
+        "permissionLevel": {
+          "type": "string"
+        },
+        "networkPolicy": {
+          "type": "string"
+        },
+        "allowedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validationCommand": {
+          "type": ["string", "null"]
+        },
+        "tokenBudgetTotal": {
+          "type": "integer"
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer"
+        },
+        "outputLanguage": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "budgetOverflowPolicy": {
+          "type": "string"
+        },
+        "contract": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "profileId",
+        "mode",
+        "modelId",
+        "reasoningEffort",
+        "permissionLevel",
+        "networkPolicy",
+        "allowedPaths",
+        "allowedCommands",
+        "validationCommand",
+        "tokenBudgetTotal",
+        "tokenBudgetPerCall",
+        "outputLanguage",
+        "memoryScope",
+        "budgetOverflowPolicy",
+        "contract",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
     },
     "PrivacyLedgerEntry": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "dataKind": {
+          "type": "string"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "sourceRef": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "provider": {
+          "type": ["string", "null"]
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "action": {
+          "type": "string"
+        },
+        "sensitivityLevel": {
+          "type": "string"
+        },
+        "findings": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "eventType",
+        "dataKind",
+        "sourceType",
+        "sourceRef",
+        "destination",
+        "provider",
+        "modelId",
+        "action",
+        "sensitivityLevel",
+        "findings",
+        "redacted",
+        "blocked",
+        "reason",
+        "sizeBytes",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "PrivacyLedgerSummary": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "totalEntries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redactedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "providerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sensitivityCounts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "latestEntries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrivacyLedgerEntry"
+          }
+        }
+      },
+      "required": [
+        "taskId",
+        "totalEntries",
+        "allowedCount",
+        "redactedCount",
+        "blockedCount",
+        "providerCount",
+        "sensitivityCounts",
+        "latestEntries"
+      ],
+      "additionalProperties": false
+    },
+    "TokenBudgetRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": ["string", "null"]
+        },
+        "callType": {
+          "type": "string"
+        },
+        "provider": {
+          "type": ["string", "null"]
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "phase": {
+          "type": "string"
+        },
+        "inputTokensEstimate": {
+          "type": "integer"
+        },
+        "outputTokensEstimate": {
+          "type": "integer"
+        },
+        "totalTokensEstimate": {
+          "type": "integer"
+        },
+        "budgetLimit": {
+          "type": "integer"
+        },
+        "budgetRemaining": {
+          "type": "integer"
+        },
+        "overflowPolicy": {
+          "type": "string"
+        },
+        "qualityFallback": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "runId",
+        "callType",
+        "provider",
+        "modelId",
+        "phase",
+        "inputTokensEstimate",
+        "outputTokensEstimate",
+        "totalTokensEstimate",
+        "budgetLimit",
+        "budgetRemaining",
+        "overflowPolicy",
+        "qualityFallback",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "TokenBudgetSummary": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "budgetLimit": {
+          "type": "integer"
+        },
+        "usedTokensEstimate": {
+          "type": "integer"
+        },
+        "remainingTokensEstimate": {
+          "type": "integer"
+        },
+        "recordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contextSourceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "includedContextSourceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redactedContextSourceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockedContextSourceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TokenBudgetRecord"
+          }
+        },
+        "contextSources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSource"
+          }
+        }
+      },
+      "required": [
+        "taskId",
+        "budgetLimit",
+        "usedTokensEstimate",
+        "remainingTokensEstimate",
+        "recordCount",
+        "contextSourceCount",
+        "includedContextSourceCount",
+        "redactedContextSourceCount",
+        "blockedContextSourceCount",
+        "records",
+        "contextSources"
+      ],
+      "additionalProperties": false
     },
     "ContextSource": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": ["string", "null"]
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "sourceRef": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "tokensEstimate": {
+          "type": "integer"
+        },
+        "sensitivityLevel": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "runId",
+        "sourceType",
+        "sourceRef",
+        "layer",
+        "included",
+        "tokensEstimate",
+        "sensitivityLevel",
+        "redacted",
+        "blocked",
+        "reason",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "ContractBreachRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "contractId": {
+          "type": ["string", "null"]
+        },
+        "breachType": {
+          "type": "string"
+        },
+        "requestedValue": {
+          "type": "string"
+        },
+        "policyValue": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "approvalId": {
+          "type": ["string", "null"]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "contractId",
+        "breachType",
+        "requestedValue",
+        "policyValue",
+        "status",
+        "approvalId",
+        "reason",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "RecordContractBreachRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "breachType": {
+          "type": "string"
+        },
+        "requestedValue": {
+          "type": "string"
+        },
+        "policyValue": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "breachType", "requestedValue", "policyValue"],
+      "additionalProperties": false
     },
     "TaskMemoryUsage": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "memoryId": {
+          "type": ["string", "null"]
+        },
+        "memoryKey": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "memoryScopeId": {
+          "type": ["string", "null"]
+        },
+        "usageType": {
+          "type": "string"
+        },
+        "valuePreview": {
+          "type": "string"
+        },
+        "tokensEstimate": {
+          "type": "integer"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "memoryId",
+        "memoryKey",
+        "memoryScope",
+        "memoryScopeId",
+        "usageType",
+        "valuePreview",
+        "tokensEstimate",
+        "redacted",
+        "blocked",
+        "reason",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "RecordMemoryUsageRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "memoryId": {
+          "type": "string"
+        },
+        "memoryKey": {
+          "type": "string"
+        },
+        "memoryScope": {
+          "type": "string"
+        },
+        "memoryScopeId": {
+          "type": "string"
+        },
+        "usageType": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "memoryKey", "memoryScope", "usageType", "value"],
+      "additionalProperties": false
     },
     "PreferenceCandidatesRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
     },
     "PreferenceCandidate": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": ["string", "null"]
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": ["string", "null"]
+        },
+        "preferenceKey": {
+          "type": "string"
+        },
+        "candidateValue": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "decisionComment": {
+          "type": ["string", "null"]
+        },
+        "acceptedMemoryId": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "scope",
+        "scopeId",
+        "preferenceKey",
+        "candidateValue",
+        "evidence",
+        "confidence",
+        "status",
+        "redacted",
+        "blocked",
+        "reason",
+        "decisionComment",
+        "acceptedMemoryId",
+        "createdAt",
+        "updatedAt",
+        "decidedAt"
+      ],
+      "additionalProperties": false
     },
     "CreatePreferenceCandidateRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "preferenceKey": {
+          "type": "string"
+        },
+        "candidateValue": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        }
+      },
+      "required": ["scope", "preferenceKey", "candidateValue"],
+      "additionalProperties": false
     },
     "DecidePreferenceCandidateRequest": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "editedValue": {
+          "type": "string"
+        },
+        "comment": {
+          "type": "string"
+        }
+      },
+      "required": ["candidateId", "decision"],
+      "additionalProperties": false
     },
     "GenerateTaskProofPackRequest": {
       "type": "object",
@@ -1929,6 +4525,581 @@
         }
       },
       "required": ["taskId"]
+    },
+    "TaskValidationRunSummary": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "durationMs": {
+          "type": ["integer", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId",
+        "purpose",
+        "command",
+        "cwd",
+        "status",
+        "exitCode",
+        "durationMs",
+        "createdAt"
+      ],
+      "additionalProperties": false
+    },
+    "TaskDeliveryReport": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "artifactId": {
+          "type": "string"
+        },
+        "taskTitle": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "overallStatus": {
+          "enum": ["passed", "failed", "notRun"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "commandCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diffPath": {
+          "type": ["string", "null"]
+        },
+        "deliveryPath": {
+          "type": "string"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskValidationRunSummary"
+          }
+        },
+        "risk": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "artifactId",
+        "taskTitle",
+        "generatedAt",
+        "overallStatus",
+        "summary",
+        "commandCount",
+        "passedCount",
+        "failedCount",
+        "changedFiles",
+        "diffPath",
+        "deliveryPath",
+        "runs",
+        "risk"
+      ],
+      "additionalProperties": false
+    },
+    "TaskProofPackScore": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "grade": {
+          "type": "string"
+        },
+        "summaryKey": {
+          "type": "string"
+        }
+      },
+      "required": ["value", "grade", "summaryKey"],
+      "additionalProperties": false
+    },
+    "TaskProofPackProposal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "titleKey": {
+          "type": "string"
+        },
+        "summaryKey": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["passed", "warning", "blocked"]
+        },
+        "confidence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": ["id", "titleKey", "summaryKey", "status", "confidence"],
+      "additionalProperties": false
+    },
+    "TaskProofPackScreenshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "titleKey": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["passed", "warning", "blocked"]
+        }
+      },
+      "required": ["id", "titleKey", "path", "capturedAt", "status"],
+      "additionalProperties": false
+    },
+    "TaskProofPackGate": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "titleKey": {
+          "type": "string"
+        },
+        "summaryKey": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["passed", "warning", "blocked"]
+        }
+      },
+      "required": ["id", "titleKey", "summaryKey", "status"],
+      "additionalProperties": false
+    },
+    "TaskProofPackRisk": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "titleKey": {
+          "type": "string"
+        },
+        "summaryKey": {
+          "type": "string"
+        },
+        "level": {
+          "enum": ["low", "medium", "high"]
+        }
+      },
+      "required": ["id", "titleKey", "summaryKey", "level"],
+      "additionalProperties": false
+    },
+    "DeliveryScoreBreakdown": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "testScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "riskScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "diffScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "approvalScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "riskLevel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "score",
+        "testScore",
+        "riskScore",
+        "diffScore",
+        "approvalScore",
+        "explanation",
+        "riskLevel"
+      ],
+      "additionalProperties": false
+    },
+    "RiskFinding": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "level": {
+          "enum": ["low", "medium", "high"]
+        },
+        "subject": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["kind", "level", "subject", "reason"],
+      "additionalProperties": false
+    },
+    "TaskCapsuleState": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commandCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diffPath": {
+          "type": ["string", "null"]
+        },
+        "deliveryPath": {
+          "type": ["string", "null"]
+        },
+        "manifestPath": {
+          "type": ["string", "null"]
+        },
+        "summaryPath": {
+          "type": ["string", "null"]
+        },
+        "capsulePath": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "taskId",
+        "changedFiles",
+        "commandCount",
+        "diffPath",
+        "deliveryPath",
+        "manifestPath",
+        "summaryPath",
+        "capsulePath"
+      ],
+      "additionalProperties": false
+    },
+    "ProofPackFileState": {
+      "type": "object",
+      "properties": {
+        "fileType": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer"
+        }
+      },
+      "required": ["fileType", "path", "status", "sizeBytes"],
+      "additionalProperties": false
+    },
+    "PrivacyLedgerSummaryState": {
+      "type": "object",
+      "properties": {
+        "entryCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redactedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sensitiveCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latestEntry": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entryCount",
+        "blockedCount",
+        "redactedCount",
+        "sensitiveCount",
+        "latestEntry",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "RunContractSummaryState": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "contractId": {
+          "type": ["string", "null"]
+        },
+        "mode": {
+          "type": ["string", "null"]
+        },
+        "modelId": {
+          "type": ["string", "null"]
+        },
+        "permissionLevel": {
+          "type": ["string", "null"]
+        },
+        "networkPolicy": {
+          "type": ["string", "null"]
+        },
+        "validationCommand": {
+          "type": ["string", "null"]
+        },
+        "tokenBudgetTotal": {
+          "type": ["integer", "null"]
+        },
+        "tokenBudgetPerCall": {
+          "type": ["integer", "null"]
+        },
+        "breachCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolvedBreachCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "contractId",
+        "mode",
+        "modelId",
+        "permissionLevel",
+        "networkPolicy",
+        "validationCommand",
+        "tokenBudgetTotal",
+        "tokenBudgetPerCall",
+        "breachCount",
+        "unresolvedBreachCount"
+      ],
+      "additionalProperties": false
+    },
+    "TokenBudgetSummaryState": {
+      "type": "object",
+      "properties": {
+        "recordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalTokensEstimate": {
+          "type": "integer"
+        },
+        "budgetLimit": {
+          "type": "integer"
+        },
+        "budgetRemaining": {
+          "type": "integer"
+        },
+        "overflowCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordCount",
+        "totalTokensEstimate",
+        "budgetLimit",
+        "budgetRemaining",
+        "overflowCount",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "RuleHitState": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["id", "rule", "status", "message", "evidencePath", "createdAt"],
+      "additionalProperties": false
+    },
+    "HookRunState": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "command": {
+          "type": ["string", "null"]
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "approvalId": {
+          "type": ["string", "null"]
+        },
+        "approvalStatus": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "hook",
+        "lifecycle",
+        "status",
+        "message",
+        "command",
+        "evidencePath",
+        "approvalId",
+        "approvalStatus",
+        "createdAt"
+      ],
+      "additionalProperties": false
+    },
+    "ModelArenaDecisionState": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "selectedModel": {
+          "type": ["string", "null"]
+        },
+        "selectedProposalId": {
+          "type": ["string", "null"]
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "comparedModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "status",
+        "selectedModel",
+        "selectedProposalId",
+        "rationale",
+        "comparedModels",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "GeneratedTaskDelivery": {
       "type": "object",
@@ -1955,8 +5126,7 @@
           "type": "string"
         },
         "report": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/TaskDeliveryReport"
         },
         "qualityGateResult": {
           "$ref": "#/$defs/QualityGateResultState"
@@ -1985,7 +5155,7 @@
         "proofPackPath",
         "deliveryReviewState"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "GeneratedTaskProofPack": {
       "type": "object",
@@ -2006,35 +5176,30 @@
           "type": "string"
         },
         "deliveryScore": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/TaskProofPackScore"
         },
         "proposals": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TaskProofPackProposal"
           }
         },
         "screenshots": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TaskProofPackScreenshot"
           }
         },
         "qualityGates": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TaskProofPackGate"
           }
         },
         "risks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TaskProofPackRisk"
           }
         },
         "proofPackId": {
@@ -2055,19 +5220,16 @@
         "proofPackFiles": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ProofPackFileState"
           }
         },
         "deliveryScoreBreakdown": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/DeliveryScoreBreakdown"
         },
         "riskFindings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/RiskFinding"
           }
         },
         "qualityGateBlockers": {
@@ -2098,7 +5260,7 @@
         "riskFindings",
         "qualityGateBlockers"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "QualityGateResultState": {
       "type": "object",
@@ -2109,8 +5271,7 @@
         "gates": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/TaskProofPackGate"
           }
         },
         "blockers": {
@@ -2121,7 +5282,7 @@
         }
       },
       "required": ["status", "gates", "blockers"],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "DeliveryScoreState": {
       "type": "object",
@@ -2175,7 +5336,7 @@
         "riskLevel",
         "createdAt"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "DeliveryReviewState": {
       "type": "object",
@@ -2199,7 +5360,7 @@
           }
         },
         "validationStatus": {
-          "type": "string"
+          "enum": ["passed", "failed", "notRun", "cancelled", "timedOut"]
         },
         "diffFileCount": {
           "type": "integer",
@@ -2209,10 +5370,10 @@
           "type": "boolean"
         },
         "highestRiskLevel": {
-          "type": "string"
+          "enum": ["low", "medium", "high"]
         },
         "proofPackStatus": {
-          "type": "string"
+          "enum": ["generated", "missing"]
         },
         "proofPackId": {
           "type": ["string", "null"]
@@ -2229,50 +5390,41 @@
         "riskRecords": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/RiskFinding"
           }
         },
         "taskCapsule": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/TaskCapsuleState"
         },
         "proofPackFiles": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/ProofPackFileState"
           }
         },
         "privacyLedgerSummary": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/PrivacyLedgerSummaryState"
         },
         "runContractSummary": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/RunContractSummaryState"
         },
         "tokenBudgetSummary": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/TokenBudgetSummaryState"
         },
         "ruleHits": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/RuleHitState"
           }
         },
         "hookRuns": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/HookRunState"
           }
         },
         "modelArenaDecision": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/ModelArenaDecisionState"
         },
         "updatedAt": {
           "type": "string"
@@ -2304,7 +5456,7 @@
         "modelArenaDecision",
         "updatedAt"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "RecordQualityGateRequest": {
       "type": "object",
@@ -2344,11 +5496,63 @@
     },
     "QualityGateRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "gateType": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "overrideReason": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "gateType",
+        "status",
+        "message",
+        "evidencePath",
+        "overrideReason",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "QualityGateOverrideResult": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "gateType": {
+          "type": "string"
+        },
+        "overriddenCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "gateType", "overriddenCount", "reason"],
+      "additionalProperties": false
     },
     "RecordRuleHitRequest": {
       "type": "object",
@@ -2466,20 +5670,229 @@
     },
     "RuleHitRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "taskId", "rule", "status", "message", "evidencePath", "createdAt"],
+      "additionalProperties": false
     },
     "HookRunRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "command": {
+          "type": ["string", "null"]
+        },
+        "evidencePath": {
+          "type": ["string", "null"]
+        },
+        "approvalId": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "hook",
+        "lifecycle",
+        "status",
+        "message",
+        "command",
+        "evidencePath",
+        "approvalId",
+        "createdAt"
+      ],
+      "additionalProperties": false
     },
     "HookApprovalRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string"
+        },
+        "requestReason": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": ["string", "null"]
+        },
+        "resolvedReason": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "resolvedAt": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "hook",
+        "requestReason",
+        "status",
+        "reviewer",
+        "resolvedReason",
+        "createdAt",
+        "resolvedAt"
+      ],
+      "additionalProperties": false
     },
     "ModelArenaDecisionRecord": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "selectedModel": {
+          "type": ["string", "null"]
+        },
+        "selectedProposalId": {
+          "type": ["string", "null"]
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "comparedModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "status",
+        "selectedModel",
+        "selectedProposalId",
+        "rationale",
+        "comparedModels",
+        "createdAt"
+      ],
+      "additionalProperties": false
+    },
+    "EstimateTaskWorkspaceRequest": {
+      "type": "object",
+      "properties": {
+        "repositoryPath": {
+          "type": "string"
+        },
+        "workspaceStrategy": {
+          "enum": ["initialize_git", "isolated_copy", "direct_original", null]
+        },
+        "workspaceExclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": ["repositoryPath"],
+      "additionalProperties": false
+    },
+    "TaskWorkspaceEstimate": {
+      "type": "object",
+      "properties": {
+        "sourcePath": {
+          "type": "string"
+        },
+        "destinationRoot": {
+          "type": "string"
+        },
+        "workspaceKind": {
+          "type": "string"
+        },
+        "estimatedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimatedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "availableBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sufficientSpace": {
+          "type": "boolean"
+        },
+        "cleanupPolicy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "destinationRoot",
+        "workspaceKind",
+        "estimatedBytes",
+        "estimatedFiles",
+        "availableBytes",
+        "sufficientSpace",
+        "cleanupPolicy"
+      ],
+      "additionalProperties": false
     }
   }
 }
-

@@ -1,0 +1,143 @@
+- generic:
+  - generic:
+    - main:
+      - heading [level=1]: Agent 任务控制台
+      - generic:
+        - generic:
+          - button
+          - button
+          - button [disabled]
+          - navigation:
+            - button: 文件
+            - button: 编辑
+            - button: 视图
+            - button: 帮助
+      - generic:
+        - complementary:
+          - navigation:
+            - button:
+              - generic: 新对话
+            - button:
+              - generic: 搜索
+            - button:
+              - generic: 已安排
+            - button:
+              - generic: 技能
+          - generic:
+            - paragraph: 项目
+            - button:
+              - generic: 未选择项目
+            - generic:
+              - generic: 状态筛选
+              - combobox
+            - generic: 暂无真实任务记录。选择项目目录后创建任务，这里会显示数据库中的历史任务。
+          - generic:
+            - paragraph: 对话
+            - generic: 暂无独立对话记录。
+          - generic:
+            - button:
+              - generic: 设
+              - generic:
+                - strong: 设置
+                - generic: 账户
+        - generic:
+          - generic:
+            - region:
+              - generic:
+                - heading [level=2]: 我们该做什么？
+                - generic:
+                  - textbox:
+                    - /placeholder: 描述你想让 CodeMax 处理的任务
+                  - generic:
+                    - button
+                    - button:
+                      - generic: GPT-5 Codex
+                      - generic: 中
+                    - button
+                    - button [disabled]
+                  - button:
+                    - generic: 选择项目
+                    - strong: 未选择项目
+  - dialog [ref=f5e2]:
+    - generic [ref=f5e3]:
+      - generic [ref=f5e4]:
+        - heading "启动 Agent 任务" [level=2] [ref=f5e5]
+        - paragraph [ref=f5e6]: 像 Codex 一样，在任务开始前确认模型、模式、强度和访问权限。
+      - button "完整设置" [active] [ref=f5e7] [cursor=pointer]
+    - generic [ref=f5e11]:
+      - textbox "任务描述" [ref=f5e12]:
+        - /placeholder: 例如：修复支付模块金额精度 Bug，并补充对应单元测试。
+      - generic "验证命令" [ref=f5e13]:
+        - textbox "验证命令" [ref=f5e19]:
+          - /placeholder: 自动识别，或输入例如 npm run test
+          - text: npm run check
+        - generic "推荐验证命令" [ref=f5e20]:
+          - button "npm run check" [ref=f5e21] [cursor=pointer]
+          - button "npm run build:desktop" [ref=f5e22] [cursor=pointer]
+          - button "cargo check" [ref=f5e23] [cursor=pointer]
+      - group "任务工作区" [ref=f5e24]:
+        - paragraph [ref=f5e26]: 默认在隔离副本中编程；只有明确授权时才会修改原目录。
+        - radiogroup [ref=f5e27]:
+          - radio "创建隔离副本" [ref=f5e28] [cursor=pointer]
+          - radio "直接修改原目录" [ref=f5e33] [cursor=pointer]
+      - generic [ref=f5e38]:
+        - button "附加上下文" [ref=f5e39] [cursor=pointer]
+        - button "GPT-5 Codex 中" [ref=f5e41] [cursor=pointer]:
+          - generic [ref=f5e42]: GPT-5 Codex
+          - generic [ref=f5e43]: 中
+        - generic "模型强度" [ref=f5e46]:
+          - button "极低" [ref=f5e50] [cursor=pointer]
+          - button "低" [ref=f5e51] [cursor=pointer]
+          - button "中" [ref=f5e52] [cursor=pointer]
+          - button "高" [ref=f5e53] [cursor=pointer]
+          - button "超高" [ref=f5e54] [cursor=pointer]
+        - generic "访问权限" [ref=f5e55]:
+          - button "任务 worktree 可写" [ref=f5e60] [cursor=pointer]
+          - button "验证命令可执行" [ref=f5e66] [cursor=pointer]
+          - button "联网访问" [ref=f5e71] [cursor=pointer]
+        - generic "模式" [ref=f5e78]:
+          - button "AGENT" [ref=f5e79] [cursor=pointer]
+          - button "PLAN" [ref=f5e80] [cursor=pointer]
+          - button "ASK" [ref=f5e81] [cursor=pointer]
+          - button "REVIEW" [ref=f5e82] [cursor=pointer]
+        - button "创建任务" [ref=f5e83] [cursor=pointer]
+      - generic "运行契约" [ref=f5e86]:
+        - generic [ref=f5e87]:
+          - strong [ref=f5e88]: 模型强度
+          - generic [ref=f5e89]: 中
+        - generic [ref=f5e90]:
+          - strong [ref=f5e91]: 模式
+          - generic [ref=f5e92]: AGENT
+        - generic [ref=f5e93]:
+          - strong [ref=f5e94]: 访问权限
+          - generic [ref=f5e95]: 任务 worktree 可写 · 验证命令可执行
+        - generic [ref=f5e96]:
+          - strong [ref=f5e97]: 验证命令
+          - generic [ref=f5e98]: npm run check
+      - generic "任务开始前会固化模式、模型、权限、验证命令、存储路径和输出语言。" [ref=f5e99]:
+        - generic [ref=f5e100]:
+          - strong [ref=f5e101]: 隐私预览
+          - generic [ref=f5e102]: 输入任务描述后生成预览
+          - generic [ref=f5e103]: 输入任务描述后生成预览
+        - generic [ref=f5e104]:
+          - strong [ref=f5e105]: 契约预览
+          - generic [ref=f5e106]: 输入任务描述后生成预览
+          - generic [ref=f5e107]: 输入任务描述后生成预览
+          - generic [ref=f5e108]: 等待生成验证与契约预览
+      - generic "模型" [ref=f5e109]:
+        - button "GPT-5 Codex 适合复杂工程任务和高可信代码修改。 256k" [ref=f5e110] [cursor=pointer]:
+          - generic [ref=f5e111]:
+            - strong [ref=f5e112]: GPT-5 Codex
+            - generic [ref=f5e113]: 适合复杂工程任务和高可信代码修改。
+          - emphasis [ref=f5e114]: 256k
+        - button "DeepSeek Coder 适合高性价比代码任务和国内部署场景。 128k" [ref=f5e115] [cursor=pointer]:
+          - generic [ref=f5e116]:
+            - strong [ref=f5e117]: DeepSeek Coder
+            - generic [ref=f5e118]: 适合高性价比代码任务和国内部署场景。
+          - emphasis [ref=f5e119]: 128k
+        - button "OpenAI-compatible 适合私有或离线 OpenAI-compatible 服务。 64k" [ref=f5e120] [cursor=pointer]:
+          - generic [ref=f5e121]:
+            - strong [ref=f5e122]: OpenAI-compatible
+            - generic [ref=f5e123]: 适合私有或离线 OpenAI-compatible 服务。
+          - emphasis [ref=f5e124]: 64k
+    - button "Close" [ref=f5e125] [cursor=pointer]

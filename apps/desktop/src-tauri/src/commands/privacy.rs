@@ -13,7 +13,7 @@ use crate::{
     },
     storage::{
         ApprovalRepository, ContextSourceRecord, ContextSourceRepository, ContractBreachRecord,
-        ContractBreachRepository, ManagedStorage, MemoryRepository, NewApproval,
+        ContractBreachRepository, ManagedStorage, MemoryItemRecord, MemoryRepository, NewApproval,
         NewContractBreachRecord, NewMemoryItem, NewPersonalProfile, NewPreferenceCandidate,
         NewTaskMemoryUsage, PersonalProfileRecord, PersonalProfileRepository,
         PreferenceCandidateRecord, PreferenceCandidateRepository, PrivacyLedgerEntryRecord,
@@ -215,6 +215,10 @@ pub struct TaskStartPreviewRequest {
     pub description: String,
     pub model_id: Option<String>,
     pub validation_command: Option<String>,
+    pub mode: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub permission_level: Option<String>,
+    pub network_policy: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -313,6 +317,21 @@ pub struct TaskMemoryUsageView {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryItemView {
+    pub id: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub key: String,
+    pub value: String,
+    pub confidence: f64,
+    pub source: String,
+    pub is_user_editable: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordMemoryUsageRequest {
@@ -323,6 +342,33 @@ pub struct RecordMemoryUsageRequest {
     pub memory_scope_id: Option<String>,
     pub usage_type: String,
     pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryItemsRequest {
+    pub scope: Option<String>,
+    pub scope_id: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMemoryItemRequest {
+    pub id: Option<String>,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub key: String,
+    pub value: String,
+    pub confidence: Option<f64>,
+    pub source: Option<String>,
+    pub is_user_editable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMemoryItemRequest {
+    pub memory_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -641,67 +687,11 @@ pub fn run_contract_preview(
     storage: State<'_, ManagedStorage>,
     request: TaskStartPreviewRequest,
 ) -> AppResult<RunContractPreviewView> {
-    let repository_path = required_text(
-        &request.repository_path,
-        "contract.repositoryPathRequired",
-        "Repository path is required for run contract preview.",
-    )?;
-    let _description = required_text(
-        &request.description,
-        "contract.descriptionRequired",
-        "Task description is required for run contract preview.",
-    )?;
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let profile = PersonalProfileRepository::new(store.connection())
         .active_profile()
         .map_err(storage_error)?;
-    let model_id = clean_optional(request.model_id.as_deref())
-        .map(str::to_string)
-        .or_else(|| profile.model_id.clone());
-    let validation_command =
-        clean_optional(request.validation_command.as_deref()).map(str::to_string);
-    let allowed_paths = vec![redact_known_user_paths(repository_path)];
-    let allowed_commands = validation_command
-        .as_ref()
-        .map(|command| vec![command.clone()])
-        .unwrap_or_default();
-    let contract = json!({
-        "profileId": &profile.id,
-        "mode": &profile.mode,
-        "modelId": &model_id,
-        "reasoningEffort": &profile.reasoning_effort,
-        "permissionLevel": &profile.permission_level,
-        "networkPolicy": &profile.network_policy,
-        "allowedPaths": &allowed_paths,
-        "allowedCommands": &allowed_commands,
-        "validationCommand": &validation_command,
-        "tokenBudgetTotal": profile.token_budget_total,
-        "tokenBudgetPerCall": profile.token_budget_per_call,
-        "outputLanguage": &profile.output_language,
-        "memoryScope": &profile.memory_scope,
-        "budgetOverflowPolicy": "pause_for_approval",
-        "source": "active_profile_preview",
-        "worktreePathKnown": false
-    });
-
-    Ok(RunContractPreviewView {
-        source_profile_id: profile.id,
-        source_profile_name: profile.name,
-        mode: profile.mode,
-        model_id,
-        reasoning_effort: profile.reasoning_effort,
-        permission_level: profile.permission_level,
-        network_policy: profile.network_policy,
-        allowed_paths,
-        allowed_commands,
-        validation_command,
-        token_budget_total: profile.token_budget_total,
-        token_budget_per_call: profile.token_budget_per_call,
-        output_language: profile.output_language,
-        memory_scope: profile.memory_scope,
-        budget_overflow_policy: "pause_for_approval".to_string(),
-        contract,
-    })
+    run_contract_preview_from_request(&profile, request)
 }
 
 #[tauri::command]
@@ -860,6 +850,79 @@ pub fn record_contract_breach(
         .map_err(storage_error)?;
 
     Ok(ContractBreachRecordView::from(record))
+}
+
+#[tauri::command]
+pub fn memory_items(
+    storage: State<'_, ManagedStorage>,
+    request: MemoryItemsRequest,
+) -> AppResult<Vec<MemoryItemView>> {
+    let limit = request.limit.unwrap_or(100).clamp(1, 500);
+    let scope = clean_optional(request.scope.as_deref());
+    let scope_id = clean_optional(request.scope_id.as_deref());
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    MemoryRepository::new(store.connection())
+        .list_memory_items(scope, scope_id, limit)
+        .map(|items| items.into_iter().map(MemoryItemView::from).collect())
+        .map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn save_memory_item(
+    storage: State<'_, ManagedStorage>,
+    request: SaveMemoryItemRequest,
+) -> AppResult<MemoryItemView> {
+    let scope = required_text(
+        &request.scope,
+        "memory.scopeRequired",
+        "Memory scope is required.",
+    )?;
+    let key = required_text(&request.key, "memory.keyRequired", "Memory key is required.")?;
+    let sanitized = sanitize_for_model_context(&request.value, &format!("memory.{}", key));
+    if sanitized.blocked {
+        return Err(CommandError::new(
+            "memory.blockedValue",
+            "Memory value was blocked by privacy policy.",
+        ));
+    }
+
+    let memory_id = clean_optional(request.id.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("memory-{}", Uuid::new_v4()));
+    let source = clean_optional(request.source.as_deref())
+        .unwrap_or("user_manual")
+        .to_string();
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let saved = MemoryRepository::new(store.connection())
+        .upsert_memory_item(NewMemoryItem {
+            id: &memory_id,
+            scope,
+            scope_id: clean_optional(request.scope_id.as_deref()),
+            key,
+            value: &sanitized.content,
+            confidence: request.confidence.unwrap_or(0.8).clamp(0.0, 1.0),
+            source: &source,
+            is_user_editable: request.is_user_editable.unwrap_or(true),
+        })
+        .map_err(storage_error)?;
+
+    Ok(MemoryItemView::from(saved))
+}
+
+#[tauri::command]
+pub fn delete_memory_item(
+    storage: State<'_, ManagedStorage>,
+    request: DeleteMemoryItemRequest,
+) -> AppResult<()> {
+    let memory_id = required_text(
+        &request.memory_id,
+        "memory.idRequired",
+        "Memory item id is required.",
+    )?;
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    MemoryRepository::new(store.connection())
+        .delete_memory_item(memory_id)
+        .map_err(storage_error)
 }
 
 #[tauri::command]
@@ -1363,6 +1426,134 @@ impl TryFrom<RunContractRecord> for RunContractView {
     }
 }
 
+fn run_contract_preview_from_request(
+    profile: &PersonalProfileRecord,
+    request: TaskStartPreviewRequest,
+) -> AppResult<RunContractPreviewView> {
+    let repository_path = required_text(
+        &request.repository_path,
+        "contract.repositoryPathRequired",
+        "Repository path is required for run contract preview.",
+    )?;
+    let _description = required_text(
+        &request.description,
+        "contract.descriptionRequired",
+        "Task description is required for run contract preview.",
+    )?;
+    let model_id = clean_optional(request.model_id.as_deref())
+        .map(str::to_string)
+        .or_else(|| profile.model_id.clone());
+    let validation_command =
+        clean_optional(request.validation_command.as_deref()).map(str::to_string);
+    let mode = clean_optional(request.mode.as_deref())
+        .unwrap_or(&profile.mode)
+        .to_string();
+    let reasoning_effort = clean_optional(request.reasoning_effort.as_deref())
+        .unwrap_or(&profile.reasoning_effort)
+        .to_string();
+    let permission_level = clean_optional(request.permission_level.as_deref())
+        .unwrap_or(&profile.permission_level)
+        .to_string();
+    let network_policy = clean_optional(request.network_policy.as_deref())
+        .unwrap_or(&profile.network_policy)
+        .to_string();
+    let allowed_paths = vec![redact_known_user_paths(repository_path)];
+    let allowed_commands = validation_command
+        .as_ref()
+        .map(|command| vec![command.clone()])
+        .unwrap_or_default();
+    let contract = json!({
+        "profileId": &profile.id,
+        "mode": &mode,
+        "modelId": &model_id,
+        "reasoningEffort": &reasoning_effort,
+        "permissionLevel": &permission_level,
+        "networkPolicy": &network_policy,
+        "allowedPaths": &allowed_paths,
+        "allowedCommands": &allowed_commands,
+        "validationCommand": &validation_command,
+        "tokenBudgetTotal": profile.token_budget_total,
+        "tokenBudgetPerCall": profile.token_budget_per_call,
+        "outputLanguage": &profile.output_language,
+        "memoryScope": &profile.memory_scope,
+        "budgetOverflowPolicy": "pause_for_approval",
+        "source": "active_profile_preview",
+        "worktreePathKnown": false
+    });
+
+    Ok(RunContractPreviewView {
+        source_profile_id: profile.id.clone(),
+        source_profile_name: profile.name.clone(),
+        mode,
+        model_id,
+        reasoning_effort,
+        permission_level,
+        network_policy,
+        allowed_paths,
+        allowed_commands,
+        validation_command,
+        token_budget_total: profile.token_budget_total,
+        token_budget_per_call: profile.token_budget_per_call,
+        output_language: profile.output_language.clone(),
+        memory_scope: profile.memory_scope.clone(),
+        budget_overflow_policy: "pause_for_approval".to_string(),
+        contract,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::PersonalProfileRecord;
+
+    #[test]
+    fn run_contract_preview_prefers_request_overrides_to_active_profile() {
+        let profile = PersonalProfileRecord {
+            id: "profile-default".to_string(),
+            name: "Default".to_string(),
+            scope: "global".to_string(),
+            scope_id: None,
+            mode: "standard".to_string(),
+            model_id: Some("model-default".to_string()),
+            reasoning_effort: "balanced".to_string(),
+            permission_level: "worktree_write".to_string(),
+            network_policy: "approval_required".to_string(),
+            privacy_mode: "standard".to_string(),
+            token_budget_total: 120000,
+            token_budget_per_call: 24000,
+            validation_policy: "auto".to_string(),
+            output_language: "zh-CN".to_string(),
+            memory_scope: "task".to_string(),
+            quality_gate_policy: "strict".to_string(),
+            is_active: true,
+            created_at: "2026-07-09T00:00:00Z".to_string(),
+            updated_at: "2026-07-09T00:00:00Z".to_string(),
+        };
+
+        let preview = run_contract_preview_from_request(
+            &profile,
+            TaskStartPreviewRequest {
+                repository_path: "D:/repo".to_string(),
+                title: None,
+                description: "Preview override".to_string(),
+                model_id: Some("gpt-5-codex".to_string()),
+                validation_command: Some("npm run check".to_string()),
+                mode: Some("review".to_string()),
+                reasoning_effort: Some("max".to_string()),
+                permission_level: Some("read_only".to_string()),
+                network_policy: Some("enabled".to_string()),
+            },
+        )
+        .expect("build run contract preview");
+
+        assert_eq!(preview.mode, "review");
+        assert_eq!(preview.reasoning_effort, "max");
+        assert_eq!(preview.permission_level, "read_only");
+        assert_eq!(preview.network_policy, "enabled");
+        assert_eq!(preview.model_id.as_deref(), Some("gpt-5-codex"));
+    }
+}
+
 impl From<ContractBreachRecord> for ContractBreachRecordView {
     fn from(record: ContractBreachRecord) -> Self {
         Self {
@@ -1442,6 +1633,23 @@ impl From<ContextSourceRecord> for ContextSourceView {
             blocked: record.blocked,
             reason: record.reason,
             created_at: record.created_at,
+        }
+    }
+}
+
+impl From<MemoryItemRecord> for MemoryItemView {
+    fn from(record: MemoryItemRecord) -> Self {
+        Self {
+            id: record.id,
+            scope: record.scope,
+            scope_id: record.scope_id,
+            key: record.key,
+            value: record.value,
+            confidence: record.confidence,
+            source: record.source,
+            is_user_editable: record.is_user_editable,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
         }
     }
 }

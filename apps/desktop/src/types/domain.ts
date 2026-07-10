@@ -17,8 +17,9 @@ export type TaskType = 'bugfix' | 'test' | 'refactor' | 'explain' | 'custom';
 export interface RepositorySummary {
   path: string;
   name: string;
-  branch: string;
+  branch: string | null;
   dirty: boolean;
+  isGitRepository: boolean;
 }
 
 export interface RepositoryBranchInfo {
@@ -27,6 +28,41 @@ export interface RepositoryBranchInfo {
 
 export interface RepositoryDirtyStatus {
   dirty: boolean;
+}
+
+export interface AgentHealthResponse {
+  service: string;
+  status: string;
+  version: string;
+}
+
+export interface AgentServiceStatus {
+  running: boolean;
+  pid?: number | null;
+  host: string;
+  port: number;
+  healthUrl: string;
+  agentDir: string;
+  pythonExecutable: string;
+  health?: AgentHealthResponse | null;
+}
+
+export type SkillSourceStatus = 'ready' | 'missing' | 'unavailable' | 'virtual';
+
+export interface SkillEntry {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface SkillSource {
+  id: 'project' | 'workspace' | 'global' | 'builtIn';
+  path?: string | null;
+  exists: boolean;
+  skillCount: number;
+  status: SkillSourceStatus;
+  entries: SkillEntry[];
 }
 
 export interface TaskBranch {
@@ -722,6 +758,19 @@ export interface TaskMemoryUsage {
   createdAt: string;
 }
 
+export interface MemoryItem {
+  id: string;
+  scope: string;
+  scopeId?: string | null;
+  key: string;
+  value: string;
+  confidence: number;
+  source: string;
+  isUserEditable: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PreferenceCandidate {
   id: string;
   taskId?: string | null;
@@ -857,6 +906,10 @@ export interface TaskSummary {
   branchName?: string | null;
   taskBranch?: string | null;
   targetBranch: string;
+  workspaceKind: string;
+  sourcePath: string;
+  originalWriteAuthorized: boolean;
+  workspaceEstimatedBytes: number;
   agentStage: string;
   latestValidationStatus: DeliveryReportStatus | 'cancelled' | 'timedOut';
   latestDiffSummary: string;
@@ -920,6 +973,11 @@ export interface AgentSessionSummary {
   status: string;
   stage: string;
   checkpointId?: string | null;
+  iterations: number;
+  repairRound: number;
+  maxRepairRounds: number;
+  validationRequest?: AgentValidationRequest | null;
+  validationRound: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -938,6 +996,7 @@ export interface TaskValidationRound {
   id: string;
   taskId: string;
   roundIndex: number;
+  repairRound: number;
   status: string;
   commandRunId?: string | null;
   analysis: string;
@@ -968,7 +1027,7 @@ export interface TaskDetail {
   approvals: ApprovalSummary[];
   artifacts: TaskArtifact[];
   artifactFiles: TaskArtifactFile[];
-  agentSession?: AgentSessionSummary | null;
+  agentSession: AgentSessionSummary | null;
   timeline: AgentTimelineEvent[];
   validationRounds: TaskValidationRound[];
   mergeRecords: TaskMergeRecord[];
@@ -991,4 +1050,3 @@ export interface ApprovalSummary {
 }
 
 export type ApprovalDecision = 'approved' | 'rejected' | 'revise';
-

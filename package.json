@@ -6,8 +6,9 @@
   "type": "module",
   "packageManager": "npm@10.9.3",
   "scripts": {
-    "check": "npm run check:architecture && npm run check:frontend && npm run check:release",
+    "check": "npm run check:architecture && npm run check:contracts && npm run check:frontend && npm run check:release",
     "check:architecture": "node tests/architecture/verify-architecture.mjs",
+    "check:contracts": "node tests/contracts/verify-ipc-contract.mjs",
     "check:frontend": "node tests/frontend/verify-s6-ui.mjs",
     "check:release": "node tests/release/verify-d-line-release-smoke.mjs",
     "check:d-line-release": "node scripts/check-d-line-release-smoke.mjs",

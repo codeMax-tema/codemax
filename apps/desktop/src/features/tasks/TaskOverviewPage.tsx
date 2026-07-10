@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { DiffEditor, loader } from '@monaco-editor/react';
 import {
   AlertCircle,
@@ -34,7 +34,14 @@ import {
 import * as monaco from 'monaco-editor';
 
 import {
+  advanceAgentTask,
+  decideApproval,
+  getContextSources,
+  getContractBreachRecords,
+  getPrivacyLedgerEntries,
+  getRunContract,
   getTaskDetail,
+  getTokenBudgetSummary,
   generateTaskDelivery,
   generateTaskDiff,
   generateTaskProofPack,
@@ -59,18 +66,25 @@ import type {
   GeneratedTaskDiff,
   GeneratedTaskProofPack,
   AgentValidationCycleResult,
+  ApprovalDecision,
+  ApprovalSummary,
   CommandLogPage,
   CommandOutputStream,
+  ContextSource,
+  ContractBreachRecord,
   DeliveryReviewState,
   DeliveryScoreState,
   PreparedTaskMerge,
+  PrivacyLedgerEntry,
   RiskLevel,
+  RunContract,
   TaskCommandRun,
   TaskDetail,
   TaskDiffFile,
   TaskMergeCommandResult,
   TaskProofPackScore,
   TaskValidationRunSummary,
+  TokenBudgetSummary,
 } from '@/types/domain';
 
 loader.config({ monaco });
@@ -88,10 +102,17 @@ type VisibleRiskItem = {
   label?: string;
 };
 
+type TaskInspectorData = {
+  runContract: RunContract | null;
+  privacyEntries: PrivacyLedgerEntry[];
+  tokenBudget: TokenBudgetSummary | null;
+  contextSources: ContextSource[];
+  contractBreaches: ContractBreachRecord[];
+};
+
 export function TaskOverviewPage() {
   const locale = useAppStore((state) => state.locale);
   const selectedTaskId = useAppStore((state) => state.selectedTaskId);
-  const setNewTaskDialogOpen = useAppStore((state) => state.setNewTaskDialogOpen);
   const selectedTaskIdRef = useRef(selectedTaskId);
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
@@ -116,6 +137,15 @@ export function TaskOverviewPage() {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [mergeCommitMessage, setMergeCommitMessage] = useState('');
   const [isAgentCycleRunning, setIsAgentCycleRunning] = useState(false);
+  const [approvalComments, setApprovalComments] = useState<Record<string, string>>({});
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
+  const [followupDraft, setFollowupDraft] = useState('');
+  const [isFollowupSending, setIsFollowupSending] = useState(false);
+  const [followupError, setFollowupError] = useState<string | null>(null);
+  const [inspectorData, setInspectorData] = useState<TaskInspectorData | null>(null);
+  const [inspectorLoading, setInspectorLoading] = useState(false);
+  const [inspectorError, setInspectorError] = useState<string | null>(null);
 
   const visibleDiff = generatedDiff;
   const visibleDelivery = generatedDelivery;
@@ -144,15 +174,30 @@ export function TaskOverviewPage() {
   const visibleTokenBudgetSummary = visibleReview?.tokenBudgetSummary ?? null;
   const visibleMerge = preparedMerge;
   const taskRecord = taskDetail?.task ?? null;
+  const isGitTask = taskRecord ? Boolean(taskRecord.taskBranch || taskRecord.targetBranch) : true;
   const visibleCommandRuns = taskDetail?.commandRuns ?? visibleDelivery?.report.runs ?? [];
+  const visibleValidationRuns = visibleCommandRuns.filter(isValidationCommandRun);
   const visibleTodos = taskDetail?.todos ?? [];
   const visibleTimeline = taskDetail?.timeline ?? [];
   const visibleValidationRounds = taskDetail?.validationRounds ?? [];
+  const visibleMergeRecords = taskDetail?.mergeRecords ?? [];
+  const visibleApprovals = taskDetail?.approvals ?? [];
+  const pendingApprovals = visibleApprovals.filter((approval) => !approval.decision);
   const deliveryStatus = visibleDelivery?.report.overallStatus ?? 'notRun';
   const taskTitle = taskRecord?.title ?? t('tasks.execution.noTaskTitle', locale);
   const taskSubtitle = taskRecord
     ? `${formatTaskStatus(taskRecord.status, locale)} · ${taskRecord.repositoryPath}`
     : t('tasks.execution.noTaskBody', locale);
+  const taskBranchLabel = taskRecord
+    ? isGitTask
+      ? taskRecord.branchName ?? '-'
+      : t('repository.kind.directory', locale)
+    : '-';
+  const targetBranchLabel = taskRecord
+    ? isGitTask
+      ? taskRecord.targetBranch || '-'
+      : t('repository.kind.directory', locale)
+    : '-';
   const selectedFile =
     visibleDiff?.files.find((file) => file.path === selectedFilePath) ?? visibleDiff?.files[0] ?? null;
   const selectedFileLarge = selectedFile ? isLargeDiffFile(selectedFile) : false;
@@ -185,7 +230,54 @@ export function TaskOverviewPage() {
     setMergeDialogOpen(false);
     setLargeDiffExpanded(false);
     setMergeCommitMessage('');
+    setApprovalComments({});
+    setApprovalError(null);
+    setDecidingApprovalId(null);
+    setInspectorData(null);
+    setInspectorError(null);
   }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (!selectedTaskId) {
+      setInspectorData(null);
+      setInspectorError(null);
+      return;
+    }
+
+    const taskId = selectedTaskId;
+    let cancelled = false;
+    setInspectorLoading(true);
+    setInspectorError(null);
+
+    Promise.all([
+      getRunContract(taskId),
+      getPrivacyLedgerEntries(taskId),
+      getTokenBudgetSummary(taskId),
+      getContextSources(taskId),
+      getContractBreachRecords(taskId),
+    ])
+      .then(([runContract, privacyEntries, tokenBudget, contextSources, contractBreaches]) => {
+        if (cancelled || selectedTaskIdRef.current !== taskId) {
+          return;
+        }
+        setInspectorData({ runContract, privacyEntries, tokenBudget, contextSources, contractBreaches });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled && selectedTaskIdRef.current === taskId) {
+          setInspectorData(null);
+          setInspectorError(normalizeDiffError(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled && selectedTaskIdRef.current === taskId) {
+          setInspectorLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTaskId, taskDetail?.task.updatedAt]);
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -216,6 +308,43 @@ export function TaskOverviewPage() {
       cancelled = true;
     };
   }, [selectedTaskId]);
+
+  useEffect(() => {
+    const taskId = selectedTaskId;
+    const taskStatus = taskDetail?.task.status;
+    if (!taskId || (!isAgentCycleRunning && !isFollowupSending && !shouldAutoRefreshTask(taskStatus))) {
+      return;
+    }
+
+    const activeTaskId = taskId;
+
+    let cancelled = false;
+    const intervalMs = taskStatus === 'awaitingApproval' ? 1_500 : 2_500;
+
+    async function refreshTaskDetailWhileActive() {
+      try {
+        const detail = await getTaskDetail(activeTaskId);
+        if (!cancelled && selectedTaskIdRef.current === activeTaskId) {
+          setTaskDetail(detail);
+          setTaskError(null);
+        }
+      } catch (error) {
+        if (!cancelled && selectedTaskIdRef.current === activeTaskId) {
+          setTaskError(normalizeDiffError(error));
+        }
+      }
+    }
+
+    void refreshTaskDetailWhileActive();
+    const intervalId = window.setInterval(() => {
+      void refreshTaskDetailWhileActive();
+    }, intervalMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isAgentCycleRunning, isFollowupSending, selectedTaskId, taskDetail?.task.status]);
 
   useEffect(() => {
     if (!mergeDialogOpen && visibleMerge) {
@@ -267,6 +396,10 @@ export function TaskOverviewPage() {
   }
 
   async function handleGenerateDiff() {
+    if (!isGitTask) {
+      setDiffError(t('tasks.execution.gitUnavailable', locale));
+      return;
+    }
     await loadTaskDiff();
   }
 
@@ -334,6 +467,66 @@ export function TaskOverviewPage() {
     }
   }
 
+  async function handleFollowupSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const taskId = selectedTaskIdRef.current;
+    const message = followupDraft.trim();
+    if (!taskId || !message || isFollowupSending) {
+      return;
+    }
+
+    setIsFollowupSending(true);
+    setFollowupError(null);
+    try {
+      await advanceAgentTask(taskId, {
+        reason: 'user_followup',
+        userMessage: message,
+        requireApproval: true,
+      });
+      setFollowupDraft('');
+      await refreshSelectedTaskDetail(taskId);
+    } catch (error) {
+      if (selectedTaskIdRef.current === taskId) {
+        setFollowupError(normalizeDiffError(error));
+      }
+    } finally {
+      if (selectedTaskIdRef.current === taskId) {
+        setIsFollowupSending(false);
+      }
+    }
+  }
+
+  async function handleApprovalDecision(approval: ApprovalSummary, decision: ApprovalDecision) {
+    const taskId = selectedTaskIdRef.current;
+    if (!taskId) {
+      return;
+    }
+
+    setDecidingApprovalId(approval.id);
+    setApprovalError(null);
+    try {
+      await decideApproval({
+        approvalId: approval.id,
+        decision,
+        comment: approvalComments[approval.id]?.trim() || undefined,
+      });
+      setApprovalComments((current) => {
+        const next = { ...current };
+        delete next[approval.id];
+        return next;
+      });
+      await refreshSelectedTaskDetail(taskId);
+    } catch (error) {
+      if (selectedTaskIdRef.current === taskId) {
+        setApprovalError(normalizeDiffError(error));
+      }
+    } finally {
+      if (selectedTaskIdRef.current === taskId) {
+        setDecidingApprovalId(null);
+      }
+    }
+  }
+
   async function handleRunAgentValidationCycle() {
     const taskId = selectedTaskId;
     if (!taskId) {
@@ -394,10 +587,18 @@ export function TaskOverviewPage() {
   }
 
   async function handlePrepareMerge() {
+    if (!isGitTask) {
+      setMergeError(t('tasks.execution.gitUnavailable', locale));
+      return;
+    }
     await loadMergePreparation();
   }
 
   async function handleOpenMergeDialog() {
+    if (!isGitTask) {
+      setMergeError(t('tasks.execution.gitUnavailable', locale));
+      return;
+    }
     const refreshedDiff = await loadTaskDiff({ reportMergeError: true });
     if (!refreshedDiff) {
       return;
@@ -528,16 +729,38 @@ export function TaskOverviewPage() {
                 {t('tasks.execution.repositoryPath', locale)} <strong>{taskRecord.repositoryPath}</strong>
               </span>
               <span>
+                {t('tasks.execution.sourcePath', locale)} <strong>{taskRecord.sourcePath}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.workspaceKind', locale)}{' '}
+                <strong>{formatWorkspaceKind(taskRecord.workspaceKind, locale)}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.workspaceEstimatedBytes', locale)}{' '}
+                <strong>{formatBytes(taskRecord.workspaceEstimatedBytes)}</strong>
+              </span>
+              <span>
+                {t('tasks.execution.originalWriteAuthorized', locale)}{' '}
+                <strong>
+                  {t(
+                    taskRecord.originalWriteAuthorized
+                      ? 'tasks.execution.originalWriteAuthorizedYes'
+                      : 'tasks.execution.originalWriteAuthorizedNo',
+                    locale,
+                  )}
+                </strong>
+              </span>
+              <span>
                 {t('tasks.execution.worktreePath', locale)} <strong>{taskRecord.worktreePath ?? '-'}</strong>
               </span>
               <span>
-                {t('tasks.execution.taskBranch', locale)} <strong>{taskRecord.branchName ?? '-'}</strong>
+                {t('tasks.execution.taskBranch', locale)} <strong>{taskBranchLabel}</strong>
               </span>
               <span>
                 {t('tasks.execution.repositoryId', locale)} <strong>{taskRecord.repositoryId}</strong>
               </span>
               <span>
-                {t('tasks.execution.targetBranch', locale)} <strong>{taskRecord.targetBranch || '-'}</strong>
+                {t('tasks.execution.targetBranch', locale)} <strong>{targetBranchLabel}</strong>
               </span>
               <span>
                 {t('tasks.execution.agentStage', locale)} <strong>{formatTaskStatus(taskRecord.agentStage, locale)}</strong>
@@ -578,16 +801,23 @@ export function TaskOverviewPage() {
                 />
                 <MetricPill
                   label={t('tasks.execution.agentIterations', locale)}
-                  value={(agentCycleResult?.iterations ?? 0).toString()}
+                  value={(agentCycleResult?.iterations ?? taskDetail?.agentSession?.iterations ?? 0).toString()}
                 />
                 <MetricPill
                   label={t('tasks.execution.agentRepairRound', locale)}
-                  value={formatRepairRound(agentCycleResult?.state.repairRound, agentCycleResult?.state.maxRepairRounds)}
+                  value={formatRepairRound(
+                    agentCycleResult?.state.repairRound ?? taskDetail?.agentSession?.repairRound,
+                    agentCycleResult?.state.maxRepairRounds ?? taskDetail?.agentSession?.maxRepairRounds,
+                  )}
                 />
               </div>
               <div className="agent-validation-request">
                 <span>{t('tasks.execution.agentValidationRequest', locale)}</span>
-                <code>{formatValidationRequest(agentCycleResult?.state.validationRequest)}</code>
+                <code>
+                  {formatValidationRequest(
+                    agentCycleResult?.state.validationRequest ?? taskDetail?.agentSession?.validationRequest,
+                  )}
+                </code>
               </div>
               {agentCycleError ? (
                 <div className="diff-error-banner" role="alert">
@@ -623,6 +853,104 @@ export function TaskOverviewPage() {
           </div>
         </section>
 
+        <section className="task-approvals-panel" aria-label={t('approvals.pendingList', locale)}>
+          <header className="approval-card-header">
+            <div>
+              <span className="approval-risk-pill risk-medium">{t('approvals.policyValue', locale)}</span>
+              <h3>{t('approvals.pendingList', locale)}</h3>
+            </div>
+            <time>{pendingApprovals.length} / {visibleApprovals.length}</time>
+          </header>
+
+          {approvalError ? (
+            <div className="diff-error-banner" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{approvalError}</span>
+            </div>
+          ) : null}
+
+          {pendingApprovals.length ? (
+            <div className="approval-list">
+              {pendingApprovals.map((approval) => (
+                <article className="task-approval-card approval-card" key={approval.id}>
+                  <header className="approval-card-header">
+                    <div>
+                      <span className={cn('approval-risk-pill', `risk-${approval.riskLevel}`)}>
+                        {t(`approvals.risk.${approval.riskLevel}`, locale)}
+                      </span>
+                      <h4>{approval.content.split('\n')[0] ?? approval.content}</h4>
+                    </div>
+                    <time>{formatTaskTime(approval.createdAt)}</time>
+                  </header>
+
+                  <dl className="approval-detail-grid">
+                    <div>
+                      <dt>{t('approvals.taskId', locale)}</dt>
+                      <dd>{approval.taskId}</dd>
+                    </div>
+                    <div>
+                      <dt>{t('approvals.type', locale)}</dt>
+                      <dd>{approval.approvalType ?? 'command'}</dd>
+                    </div>
+                    <div className="wide">
+                      <dt>{t('approvals.operation', locale)}</dt>
+                      <dd>
+                        <code>{approval.content}</code>
+                      </dd>
+                    </div>
+                    <div className="wide">
+                      <dt>{t('approvals.reason', locale)}</dt>
+                      <dd>{approval.reason ?? t('approvals.noReason', locale)}</dd>
+                    </div>
+                  </dl>
+
+                  <label className="approval-comment">
+                    <span>{t('approvals.comment', locale)}</span>
+                    <textarea
+                      value={approvalComments[approval.id] ?? ''}
+                      onChange={(event) =>
+                        setApprovalComments((current) => ({
+                          ...current,
+                          [approval.id]: event.target.value,
+                        }))
+                      }
+                      placeholder={t('approvals.commentPlaceholder', locale)}
+                    />
+                  </label>
+
+                  <footer className="approval-actions">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={decidingApprovalId === approval.id}
+                      onClick={() => handleApprovalDecision(approval, 'revise')}
+                    >
+                      {t('approvals.revise', locale)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={decidingApprovalId === approval.id}
+                      onClick={() => handleApprovalDecision(approval, 'rejected')}
+                    >
+                      {t('approvals.reject', locale)}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={decidingApprovalId === approval.id}
+                      onClick={() => handleApprovalDecision(approval, 'approved')}
+                    >
+                      {t('approvals.approve', locale)}
+                    </Button>
+                  </footer>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="delivery-empty-state">{t('approvals.emptyTitle', locale)}</div>
+          )}
+        </section>
+
         <section className="execution-section">
           <button type="button" className="execution-collapse">
             <CircleDot className="h-4 w-4" aria-hidden="true" />
@@ -633,10 +961,13 @@ export function TaskOverviewPage() {
             {visibleTimeline.length > 0 ? (
               visibleTimeline.map((event) => (
                 <article key={event.eventId} className="task-timeline-row">
-                  <span>{event.eventType}</span>
+                  <span>{formatTimelineEventType(event.eventType)}</span>
                   <div>
-                    <strong>{event.message}</strong>
-                    <small>{formatTaskStatus(event.stage, locale)} · {formatTaskTime(event.createdAt)}</small>
+                    <strong>{formatTimelineEventMessage(event, locale)}</strong>
+                    <small>
+                      {formatTaskStatus(event.stage, locale)} · {formatTaskTime(event.createdAt)}
+                      {formatTimelineEventDetail(event) ? ` · ${formatTimelineEventDetail(event)}` : ''}
+                    </small>
                   </div>
                 </article>
               ))
@@ -669,11 +1000,18 @@ export function TaskOverviewPage() {
               <span>{t('tasks.execution.codeChanges', locale)}</span>
               <strong>{formatDiffStat(visibleDiff?.additions ?? 0, visibleDiff?.deletions ?? 0)}</strong>
             </div>
-            <Button type="button" size="sm" variant="secondary" onClick={handleGenerateDiff}>
+            <Button type="button" size="sm" variant="secondary" onClick={handleGenerateDiff} disabled={!isGitTask || isDiffLoading}>
               <RefreshCw className={cn('h-3.5 w-3.5', isDiffLoading && 'diff-spin')} aria-hidden="true" />
               {isDiffLoading ? t('tasks.execution.generatingDiff', locale) : t('tasks.execution.reviewDiff', locale)}
             </Button>
           </div>
+
+          {!isGitTask ? (
+            <div className="directory-mode-note diff-error-banner" role="status">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{t('tasks.execution.gitUnavailable', locale)}</span>
+            </div>
+          ) : null}
 
           <div className="diff-meta-strip">
             <span>
@@ -830,8 +1168,8 @@ export function TaskOverviewPage() {
                 <MetricPill label={t('tasks.execution.reportFailed', locale)} value={(visibleDelivery?.report.failedCount ?? 0).toString()} />
               </div>
               <div className="validation-run-table" aria-label={t('tasks.execution.validationRuns', locale)}>
-                {visibleCommandRuns.length > 0 ? (
-                  visibleCommandRuns.map((run) => <ValidationRunRow key={run.runId} run={run} />)
+                {visibleValidationRuns.length > 0 ? (
+                  visibleValidationRuns.map((run) => <ValidationRunRow key={run.runId} run={run} />)
                 ) : (
                   <div className="delivery-empty-state">{t('tasks.execution.noValidationRuns', locale)}</div>
                 )}
@@ -841,10 +1179,12 @@ export function TaskOverviewPage() {
                   visibleValidationRounds.map((round) => (
                     <article key={round.id} className="validation-round-row">
                       <strong>
-                        {t('tasks.execution.validationRound', locale)} {round.roundIndex} · {round.status}
+                        {t('tasks.execution.validationRound', locale)} {round.roundIndex} · {round.status} · repair {round.repairRound}
                       </strong>
-                      <span>{round.analysis || round.validationSummary}</span>
+                      <span>{round.validationSummary}</span>
+                      <small>{round.analysis || '-'}</small>
                       <small>{round.repairSummary || '-'}</small>
+                      <code>{round.commandRunId ?? '-'}</code>
                     </article>
                   ))
                 ) : (
@@ -1134,6 +1474,54 @@ export function TaskOverviewPage() {
               </div>
             </article>
 
+            <article className="s12-inspector-panel">
+              <header>
+                <PanelRight className="h-4 w-4" aria-hidden="true" />
+                <span>{t('tasks.s12.inspector.title', locale)}</span>
+              </header>
+              {inspectorLoading ? <section>{t('tasks.s12.inspector.loading', locale)}</section> : null}
+              {inspectorError ? <section className="s12-inspector-error">{inspectorError}</section> : null}
+              {inspectorData ? (
+                <div className="s12-inspector-grid">
+                  <section>
+                    <strong>{t('tasks.s12.inspector.contract', locale)}</strong>
+                    {inspectorData.runContract ? (
+                      <>
+                        <span>{inspectorData.runContract.mode} / {inspectorData.runContract.permissionLevel} / {inspectorData.runContract.networkPolicy}</span>
+                        <small>{inspectorData.runContract.validationCommand ?? t('tasks.s12.inspector.notConfigured', locale)}</small>
+                        <small>{inspectorData.runContract.allowedPaths.length} {t('tasks.s12.inspector.paths', locale)} · {inspectorData.runContract.allowedCommands.length} {t('tasks.s12.inspector.commands', locale)}</small>
+                      </>
+                    ) : <small>{t('tasks.s12.empty', locale)}</small>}
+                  </section>
+                  <section>
+                    <strong>{t('tasks.s12.inspector.privacyEntries', locale)}</strong>
+                    <span>{inspectorData.privacyEntries.length} {t('tasks.s12.privacy.entries', locale)}</span>
+                    {inspectorData.privacyEntries.slice(-3).reverse().map((entry) => (
+                      <small key={entry.id} className={cn(entry.blocked && 'is-blocked', entry.redacted && 'is-redacted')}>
+                        {entry.action} · {entry.sourceRef}
+                      </small>
+                    ))}
+                  </section>
+                  <section>
+                    <strong>{t('tasks.s12.inspector.contextSources', locale)}</strong>
+                    {inspectorData.tokenBudget ? (
+                      <span>{inspectorData.tokenBudget.usedTokensEstimate} / {inspectorData.tokenBudget.budgetLimit} tokens</span>
+                    ) : <span>{t('tasks.s12.empty', locale)}</span>}
+                    <small>{inspectorData.contextSources.filter((source) => source.included).length} / {inspectorData.contextSources.length} {t('tasks.s12.inspector.included', locale)}</small>
+                  </section>
+                  <section>
+                    <strong>{t('tasks.s12.inspector.breaches', locale)}</strong>
+                    <span>{inspectorData.contractBreaches.length}</span>
+                    {inspectorData.contractBreaches.slice(-3).reverse().map((breach) => (
+                      <small key={breach.id} className={cn(breach.status !== 'resolved' && 'is-blocked')}>
+                        {breach.breachType} · {breach.status}
+                      </small>
+                    ))}
+                  </section>
+                </div>
+              ) : null}
+            </article>
+
             <article className="s12-model-arena-panel">
               <header>
                 <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
@@ -1167,7 +1555,13 @@ export function TaskOverviewPage() {
               </strong>
             </div>
             <div className="merge-actions">
-              <Button type="button" size="sm" variant="secondary" onClick={handlePrepareMerge}>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={handlePrepareMerge}
+                disabled={!isGitTask || isMergePreparing}
+              >
                 <RefreshCw className={cn('h-3.5 w-3.5', isMergePreparing && 'diff-spin')} aria-hidden="true" />
                 {isMergePreparing ? t('tasks.execution.mergePreparing', locale) : t('tasks.execution.mergePrecheck', locale)}
               </Button>
@@ -1175,13 +1569,20 @@ export function TaskOverviewPage() {
                 type="button"
                 size="sm"
                 onClick={handleOpenMergeDialog}
-                disabled={isMergeLoading}
+                disabled={!isGitTask || isMergeLoading}
               >
                 <GitMerge className={cn('h-3.5 w-3.5', isMergeLoading && 'diff-spin')} aria-hidden="true" />
                 {isMergeLoading ? t('tasks.execution.merging', locale) : t('tasks.execution.mergeAction', locale)}
               </Button>
             </div>
           </div>
+
+          {!isGitTask ? (
+            <div className="directory-mode-note diff-error-banner" role="status">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{t('tasks.execution.directoryMode', locale)}</span>
+            </div>
+          ) : null}
 
           <div className="merge-meta-strip">
             <span>
@@ -1245,6 +1646,22 @@ export function TaskOverviewPage() {
                   <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
                   {formatMergeBlocker(blocker, locale)}
                 </span>
+              ))}
+            </div>
+          ) : null}
+
+          {visibleMergeRecords.length ? (
+            <div className="merge-history-list">
+              {visibleMergeRecords.map((record) => (
+                <article key={record.id} className="merge-history-row">
+                  <strong>
+                    {record.sourceBranch} {'->'} {record.targetBranch}
+                  </strong>
+                  <small>
+                    {record.status} · {record.commitSha || '-'} · {formatTaskTime(record.createdAt)}
+                  </small>
+                  <code>{record.recordPath ?? '-'}</code>
+                </article>
               ))}
             </div>
           ) : null}
@@ -1364,20 +1781,33 @@ export function TaskOverviewPage() {
       </aside>
 
       <section className="execution-followup-composer" aria-label={t('tasks.execution.followup', locale)}>
-        <button type="button" onClick={() => setNewTaskDialogOpen(true)}>
-          {t('tasks.execution.followupPlaceholder', locale)}
-        </button>
-        <div>
-          <span>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('tasks.composer.attach', locale)}
-          </span>
-          <span>{t('tasks.new.permissions.network', locale)}</span>
-          <span>5.5 {t('tasks.new.strength.deep', locale)}</span>
-          <Button type="button" size="icon" onClick={() => setNewTaskDialogOpen(true)}>
-            <SendHorizontal className="h-4 w-4" aria-hidden="true" />
-          </Button>
-        </div>
+        <form className="execution-followup-form" onSubmit={handleFollowupSubmit}>
+          <input
+            className="execution-followup-input"
+            value={followupDraft}
+            onChange={(event) => {
+              setFollowupDraft(event.target.value);
+              if (followupError) {
+                setFollowupError(null);
+              }
+            }}
+            placeholder={t('tasks.execution.followupPlaceholder', locale)}
+            aria-label={t('tasks.execution.followupPlaceholder', locale)}
+            disabled={!taskRecord || isFollowupSending}
+          />
+          {followupError ? <small className="execution-followup-error" role="alert">{followupError}</small> : null}
+          <div>
+            <span>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('tasks.composer.attach', locale)}
+            </span>
+            <span>{t('tasks.new.permissions.network', locale)}</span>
+            <span>{isFollowupSending ? t('tasks.execution.followupSending', locale) : t('tasks.composer.agentMode', locale)}</span>
+            <Button type="submit" size="icon" disabled={!taskRecord || !followupDraft.trim() || isFollowupSending}>
+              <SendHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+        </form>
       </section>
     </div>
   );
@@ -1562,6 +1992,21 @@ function CommandLogStream({
   );
 }
 
+function shouldAutoRefreshTask(status: TaskDetail['task']['status'] | undefined) {
+  return status === 'queued'
+    || status === 'planning'
+    || status === 'editing'
+    || status === 'validating'
+    || status === 'repairing'
+    || status === 'awaitingApproval'
+    || status === 'awaitingReview';
+}
+
+function isValidationCommandRun(run: CommandRunLike) {
+  const purpose = 'purpose' in run ? run.purpose : undefined;
+  return purpose == null || purpose === 'validation';
+}
+
 function commandRunPurposeLabel(run: CommandRunLike, locale: Locale) {
   const purpose = 'purpose' in run ? run.purpose : 'validation';
   const key = `tasks.execution.commandPurpose.${purpose ?? 'validation'}`;
@@ -1601,6 +2046,42 @@ function EnvironmentRow({
   );
 }
 
+function formatTimelineEventType(eventType: string) {
+  return eventType.replaceAll('.', ' ');
+}
+
+function formatTimelineEventMessage(
+  event: { eventType: string; message: string; payload: Record<string, unknown> },
+  locale: Locale,
+) {
+  if (event.eventType === 'task.stage.changed') {
+    const phase = typeof event.payload.phase === 'string' ? event.payload.phase : event.message;
+    return `${t('tasks.execution.agentStage', locale)}: ${phase}`;
+  }
+
+  if (event.eventType === 'validation.failed') {
+    return t('tasks.execution.agentValidationRequest', locale);
+  }
+
+  return event.message;
+}
+
+function formatTimelineEventDetail(event: { payload: Record<string, unknown> }) {
+  if (typeof event.payload.command === 'string') {
+    return event.payload.command;
+  }
+
+  if (typeof event.payload.run_id === 'string') {
+    return event.payload.run_id;
+  }
+
+  if (typeof event.payload.checkpoint_id === 'string') {
+    return event.payload.checkpoint_id;
+  }
+
+  return '';
+}
+
 function formatDuration(durationMs?: number | null) {
   if (durationMs === null || durationMs === undefined) {
     return '-';
@@ -1628,7 +2109,7 @@ function formatRepairRound(repairRound?: number | null, maxRepairRounds?: number
 function formatValidationRequest(
   request?: { command: string; cwd: string; reason?: string; status?: string } | null,
 ) {
-  if (!request) {
+  if (!request?.command || !request.cwd) {
     return '-';
   }
 
@@ -1655,6 +2136,16 @@ function formatTaskStatus(status: string, locale: Locale) {
   const statusKey = `status.${status}`;
   const label = t(statusKey, locale);
   return label === statusKey ? status : label;
+}
+
+function formatWorkspaceKind(workspaceKind: string, locale: Locale) {
+  const key = {
+    git_worktree: 'tasks.execution.workspace.gitWorktree',
+    git_initialized_worktree: 'tasks.execution.workspace.gitInitializedWorktree',
+    isolated_copy: 'tasks.execution.workspace.isolatedCopy',
+    direct_original: 'tasks.execution.workspace.directOriginal',
+  }[workspaceKind] ?? 'tasks.execution.workspace.legacy';
+  return t(key, locale);
 }
 
 function formatDeliveryReviewSummary(

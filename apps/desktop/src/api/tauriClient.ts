@@ -4,6 +4,8 @@ import { normalizeIpcError } from '@/api/errors';
 import type {
   CommandCancelResult,
   CommandExecutionResult,
+  AgentHealthResponse,
+  AgentServiceStatus,
   AgentTaskResponse,
   AgentValidationCycleResult,
   ApprovalDecision,
@@ -14,6 +16,7 @@ import type {
   CommandLogPage,
   CommandLogSummary,
   CommandOutputStream,
+  CommandRunPurpose,
   ContextSource,
   ContractBreachRecord,
   DeliveryReviewState,
@@ -31,6 +34,7 @@ import type {
   QualityGateRecord,
   ModelArenaDecisionRecord,
   LogCleanupResult,
+  MemoryItem,
   ModelConnectionTestResult,
   ModelConfigView,
   PreparedTaskMerge,
@@ -38,6 +42,7 @@ import type {
   RepositoryDirtyStatus,
   RepositorySummary,
   RuleHitRecord,
+  SkillSource,
   RunContract,
   RunContractPreview,
   StartupHealthResponse,
@@ -96,6 +101,10 @@ export function getStorageRoots() {
   return invokeCommand<StorageRootsResponse>('get_storage_roots');
 }
 
+export function getSkillSources(projectPath?: string | null) {
+  return invokeCommand<SkillSource[]>('get_skill_sources', { projectPath: projectPath ?? null });
+}
+
 export function getStorageUsage() {
   return invokeCommand<StorageUsageResponse>('get_storage_usage');
 }
@@ -120,6 +129,22 @@ export function emitAppReady() {
   return invokeCommand<void>('emit_app_ready');
 }
 
+export function startAgentService() {
+  return invokeCommand<AgentServiceStatus>('start_agent_service');
+}
+
+export function stopAgentService() {
+  return invokeCommand<AgentServiceStatus>('stop_agent_service');
+}
+
+export function getAgentServiceStatus() {
+  return invokeCommand<AgentServiceStatus>('get_agent_service_status');
+}
+
+export function checkAgentHealth() {
+  return invokeCommand<AgentHealthResponse>('check_agent_health');
+}
+
 export interface ExecuteTaskCommandRequest {
   taskId: string;
   runId?: string;
@@ -127,6 +152,7 @@ export interface ExecuteTaskCommandRequest {
   cwd: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  purpose?: CommandRunPurpose;
 }
 
 export function executeTaskCommand(request: ExecuteTaskCommandRequest) {
@@ -236,6 +262,10 @@ export interface TaskStartPreviewRequest {
   description: string;
   modelId?: string;
   validationCommand?: string;
+  mode?: string;
+  reasoningEffort?: string;
+  permissionLevel?: string;
+  networkPolicy?: string;
 }
 
 export function getPrivacyPreview(request: TaskStartPreviewRequest) {
@@ -307,6 +337,39 @@ export interface PreferenceCandidatesRequest {
 
 export function getPreferenceCandidates(request: PreferenceCandidatesRequest = {}) {
   return invokeCommand<PreferenceCandidate[]>('preference_candidates', { request });
+}
+
+export interface MemoryItemsRequest {
+  scope?: string;
+  scopeId?: string;
+  limit?: number;
+}
+
+export function listMemoryItems(request: MemoryItemsRequest = {}) {
+  return invokeCommand<MemoryItem[]>('memory_items', { request });
+}
+
+export interface SaveMemoryItemRequest {
+  id?: string;
+  scope: string;
+  scopeId?: string;
+  key: string;
+  value: string;
+  confidence?: number;
+  source?: string;
+  isUserEditable?: boolean;
+}
+
+export function saveMemoryItem(request: SaveMemoryItemRequest) {
+  return invokeCommand<MemoryItem>('save_memory_item', { request });
+}
+
+export interface DeleteMemoryItemRequest {
+  memoryId: string;
+}
+
+export function deleteMemoryItem(request: DeleteMemoryItemRequest) {
+  return invokeCommand<void>('delete_memory_item', { request });
 }
 
 export interface CreatePreferenceCandidateRequest {
@@ -444,10 +507,43 @@ export interface CreateTaskRecordRequest {
   taskType?: TaskType | null;
   modelId?: string | null;
   validationCommand?: string | null;
+  mode?: string | null;
+  reasoningEffort?: string | null;
+  permissionLevel?: string | null;
+  networkPolicy?: string | null;
+  workMode?: 'daily' | 'coding' | null;
+  workspaceStrategy?: 'initialize_git' | 'isolated_copy' | 'direct_original' | null;
+  originalWriteAuthorized?: boolean;
+  workspaceExclusions?: string[];
 }
 
 export function createTaskRecord(request: CreateTaskRecordRequest) {
   return invokeCommand<TaskSummary>('create_task_record', { request });
+}
+
+export interface EstimateTaskWorkspaceRequest {
+  repositoryPath: string;
+  workspaceStrategy?: 'initialize_git' | 'isolated_copy' | 'direct_original' | null;
+  workspaceExclusions?: string[];
+}
+
+export interface TaskWorkspaceEstimate {
+  sourcePath: string;
+  destinationRoot: string;
+  workspaceKind: string;
+  estimatedBytes: number;
+  estimatedFiles: number;
+  availableBytes: number;
+  sufficientSpace: boolean;
+  cleanupPolicy: string;
+}
+
+export function estimateTaskWorkspace(request: EstimateTaskWorkspaceRequest) {
+  return invokeCommand<TaskWorkspaceEstimate>('estimate_task_workspace', { request });
+}
+
+export function deleteTaskRecord(taskId: string, rollbackInitialization = false) {
+  return invokeCommand<void>('delete_task_record', { taskId, rollbackInitialization });
 }
 
 export interface ListTasksRequest {

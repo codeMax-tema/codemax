@@ -9,6 +9,7 @@ pub mod privacy;
 pub mod safety;
 pub mod secrets;
 pub mod storage;
+pub mod workspace;
 
 use tauri::Manager;
 
@@ -62,6 +63,8 @@ pub fn run() {
             commands::privacy::active_profile,
             commands::privacy::context_sources,
             commands::privacy::contract_breach_records,
+            commands::privacy::delete_memory_item,
+            commands::privacy::memory_items,
             commands::privacy::memory_used_by_task,
             commands::privacy::preference_candidate_create,
             commands::privacy::preference_candidate_decide,
@@ -75,6 +78,7 @@ pub fn run() {
             commands::privacy::profile_update,
             commands::privacy::record_contract_breach,
             commands::privacy::record_memory_used_by_task,
+            commands::privacy::save_memory_item,
             commands::privacy::run_contract,
             commands::privacy::run_contract_preview,
             commands::privacy::token_budget_summary,
@@ -82,6 +86,7 @@ pub fn run() {
             commands::repository::validate_repository_path,
             commands::repository::get_repository_current_branch,
             commands::repository::get_repository_dirty_status,
+            commands::skills::get_skill_sources,
             commands::s12_evidence::generate_task_proof_pack,
             commands::s12_evidence::get_delivery_review_state,
             commands::s12_evidence::record_quality_gate_result,
@@ -92,6 +97,8 @@ pub fn run() {
             commands::s12_evidence::resolve_hook_approval,
             commands::s12_evidence::record_model_arena_decision,
             commands::tasks::create_task_record,
+            commands::tasks::estimate_task_workspace,
+            commands::tasks::delete_task_record,
             commands::tasks::list_tasks,
             commands::tasks::get_task_record,
             commands::tasks::get_task_detail,

@@ -31,6 +31,12 @@ const B_LINE_FULL_CLOSURE_MIGRATION: &str =
 const C_LINE_DELIVERY_REVIEW_MIGRATION_VERSION: &str = "0007_c_line_delivery_review";
 const C_LINE_DELIVERY_REVIEW_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0007_c_line_delivery_review.sql");
+const AGENT_TELEMETRY_MIGRATION_VERSION: &str = "0008_agent_telemetry";
+const AGENT_TELEMETRY_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0008_agent_telemetry.sql");
+const TASK_WORKSPACE_CONTRACT_MIGRATION_VERSION: &str = "0009_task_workspace_contract";
+const TASK_WORKSPACE_CONTRACT_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0009_task_workspace_contract.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -109,6 +115,11 @@ impl SqliteStore {
         self.apply_migration(
             C_LINE_DELIVERY_REVIEW_MIGRATION_VERSION,
             C_LINE_DELIVERY_REVIEW_MIGRATION,
+        )?;
+        self.apply_migration(AGENT_TELEMETRY_MIGRATION_VERSION, AGENT_TELEMETRY_MIGRATION)?;
+        self.apply_migration(
+            TASK_WORKSPACE_CONTRACT_MIGRATION_VERSION,
+            TASK_WORKSPACE_CONTRACT_MIGRATION,
         )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
@@ -340,6 +351,11 @@ pub struct TaskRecord {
     pub repository_path: String,
     pub worktree_path: Option<String>,
     pub branch_name: Option<String>,
+    pub target_branch: String,
+    pub workspace_kind: String,
+    pub source_path: String,
+    pub original_write_authorized: bool,
+    pub workspace_estimated_bytes: i64,
     pub model_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -356,6 +372,11 @@ pub struct NewTask<'a> {
     pub repository_path: &'a str,
     pub worktree_path: Option<&'a str>,
     pub branch_name: Option<&'a str>,
+    pub target_branch: &'a str,
+    pub workspace_kind: &'a str,
+    pub source_path: &'a str,
+    pub original_write_authorized: bool,
+    pub workspace_estimated_bytes: i64,
     pub model_id: Option<&'a str>,
 }
 
@@ -373,8 +394,9 @@ impl<'conn> TaskRepository<'conn> {
         self.connection.execute(
             "INSERT INTO tasks (
                 id, title, description, type, status, repository_path, worktree_path,
-                branch_name, model_id, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                branch_name, target_branch, workspace_kind, source_path,
+                original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
             params![
                 task.id,
                 task.title,
@@ -384,6 +406,11 @@ impl<'conn> TaskRepository<'conn> {
                 task.repository_path,
                 task.worktree_path,
                 task.branch_name,
+                task.target_branch,
+                task.workspace_kind,
+                task.source_path,
+                bool_to_i64(task.original_write_authorized),
+                task.workspace_estimated_bytes,
                 task.model_id,
                 now,
             ],
@@ -396,7 +423,8 @@ impl<'conn> TaskRepository<'conn> {
         self.connection
             .query_row(
                 "SELECT id, title, description, type, status, repository_path, worktree_path,
-                    branch_name, model_id, created_at, updated_at, completed_at
+                    branch_name, target_branch, workspace_kind, source_path,
+                    original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at, completed_at
                  FROM tasks WHERE id = ?1",
                 params![task_id],
                 map_task_record,
@@ -408,6 +436,18 @@ impl<'conn> TaskRepository<'conn> {
     pub fn get_required(&self, task_id: &str) -> StorageResult<TaskRecord> {
         self.get(task_id)?
             .ok_or_else(|| StorageError::NotFound(format!("task {task_id}")))
+    }
+
+    pub fn delete(&self, task_id: &str) -> StorageResult<()> {
+        let deleted = self
+            .connection
+            .execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
+
+        if deleted == 0 {
+            return Err(StorageError::NotFound(format!("task {task_id}")));
+        }
+
+        Ok(())
     }
 
     pub fn list_recent(
@@ -422,7 +462,8 @@ impl<'conn> TaskRepository<'conn> {
             (Some(repository_path), Some(status)) => {
                 let mut statement = self.connection.prepare(
                     "SELECT id, title, description, type, status, repository_path, worktree_path,
-                        branch_name, model_id, created_at, updated_at, completed_at
+                        branch_name, target_branch, workspace_kind, source_path,
+                        original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at, completed_at
                      FROM tasks
                      WHERE repository_path = ?1 AND status = ?2
                      ORDER BY updated_at DESC, created_at DESC
@@ -434,7 +475,8 @@ impl<'conn> TaskRepository<'conn> {
             (Some(repository_path), None) => {
                 let mut statement = self.connection.prepare(
                     "SELECT id, title, description, type, status, repository_path, worktree_path,
-                        branch_name, model_id, created_at, updated_at, completed_at
+                        branch_name, target_branch, workspace_kind, source_path,
+                        original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at, completed_at
                      FROM tasks
                      WHERE repository_path = ?1
                      ORDER BY updated_at DESC, created_at DESC
@@ -446,7 +488,8 @@ impl<'conn> TaskRepository<'conn> {
             (None, Some(status)) => {
                 let mut statement = self.connection.prepare(
                     "SELECT id, title, description, type, status, repository_path, worktree_path,
-                        branch_name, model_id, created_at, updated_at, completed_at
+                        branch_name, target_branch, workspace_kind, source_path,
+                        original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at, completed_at
                      FROM tasks
                      WHERE status = ?1
                      ORDER BY updated_at DESC, created_at DESC
@@ -458,7 +501,8 @@ impl<'conn> TaskRepository<'conn> {
             (None, None) => {
                 let mut statement = self.connection.prepare(
                     "SELECT id, title, description, type, status, repository_path, worktree_path,
-                        branch_name, model_id, created_at, updated_at, completed_at
+                        branch_name, target_branch, workspace_kind, source_path,
+                        original_write_authorized, workspace_estimated_bytes, model_id, created_at, updated_at, completed_at
                      FROM tasks
                      ORDER BY updated_at DESC, created_at DESC
                      LIMIT ?1",
@@ -1305,6 +1349,31 @@ impl<'conn> MemoryRepository<'conn> {
             .map_err(StorageError::from)
     }
 
+    pub fn list_memory_items(
+        &self,
+        scope: Option<&str>,
+        scope_id: Option<&str>,
+        limit: i64,
+    ) -> StorageResult<Vec<MemoryItemRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, scope, scope_id, key, value, confidence, source,
+                is_user_editable, created_at, updated_at
+             FROM memory_items
+             WHERE (?1 IS NULL OR scope = ?1)
+               AND (?2 IS NULL OR scope_id = ?2)
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![scope, scope_id, limit], map_memory_item_record)?;
+        let mut items = Vec::new();
+
+        for row in rows {
+            items.push(row?);
+        }
+
+        Ok(items)
+    }
+
     pub fn delete_memory_item(&self, memory_id: &str) -> StorageResult<()> {
         self.connection
             .execute("DELETE FROM memory_items WHERE id = ?1", params![memory_id])?;
@@ -1488,6 +1557,11 @@ pub struct AgentSessionRecord {
     pub status: String,
     pub stage: String,
     pub checkpoint_id: Option<String>,
+    pub iterations: i64,
+    pub repair_round: i64,
+    pub max_repair_rounds: i64,
+    pub validation_request_json: String,
+    pub validation_round: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1499,6 +1573,11 @@ pub struct NewAgentSession<'a> {
     pub status: &'a str,
     pub stage: &'a str,
     pub checkpoint_id: Option<&'a str>,
+    pub iterations: i64,
+    pub repair_round: i64,
+    pub max_repair_rounds: i64,
+    pub validation_request_json: &'a str,
+    pub validation_round: i64,
 }
 
 pub struct AgentSessionRepository<'conn> {
@@ -1514,14 +1593,20 @@ impl<'conn> AgentSessionRepository<'conn> {
         let now = now_text();
         self.connection.execute(
             "INSERT INTO agent_sessions (
-                id, task_id, status, stage, checkpoint_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                id, task_id, status, stage, checkpoint_id, iterations, repair_round,
+                max_repair_rounds, validation_request_json, validation_round, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 session.id,
                 session.task_id,
                 session.status,
                 session.stage,
                 session.checkpoint_id,
+                session.iterations,
+                session.repair_round,
+                session.max_repair_rounds,
+                session.validation_request_json,
+                session.validation_round,
                 now,
             ],
         )?;
@@ -1533,19 +1618,30 @@ impl<'conn> AgentSessionRepository<'conn> {
         let now = now_text();
         self.connection.execute(
             "INSERT INTO agent_sessions (
-                id, task_id, status, stage, checkpoint_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                id, task_id, status, stage, checkpoint_id, iterations, repair_round,
+                max_repair_rounds, validation_request_json, validation_round, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 stage = excluded.stage,
                 checkpoint_id = excluded.checkpoint_id,
-                updated_at = ?6",
+                iterations = excluded.iterations,
+                repair_round = excluded.repair_round,
+                max_repair_rounds = excluded.max_repair_rounds,
+                validation_request_json = excluded.validation_request_json,
+                validation_round = excluded.validation_round,
+                updated_at = ?11",
             params![
                 session.id,
                 session.task_id,
                 session.status,
                 session.stage,
                 session.checkpoint_id,
+                session.iterations,
+                session.repair_round,
+                session.max_repair_rounds,
+                session.validation_request_json,
+                session.validation_round,
                 now,
             ],
         )?;
@@ -1556,7 +1652,8 @@ impl<'conn> AgentSessionRepository<'conn> {
     pub fn get_for_task(&self, task_id: &str) -> StorageResult<Option<AgentSessionRecord>> {
         self.connection
             .query_row(
-                "SELECT id, task_id, status, stage, checkpoint_id, created_at, updated_at
+                "SELECT id, task_id, status, stage, checkpoint_id, iterations, repair_round,
+                    max_repair_rounds, validation_request_json, validation_round, created_at, updated_at
                  FROM agent_sessions
                  WHERE task_id = ?1
                  ORDER BY updated_at DESC, id DESC
@@ -1571,7 +1668,8 @@ impl<'conn> AgentSessionRepository<'conn> {
     fn get_required(&self, session_id: &str) -> StorageResult<AgentSessionRecord> {
         self.connection
             .query_row(
-                "SELECT id, task_id, status, stage, checkpoint_id, created_at, updated_at
+                "SELECT id, task_id, status, stage, checkpoint_id, iterations, repair_round,
+                    max_repair_rounds, validation_request_json, validation_round, created_at, updated_at
                  FROM agent_sessions WHERE id = ?1",
                 params![session_id],
                 map_agent_session_record,
@@ -1665,6 +1763,7 @@ pub struct ValidationRoundRecord {
     pub id: String,
     pub task_id: String,
     pub round_index: i64,
+    pub repair_round: i64,
     pub status: String,
     pub command_run_id: Option<String>,
     pub analysis: String,
@@ -1679,6 +1778,7 @@ pub struct NewValidationRound<'a> {
     pub id: &'a str,
     pub task_id: &'a str,
     pub round_index: i64,
+    pub repair_round: i64,
     pub status: &'a str,
     pub command_run_id: Option<&'a str>,
     pub analysis: &'a str,
@@ -1699,13 +1799,14 @@ impl<'conn> ValidationRoundRepository<'conn> {
         let now = now_text();
         self.connection.execute(
             "INSERT INTO validation_rounds (
-                id, task_id, round_index, status, command_run_id, analysis,
+                id, task_id, round_index, repair_round, status, command_run_id, analysis,
                 repair_summary, validation_summary, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
             params![
                 round.id,
                 round.task_id,
                 round.round_index,
+                round.repair_round,
                 round.status,
                 round.command_run_id,
                 round.analysis,
@@ -1720,7 +1821,7 @@ impl<'conn> ValidationRoundRepository<'conn> {
 
     pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ValidationRoundRecord>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, task_id, round_index, status, command_run_id, analysis,
+            "SELECT id, task_id, round_index, repair_round, status, command_run_id, analysis,
                 repair_summary, validation_summary, created_at, updated_at
              FROM validation_rounds
              WHERE task_id = ?1
@@ -1739,7 +1840,7 @@ impl<'conn> ValidationRoundRepository<'conn> {
     fn get_required(&self, round_id: &str) -> StorageResult<ValidationRoundRecord> {
         self.connection
             .query_row(
-                "SELECT id, task_id, round_index, status, command_run_id, analysis,
+                "SELECT id, task_id, round_index, repair_round, status, command_run_id, analysis,
                     repair_summary, validation_summary, created_at, updated_at
                  FROM validation_rounds WHERE id = ?1",
                 params![round_id],
@@ -3020,10 +3121,15 @@ fn map_task_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
         repository_path: row.get(5)?,
         worktree_path: row.get(6)?,
         branch_name: row.get(7)?,
-        model_id: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        completed_at: row.get(11)?,
+        target_branch: row.get(8)?,
+        workspace_kind: row.get(9)?,
+        source_path: row.get(10)?,
+        original_write_authorized: i64_to_bool(row.get(11)?),
+        workspace_estimated_bytes: row.get(12)?,
+        model_id: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        completed_at: row.get(16)?,
     })
 }
 
@@ -3174,8 +3280,13 @@ fn map_agent_session_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSe
         status: row.get(2)?,
         stage: row.get(3)?,
         checkpoint_id: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        iterations: row.get(5)?,
+        repair_round: row.get(6)?,
+        max_repair_rounds: row.get(7)?,
+        validation_request_json: row.get(8)?,
+        validation_round: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -3196,13 +3307,14 @@ fn map_validation_round_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Vali
         id: row.get(0)?,
         task_id: row.get(1)?,
         round_index: row.get(2)?,
-        status: row.get(3)?,
-        command_run_id: row.get(4)?,
-        analysis: row.get(5)?,
-        repair_summary: row.get(6)?,
-        validation_summary: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        repair_round: row.get(3)?,
+        status: row.get(4)?,
+        command_run_id: row.get(5)?,
+        analysis: row.get(6)?,
+        repair_summary: row.get(7)?,
+        validation_summary: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -3412,6 +3524,11 @@ mod tests {
                 repository_path: "D:/projects/demo",
                 worktree_path: Some("D:/codemax/app-data/worktrees/task-001"),
                 branch_name: Some("agent/task-001"),
+                target_branch: "main",
+                workspace_kind: "git_worktree",
+                source_path: "D:/projects/demo",
+                original_write_authorized: false,
+                workspace_estimated_bytes: 0,
                 model_id: None,
             })
             .expect("create fixture task");
@@ -3490,6 +3607,20 @@ mod tests {
                 );
                 INSERT INTO schema_migrations (version, applied_at)
                 VALUES ('0001_initial', '1783372800');
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    repository_path TEXT NOT NULL,
+                    worktree_path TEXT,
+                    branch_name TEXT,
+                    model_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
                 CREATE TABLE storage_policies (
                     id TEXT PRIMARY KEY,
                     scope TEXT NOT NULL,
@@ -3549,6 +3680,30 @@ mod tests {
     }
 
     #[test]
+    fn migrates_task_workspace_contract_fields() {
+        let store = migrated_store();
+        let mut statement = store
+            .connection()
+            .prepare("PRAGMA table_info(tasks)")
+            .expect("prepare tasks table info");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query tasks columns")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect tasks columns");
+
+        for column in [
+            "target_branch",
+            "workspace_kind",
+            "source_path",
+            "original_write_authorized",
+            "workspace_estimated_bytes",
+        ] {
+            assert!(columns.iter().any(|value| value == column), "missing {column}");
+        }
+    }
+
+    #[test]
     fn task_repository_round_trips_task_metadata() {
         let store = migrated_store();
         let tasks = TaskRepository::new(store.connection());
@@ -3563,12 +3718,22 @@ mod tests {
                 repository_path: "D:/projects/demo",
                 worktree_path: Some("D:/codemax/app-data/worktrees/task-001"),
                 branch_name: Some("agent/task-001"),
+                target_branch: "main",
+                workspace_kind: "git_worktree",
+                source_path: "D:/projects/demo",
+                original_write_authorized: false,
+                workspace_estimated_bytes: 4096,
                 model_id: Some("model-default"),
             })
             .expect("create task");
 
         assert_eq!(created.id, "task-001");
         assert_eq!(created.repository_path, "D:/projects/demo");
+        assert_eq!(created.target_branch, "main");
+        assert_eq!(created.workspace_kind, "git_worktree");
+        assert_eq!(created.workspace_estimated_bytes, 4096);
+        assert_eq!(created.source_path, "D:/projects/demo");
+        assert!(!created.original_write_authorized);
         assert_eq!(
             created.worktree_path.as_deref(),
             Some("D:/codemax/app-data/worktrees/task-001")

@@ -136,7 +136,8 @@ class MemoryService:
         with self.lock:
             data = self.load_data()
             data.messages.append(saved)
-            data.memories = upsert_memories(data.memories, extract_memories_from_message(saved))
+            extracted = extract_memories_from_message(saved)
+            data.memories = upsert_memories(data.memories, persistable_memories(extracted))
             self.save_data(data)
 
         return saved
@@ -225,7 +226,7 @@ class MemoryService:
                 for message in candidates
                 for memory in extract_memories_from_message(message)
             ]
-            data.memories = upsert_memories(data.memories, extracted)
+            data.memories = upsert_memories(data.memories, persistable_memories(extracted))
             self.save_data(data)
 
         return extracted
@@ -517,6 +518,10 @@ def upsert_memories(existing: list[MemoryItem], new_items: list[MemoryItem]) -> 
         else:
             by_id[item.id] = item.model_copy(update={"created_at": current.created_at})
     return sorted(by_id.values(), key=lambda item: item.updated_at)
+
+
+def persistable_memories(items: list[MemoryItem]) -> list[MemoryItem]:
+    return [item for item in items if item.category != "preference"]
 
 
 def upsert_summary(existing: list[RollingSummary], summary: RollingSummary) -> list[RollingSummary]:

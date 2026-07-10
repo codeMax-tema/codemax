@@ -20,8 +20,9 @@ use crate::{
     privacy::redact_known_user_paths,
     safety::{self, RiskAssessment},
     storage::{
-        AgentEventRepository, ApprovalRecord, ApprovalRepository, CommandRunRecord,
-        CommandRunRepository, ContractBreachRepository, ManagedStorage, NewAgentEvent, NewApproval,
+        AgentEventRepository, AgentSessionRepository, ApprovalRecord, ApprovalRepository,
+        CommandRunRecord, CommandRunRepository, ContractBreachRepository, ManagedStorage,
+        NewAgentEvent, NewApproval,
         NewCommandRun, NewContractBreachRecord, NewValidationRound, RunContractRepository,
         StorageError, StoragePolicyRepository, TaskRecord, TaskRepository,
         ValidationRoundRepository,
@@ -122,7 +123,11 @@ pub(crate) async fn run_task_command(
         .as_deref()
         .expect("run id is assigned")
         .to_string();
-    let is_validation = is_validation_run(&run_id);
+    let is_validation = request
+        .purpose
+        .as_deref()
+        .map(|purpose| purpose == "validation")
+        .unwrap_or_else(|| is_validation_run(&run_id));
     let command_stage = if is_validation {
         "validating"
     } else {
@@ -654,7 +659,7 @@ fn record_command_result(
         .record(NewCommandRun {
             id: &result.run_id,
             task_id: &result.task_id,
-            purpose: command_run_purpose(&result.run_id),
+            purpose: &result.purpose,
             command: &result.command,
             cwd: &result.cwd,
             status: &result.status,
@@ -708,11 +713,17 @@ fn record_validation_round(
             }),
         )?;
     }
+    let repair_round = AgentSessionRepository::new(connection)
+        .get_for_task(task_id)
+        .map_err(storage_error)?
+        .map(|session| session.repair_round)
+        .unwrap_or(0);
     ValidationRoundRepository::new(connection)
         .record(NewValidationRound {
             id: &format!("validation-round-{}", uuid::Uuid::new_v4()),
             task_id,
             round_index: next_validation_round_index(connection, task_id)?,
+            repair_round,
             status,
             command_run_id: Some(&result.run_id),
             analysis: &analysis,
@@ -839,14 +850,6 @@ fn record_agent_event_with_connection(
 
 fn is_validation_run(run_id: &str) -> bool {
     run_id.starts_with("validation-")
-}
-
-fn command_run_purpose(run_id: &str) -> &'static str {
-    if is_validation_run(run_id) {
-        "validation"
-    } else {
-        "diagnostic"
-    }
 }
 
 fn stored_secret_redactor(storage: &ManagedStorage) -> LogRedactor {
@@ -1175,6 +1178,10 @@ fn command_execution_error(error: CommandExecutionError) -> CommandError {
             "command.registryUnavailable",
             "Command execution registry is temporarily unavailable.",
         ),
+        CommandExecutionError::InvalidPurpose(_) => CommandError::new(
+            "command.invalidPurpose",
+            "Unsupported command purpose.",
+        ),
         CommandExecutionError::LogFile(error) => CommandError::new(
             "command.logFileUnavailable",
             format!("Unable to write command log file: {error}"),
@@ -1277,6 +1284,11 @@ mod tests {
                 repository_path: root.to_string_lossy().as_ref(),
                 worktree_path: Some(worktree.to_string_lossy().as_ref()),
                 branch_name: Some("codex/task-001"),
+                target_branch: "main",
+                workspace_kind: "git_worktree",
+                source_path: root.to_string_lossy().as_ref(),
+                original_write_authorized: false,
+                workspace_estimated_bytes: 0,
                 model_id: None,
             })
             .expect("create task");
@@ -1295,6 +1307,7 @@ mod tests {
             cwd: guard.cwd.to_string_lossy().to_string(),
             env: BTreeMap::new(),
             timeout_ms: Some(30_000),
+            purpose: None,
         };
 
         (storage, task, guard, request)
@@ -1313,6 +1326,7 @@ mod tests {
             cwd: "D:/repo/worktree".to_string(),
             env: BTreeMap::new(),
             timeout_ms: Some(30_000),
+            purpose: None,
         };
         let redactor = LogRedactor::from_values(vec!["sk-test-secret-value".to_string()]);
         let content = approval_content(&request, &redactor);
@@ -1442,5 +1456,16 @@ mod tests {
 
         enforce_command_safety(&storage, &task, &request, &guard, &redactor)
             .expect("approved command should be allowed");
+    }
+
+    #[test]
+    fn invalid_command_purpose_maps_to_stable_error_without_echoing_input() {
+        let error = command_execution_error(CommandExecutionError::InvalidPurpose(
+            "user-controlled-purpose".to_string(),
+        ));
+
+        assert_eq!(error.code, "command.invalidPurpose");
+        assert_eq!(error.message, "Unsupported command purpose.");
+        assert!(!error.message.contains("user-controlled-purpose"));
     }
 }

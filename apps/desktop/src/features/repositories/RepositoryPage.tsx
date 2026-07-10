@@ -32,7 +32,9 @@ export function RepositoryPage() {
       pushNotification({
         kind: 'info',
         title: t('repository.loaded', locale),
-        description: nextRepository.branch,
+        description: nextRepository.isGitRepository
+          ? nextRepository.branch ?? t('repository.noBranch', locale)
+          : t('repository.kind.directory', locale),
       });
     } catch (error) {
       const normalized = normalizeDisplayError(error);
@@ -130,7 +132,11 @@ function RepositorySummaryPanel({ repository }: { repository: RepositorySummary 
             </dt>
             <dd className="mt-2 flex min-w-0 items-center gap-2 text-base font-semibold">
               <GitBranch className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate">{repository.branch}</span>
+              <span className="truncate">
+                {repository.isGitRepository
+                  ? repository.branch ?? t('repository.noBranch', locale)
+                  : t('repository.kind.directory', locale)}
+              </span>
             </dd>
           </div>
           <div className="sm:col-span-2">
@@ -149,13 +155,17 @@ function RepositorySummaryPanel({ repository }: { repository: RepositorySummary 
           {t('repository.workspaceStatus', locale)}
         </p>
         <div className="mt-4 flex items-center gap-3">
-          {repository.dirty ? (
+          {repository.isGitRepository && repository.dirty ? (
             <AlertCircle className="h-5 w-5 text-destructive" />
           ) : (
             <CheckCircle2 className="h-5 w-5 text-primary" />
           )}
           <span className="text-sm font-medium">
-            {repository.dirty ? t('repository.status.dirty', locale) : t('repository.status.clean', locale)}
+            {repository.isGitRepository
+              ? repository.dirty
+                ? t('repository.status.dirty', locale)
+                : t('repository.status.clean', locale)
+              : t('repository.status.notGit', locale)}
           </span>
         </div>
       </div>
