@@ -682,8 +682,8 @@ fn record_validation_round(
     let analysis = validation_round_analysis(status, result);
     let repair_summary = if passed {
         "Validation passed; no repair is pending."
-    } else if status == "cancelled" {
-        "Validation was cancelled; awaiting user direction before repair."
+    } else if matches!(status, "cancelled" | "timedOut") {
+        "Validation stopped before completion; awaiting user direction before repair."
     } else {
         "Awaiting Agent repair analysis."
     };
@@ -733,7 +733,7 @@ fn record_validation_round(
         .map_err(storage_error)?;
     let next_status = if passed {
         "readyToMerge"
-    } else if status == "cancelled" {
+    } else if matches!(status, "cancelled" | "timedOut") {
         "needsIntervention"
     } else {
         "repairing"
@@ -775,7 +775,7 @@ fn validation_round_analysis(status: &str, result: &CommandExecutionResult) -> S
 }
 
 fn validation_failure_stage(status: &str) -> &'static str {
-    if status == "cancelled" {
+    if matches!(status, "cancelled" | "timedOut") {
         "needsIntervention"
     } else {
         "repairing"
@@ -1212,6 +1212,11 @@ mod tests {
         storage::{ModelConfigRepository, NewModelConfig, NewTask, SqliteStore, StorageRoots},
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn timed_out_validation_requires_intervention_instead_of_repairing() {
+        assert_eq!(validation_failure_stage("timedOut"), "needsIntervention");
+    }
 
     #[test]
     fn safe_file_stem_removes_path_separators_and_limits_length() {

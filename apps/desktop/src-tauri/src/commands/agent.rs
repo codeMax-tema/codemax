@@ -16,8 +16,8 @@ use crate::{
     },
     storage::{
         AgentEventRepository, AgentSessionRepository, CommandRunRepository, ManagedStorage,
-        NewAgentEvent, NewAgentSession, NewTodo, RunContractRepository, StorageError, TaskRepository,
-        TodoRepository,
+        NewAgentEvent, NewAgentSession, NewTodo, RunContractRepository, StorageError,
+        TaskRepository, TodoRepository,
     },
 };
 
@@ -121,7 +121,11 @@ pub async fn create_agent_task(
     storage: State<'_, ManagedStorage>,
     mut request: AgentTaskCreateRequest,
 ) -> AppResult<Value> {
-    let contract = load_contract_budget(storage.inner(), &request.task_id)?;
+    let mut contract = load_contract_budget(storage.inner(), &request.task_id)?;
+    let model_id =
+        resolve_new_task_model_id(request.model_id.as_deref(), contract.model_id.as_deref())?;
+    request.model_id = Some(model_id.clone());
+    contract.model_id = Some(model_id);
     let sanitized_title = sanitize_for_model_context(&request.title, "agent.task.title");
     let sanitized_description =
         sanitize_for_model_context(&request.description, "agent.task.description");
@@ -366,6 +370,7 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
         .filter(|request| !request.is_null())
         .unwrap_or_else(|| json!({}));
     let validation_request_json = serde_json::to_string(&validation_request).map_err(json_error)?;
+    let repair_file_edits = current_repair_file_edits(state);
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let connection = store.connection();
     let previous_session = AgentSessionRepository::new(connection)
@@ -465,15 +470,21 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
         }
     }
 
-    let repair_started = phase == "repairing"
-        && previous_session.as_ref().map_or(true, |session| {
-            session.status != phase || session.repair_round != repair_round
-        });
+    let repair_round_advanced = repair_round > 0
+        && previous_session
+            .as_ref()
+            .map_or(true, |session| session.repair_round < repair_round);
+    let repair_started = repair_round_advanced
+        || (phase == "repairing"
+            && previous_session.as_ref().map_or(true, |session| {
+                session.status != phase || session.repair_round != repair_round
+            }));
     let repair_finished = phase == "validating"
         && repair_round > 0
         && previous_session.as_ref().map_or(true, |session| {
             session.status != phase || session.repair_round != repair_round
         });
+    let repair_failed = phase == "failed" && repair_round > 0 && repair_round_advanced;
 
     if repair_started {
         record_agent_event_with_connection(
@@ -486,9 +497,28 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
                 "repair_round": repair_round,
                 "max_repair_rounds": max_repair_rounds,
                 "repair_plan": state.get("repairPlan").cloned().unwrap_or_else(|| json!({})),
+                "file_edits": repair_file_edits.clone(),
             }),
         )?;
-    } else if repair_finished {
+    }
+
+    if repair_failed {
+        record_agent_event_with_connection(
+            &AgentEventRepository::new(connection),
+            task_id,
+            "repair.failed",
+            "failed",
+            "Agent repair plan generation failed before workspace edits were applied.",
+            json!({
+                "repair_round": repair_round,
+                "max_repair_rounds": max_repair_rounds,
+                "repair_plan": state.get("repairPlan").cloned().unwrap_or_else(|| json!({})),
+                "file_edits": repair_file_edits.clone(),
+            }),
+        )?;
+    }
+
+    if repair_finished {
         record_agent_event_with_connection(
             &AgentEventRepository::new(connection),
             task_id,
@@ -499,11 +529,34 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
                 "repair_round": repair_round,
                 "validation_round": validation_round,
                 "validation_request": validation_request,
+                "file_edits": repair_file_edits,
             }),
         )?;
     }
 
     Ok(())
+}
+
+fn current_repair_file_edits(state: &Value) -> Value {
+    let Some(edits) = state.get("repairFileEdits").and_then(Value::as_array) else {
+        return json!([]);
+    };
+
+    Value::Array(
+        edits
+            .iter()
+            .map(|edit| {
+                let mut sanitized = edit.clone();
+                let summary = edit.get("summary").and_then(Value::as_str);
+                if let (Some(summary), Some(object)) = (summary, sanitized.as_object_mut()) {
+                    let safe_summary =
+                        sanitize_for_model_context(summary, "agent.repairFileEdit.summary");
+                    object.insert("summary".to_string(), Value::String(safe_summary.content));
+                }
+                sanitized
+            })
+            .collect(),
+    )
 }
 
 fn should_record_stage_change(
@@ -570,6 +623,24 @@ fn record_agent_event_with_connection(
     Ok(())
 }
 
+fn resolve_new_task_model_id(
+    request_model_id: Option<&str>,
+    contract_model_id: Option<&str>,
+) -> AppResult<String> {
+    request_model_id
+        .into_iter()
+        .chain(contract_model_id)
+        .map(str::trim)
+        .find(|model_id| !model_id.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            CommandError::new(
+                "agent.modelRequired",
+                "A configured model is required to create a new Agent task.",
+            )
+        })
+}
+
 fn load_contract_budget(storage: &ManagedStorage, task_id: &str) -> AppResult<ContractBudget> {
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let contract = RunContractRepository::new(store.connection())
@@ -590,17 +661,17 @@ fn load_contract_budget(storage: &ManagedStorage, task_id: &str) -> AppResult<Co
 }
 
 fn allowed_context(content: &str) -> SanitizedContent {
-    let tokens_estimate = estimate_tokens(content);
+    let placeholder = "[LOCAL_PATH]";
     SanitizedContent {
-        content: content.to_string(),
-        action: "allowed".to_string(),
-        sensitivity_level: "none".to_string(),
+        content: placeholder.to_string(),
+        action: "redacted".to_string(),
+        sensitivity_level: "local_path".to_string(),
         findings: Vec::new(),
-        redacted: false,
+        redacted: true,
         blocked: false,
-        reason: "Context source reference allowed.".to_string(),
+        reason: "Local path retained only at the runtime boundary.".to_string(),
         original_size_bytes: content.len() as i64,
-        tokens_estimate,
+        tokens_estimate: estimate_tokens(placeholder),
     }
 }
 
@@ -736,9 +807,6 @@ fn sanitize_and_record_validation_result(
 
     if let Some(command) = command.as_ref() {
         request.command = Some(command.content.clone());
-    }
-    if let Some(cwd) = cwd.as_ref() {
-        request.cwd = Some(cwd.content.clone());
     }
     request.stdout = stdout.content.clone();
     request.stderr = stderr.content.clone();
@@ -1028,6 +1096,36 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn new_agent_tasks_resolve_a_model_or_return_a_stable_error() {
+        assert_eq!(
+            resolve_new_task_model_id(Some(" request-model "), Some("contract-model"))
+                .expect("request model wins"),
+            "request-model"
+        );
+        assert_eq!(
+            resolve_new_task_model_id(None, Some(" contract-model "))
+                .expect("contract model is the fallback"),
+            "contract-model"
+        );
+
+        let error = resolve_new_task_model_id(Some("   "), None)
+            .expect_err("a new task without a model must be rejected");
+        assert_eq!(error.code, "agent.modelRequired");
+    }
+
+    #[test]
+    fn local_path_context_is_redacted_before_audit() {
+        let sanitized = allowed_context(r"C:\Users\Example\private-repository");
+
+        assert_eq!(sanitized.content, "[LOCAL_PATH]");
+        assert_eq!(sanitized.action, "redacted");
+        assert_eq!(sanitized.sensitivity_level, "local_path");
+        assert!(sanitized.redacted);
+        assert!(!sanitized.blocked);
+        assert!(!sanitized.reason.contains("private-repository"));
+    }
+
+    #[test]
     fn validation_request_ignores_terminal_or_paused_phases() {
         let state = json!({
             "phase": "needs_intervention",
@@ -1075,6 +1173,149 @@ mod tests {
         assert_eq!(stage_events.len(), 1);
         assert_eq!(stage_events[0].stage, "editing");
         assert!(stage_events[0].message.contains("editing"));
+    }
+
+    #[test]
+    fn sync_agent_state_records_repair_start_and_finish_when_round_advances_in_one_sync() {
+        let storage = test_storage("agent-repair-events");
+        seed_task(&storage, "task-repair-events");
+        let before_repair = json!({
+            "phase": "validating",
+            "checkpointIndex": 2,
+            "repairRound": 0,
+            "maxRepairRounds": 3,
+            "todos": []
+        });
+        let repaired = json!({
+            "phase": "validating",
+            "checkpointIndex": 3,
+            "repairRound": 1,
+            "maxRepairRounds": 3,
+            "repairPlan": {
+                "summary": "Fix the failing assertion",
+                "suspectedCauses": ["Incorrect return value"],
+                "nextActions": ["Update src/lib.rs"]
+            },
+            "validationRequest": {
+                "command": "cargo test",
+                "cwd": "D:/codemax/.worktrees/task-repair-events"
+            },
+            "editPlan": {
+                "edits": [{
+                    "operation": "update",
+                    "path": "src/lib.rs",
+                    "content": "pub fn fixed() -> bool { true }",
+                    "summary": "Fix the assertion"
+                }]
+            },
+            "fileEdits": [{
+                "path": "src/lib.rs",
+                "operation": "update",
+                "summary": "Initial edit"
+            }, {
+                "path": "src/lib.rs",
+                "operation": "update",
+                "summary": "Fix the assertion"
+            }],
+            "repairFileEdits": [{
+                "path": "src/lib.rs",
+                "operation": "update",
+                "summary": "token fictional-repair-summary-secret"
+            }],
+            "todos": []
+        });
+
+        sync_agent_state(&storage, "task-repair-events", &before_repair)
+            .expect("initial validation sync succeeds");
+        sync_agent_state(&storage, "task-repair-events", &repaired).expect("repair sync succeeds");
+        sync_agent_state(&storage, "task-repair-events", &repaired)
+            .expect("repeated repair sync succeeds");
+
+        let store = storage.store.lock().expect("storage lock");
+        let events = AgentEventRepository::new(store.connection())
+            .list_for_task("task-repair-events")
+            .expect("list repair events");
+        let repair_started: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "repair.started")
+            .collect();
+        let repair_finished: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "repair.finished")
+            .collect();
+
+        assert_eq!(repair_started.len(), 1);
+        assert_eq!(repair_finished.len(), 1);
+        assert!(repair_started[0]
+            .payload
+            .contains("Fix the failing assertion"));
+        assert!(repair_finished[0].payload.contains("cargo test"));
+        assert!(repair_started[0].payload.contains("\"file_edits\""));
+        assert!(repair_started[0].payload.contains("src/lib.rs"));
+        assert!(!repair_started[0].payload.contains("Initial edit"));
+        assert!(!repair_started[0]
+            .payload
+            .contains("fictional-repair-summary-secret"));
+        assert!(repair_started[0].payload.contains("token [REDACTED]"));
+        assert!(repair_finished[0].payload.contains("\"file_edits\""));
+        assert!(repair_finished[0].payload.contains("src/lib.rs"));
+        assert!(!repair_finished[0].payload.contains("Initial edit"));
+        assert!(!repair_finished[0]
+            .payload
+            .contains("fictional-repair-summary-secret"));
+        assert!(repair_finished[0].payload.contains("token [REDACTED]"));
+    }
+
+    #[test]
+    fn sync_agent_state_records_repair_failure_when_model_plan_generation_fails() {
+        let storage = test_storage("agent-repair-failed-events");
+        seed_task(&storage, "task-repair-failed-events");
+        let before_repair = json!({
+            "phase": "validating",
+            "checkpointIndex": 2,
+            "repairRound": 0,
+            "maxRepairRounds": 3,
+            "todos": []
+        });
+        let failed_repair = json!({
+            "phase": "failed",
+            "checkpointIndex": 3,
+            "repairRound": 1,
+            "maxRepairRounds": 3,
+            "repairPlan": {
+                "summary": "Validation failed; repair generation was attempted",
+                "suspectedCauses": ["Invalid model response"],
+                "nextActions": ["Review model configuration"]
+            },
+            "repairFileEdits": [],
+            "todos": []
+        });
+
+        sync_agent_state(&storage, "task-repair-failed-events", &before_repair)
+            .expect("initial sync succeeds");
+        sync_agent_state(&storage, "task-repair-failed-events", &failed_repair)
+            .expect("failed repair sync succeeds");
+        sync_agent_state(&storage, "task-repair-failed-events", &failed_repair)
+            .expect("repeated failed repair sync succeeds");
+
+        let store = storage.store.lock().expect("storage lock");
+        let events = AgentEventRepository::new(store.connection())
+            .list_for_task("task-repair-failed-events")
+            .expect("list repair failure events");
+        let repair_started: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "repair.started")
+            .collect();
+        let repair_failed: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "repair.failed")
+            .collect();
+
+        assert_eq!(repair_started.len(), 1);
+        assert_eq!(repair_failed.len(), 1);
+        assert_eq!(repair_failed[0].stage, "failed");
+        assert!(repair_failed[0].payload.contains("repair_round"));
+        assert!(repair_failed[0].payload.contains("repair_plan"));
     }
 
     fn test_storage(label: &str) -> ManagedStorage {

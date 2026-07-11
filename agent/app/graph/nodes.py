@@ -1,7 +1,15 @@
+import hashlib
 import json
+import os
+import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from app.editing.apply import EditSafetyError, apply_edit_plan
+from app.editing.models import EditingPlan, TodoPlan
 from app.graph.state import (
     AgentApproval,
     AgentFileEdit,
@@ -12,11 +20,16 @@ from app.graph.state import (
     ApprovalStatus,
     TodoStatus,
     ValidationRequest,
+    ValidationResult,
     ValidationStatus,
     append_log,
+    set_all_todo_status,
     set_todo_status,
     utc_now,
 )
+from app.model_gateway import ModelGatewayError, build_model_gateway
+from app.privacy import redact_model_context
+from app.providers import ModelMessage
 
 PLAN_TODOS = [
     AgentTodo(
@@ -43,21 +56,111 @@ PLAN_TODOS = [
 ]
 
 
+def _bounded_context_items(items: list[str], *, item_limit: int = 2_000) -> list[str]:
+    return [item[:item_limit] for item in items[-20:]]
+
+
+def _task_prompt(state: AgentState) -> str:
+    todos_json = json.dumps(
+        [todo.model_dump(mode="json") for todo in state.todos],
+        ensure_ascii=False,
+    )
+    user_messages_json = json.dumps(
+        _bounded_context_items(state.context.user_messages),
+        ensure_ascii=False,
+    )
+    notes_json = json.dumps(
+        _bounded_context_items(state.context.notes),
+        ensure_ascii=False,
+    )
+    return redact_model_context(
+        f"Task title: {state.title}\n"
+        f"Task description: {state.description}\n"
+        "Path policy: all generated paths must be workspace-relative.\n"
+        f"User messages: {user_messages_json}\n"
+        f"Context notes: {notes_json}\n"
+        f"Existing todos: {todos_json}"
+    )
+
+
+def _json_schema_response(name: str, schema: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def _safe_model_failure(stage: str, error: Exception) -> str:
+    if isinstance(error, ModelGatewayError):
+        return f"{stage} model request failed: {error.code}."
+    return f"{stage} model response was invalid ({type(error).__name__})."
+
+
+
+
+def _uses_model_workflow(state: AgentState) -> bool:
+    return state.workflow_version >= 2 and state.model_id is not None
+
+
 def plan_node(state: AgentState) -> AgentState:
     if state.phase in {AgentPhase.WAITING_APPROVAL, AgentPhase.COMPLETED, AgentPhase.FAILED}:
         return state
 
-    if state.todos:
+    if state.todos and (not _uses_model_workflow(state) or state.todo_plan is not None):
         return state.model_copy(update={"phase": AgentPhase.PLANNED, "updated_at": utc_now()})
 
-    state = state.model_copy(
+    if not _uses_model_workflow(state):
+        state = state.model_copy(
+            update={
+                "phase": AgentPhase.PLANNED,
+                "todos": PLAN_TODOS,
+                "updated_at": utc_now(),
+            }
+        )
+        return append_log(state, "Plan node used the legacy offline todo list.")
+
+    try:
+        result = build_model_gateway().chat(
+            messages=[
+                ModelMessage(
+                    role="system",
+                    content=(
+                        "Generate a task-specific todo plan. Return only JSON that matches "
+                        "the supplied schema; do not use a fixed template."
+                    ),
+                ),
+                ModelMessage(role="user", content=_task_prompt(state)),
+            ],
+            temperature=0,
+            response_format=_json_schema_response("todo_plan", TodoPlan.model_json_schema()),
+        )
+        todo_plan = TodoPlan.model_validate_json(result.content)
+    except (ModelGatewayError, ValidationError, ValueError) as error:
+        failed = state.model_copy(update={"phase": AgentPhase.FAILED, "updated_at": utc_now()})
+        return append_log(failed, _safe_model_failure("Plan", error), "error")
+
+    todos = [
+        AgentTodo(
+            id=todo.id,
+            title=todo.title,
+            description=todo.description,
+            status=TodoStatus.PENDING,
+        )
+        for todo in todo_plan.todos
+    ]
+    planned = state.model_copy(
         update={
             "phase": AgentPhase.PLANNED,
-            "todos": PLAN_TODOS,
+            "todos": todos,
+            "todo_plan": todo_plan,
             "updated_at": utc_now(),
         }
     )
-    return append_log(state, "Plan node generated the task todo list.")
+    return append_log(planned, "Plan node generated a model-driven todo list.")
 
 
 def approval_interrupt_node(state: AgentState) -> AgentState:
@@ -92,7 +195,281 @@ def approval_interrupt_node(state: AgentState) -> AgentState:
     return append_log(state, f"Approval interrupt requested: {approval.id}.")
 
 
+def _canonical_worktree_identity(worktree_path: str) -> str:
+    resolved = Path(worktree_path).expanduser().resolve(strict=False)
+    return os.path.normcase(str(resolved))
+
+
+def _stat_identity(path: Path) -> dict[str, int]:
+    return _stat_result_identity(path.stat())
+
+
+def _stat_result_identity(value: os.stat_result) -> dict[str, int]:
+    return {
+        "device": value.st_dev,
+        "inode": value.st_ino,
+        "mode": value.st_mode,
+        "size": value.st_size,
+        "modifiedNs": value.st_mtime_ns,
+        "changedNs": value.st_ctime_ns,
+    }
+
+
+def _delete_target_identity(
+    worktree_path: str, edit_path: str, *, attempts: int = 2
+) -> dict[str, object]:
+    relative_path = Path(edit_path)
+    if (
+        relative_path.is_absolute()
+        or relative_path.anchor
+        or not relative_path.parts
+        or relative_path == Path(".")
+        or any(part == ".." for part in relative_path.parts)
+    ):
+        raise OSError("Delete target must be a workspace-relative file path.")
+
+    root = Path(worktree_path).expanduser().resolve(strict=True)
+    candidate = root / relative_path
+    initial_path_stat = candidate.lstat()
+    if stat.S_ISLNK(initial_path_stat.st_mode):
+        raise OSError("Delete approval targets must not be symbolic links.")
+    resolved = candidate.resolve(strict=True)
+    try:
+        relative = resolved.relative_to(root).as_posix()
+    except ValueError as error:
+        raise OSError("Delete target must remain inside the workspace.") from error
+    if not stat.S_ISREG(initial_path_stat.st_mode) or not resolved.is_file():
+        raise OSError("Delete approval targets must be regular workspace files.")
+
+    digest = hashlib.sha256()
+    with resolved.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+        after = os.fstat(stream.fileno())
+    before_identity = _stat_result_identity(before)
+    after_identity = _stat_result_identity(after)
+    if before_identity != after_identity:
+        if attempts > 1:
+            return _delete_target_identity(worktree_path, edit_path, attempts=attempts - 1)
+        raise OSError("Delete target changed while approval evidence was collected.")
+
+    final_path_stat = candidate.lstat()
+    if stat.S_ISLNK(final_path_stat.st_mode):
+        raise OSError("Delete target changed into a symbolic link.")
+    final_identity = _stat_result_identity(final_path_stat)
+    if (
+        final_identity["device"] != after_identity["device"]
+        or final_identity["inode"] != after_identity["inode"]
+    ):
+        if attempts > 1:
+            return _delete_target_identity(worktree_path, edit_path, attempts=attempts - 1)
+        raise OSError("Delete target identity changed while approval evidence was collected.")
+    if candidate.resolve(strict=True) != resolved:
+        raise OSError("Delete target identity changed while approval evidence was collected.")
+
+    return {
+        "path": relative,
+        **final_identity,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _delete_plan_fingerprint(state: AgentState, edit_plan: EditingPlan) -> str:
+    root = Path(state.worktree_path).expanduser().resolve(strict=True)
+    workspace_identity = _stat_identity(root)
+    delete_targets = sorted(
+        (
+            _delete_target_identity(state.worktree_path, edit.path)
+            for edit in edit_plan.edits
+            if edit.operation == "delete"
+        ),
+        key=lambda target: str(target["path"]),
+    )
+    if _stat_identity(root) != workspace_identity:
+        raise OSError("Workspace changed while delete approval evidence was collected.")
+    payload = {
+        "taskId": state.task_id,
+        "worktreePath": _canonical_worktree_identity(state.worktree_path),
+        "worktreeIdentity": workspace_identity,
+        "repairRound": state.repair_round,
+        "editPlan": edit_plan.model_dump(mode="json"),
+        "deleteTargets": delete_targets,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _delete_approval_content(edit_plan: EditingPlan, fingerprint: str) -> str:
+    paths = sorted(edit.path for edit in edit_plan.edits if edit.operation == "delete")
+    return f"Approve deletion of workspace files: {', '.join(paths)} [plan:{fingerprint}]"
+
+
+def _approval_matches_delete_plan(
+    approval: AgentApproval | None,
+    approval_content: str | None,
+) -> bool:
+    return bool(
+        approval is not None
+        and approval_content is not None
+        and approval.approval_type == "model_delete"
+        and approval.content == approval_content
+    )
+
+
+def _safe_edit_failure(error: EditSafetyError | OSError) -> str:
+    if isinstance(error, OSError):
+        return "Edit transaction failed because the workspace could not be updated."
+    lowered = str(error).lower()
+    if "binary" in lowered or "utf-8" in lowered:
+        return "Edit plan was refused because a target was not safe UTF-8 text."
+    return "Edit plan failed workspace safety validation."
+
+
+def _sanitized_failed_edit_plan(edit_plan: EditingPlan) -> EditingPlan:
+    edits: list[dict[str, str]] = []
+    for edit in edit_plan.edits:
+        safe_edit = {
+            "operation": edit.operation,
+            "path": "[REDACTED]",
+            "summary": "Edit omitted after workspace safety validation.",
+        }
+        if edit.operation in {"create", "update"}:
+            safe_edit["content"] = "[REDACTED]"
+        edits.append(safe_edit)
+    return EditingPlan.model_validate({"edits": edits})
+
+
+def _sanitized_applied_edit_plan(edit_plan: EditingPlan) -> EditingPlan:
+    edits: list[dict[str, str]] = []
+    for edit in edit_plan.edits:
+        safe_edit = {
+            "operation": edit.operation,
+            "path": edit.path,
+            "summary": redact_model_context(edit.summary),
+        }
+        if edit.operation in {"create", "update"}:
+            safe_edit["content"] = "[REDACTED]"
+        edits.append(safe_edit)
+    return EditingPlan.model_validate({"edits": edits})
+
+
 def edit_node(state: AgentState) -> AgentState:
+    if state.phase in {AgentPhase.NEEDS_INTERVENTION, AgentPhase.COMPLETED, AgentPhase.FAILED}:
+        return state
+    if state.phase == AgentPhase.WAITING_APPROVAL and (
+        state.approval is None or state.approval.status != ApprovalStatus.APPROVED
+    ):
+        return state
+    if not _uses_model_workflow(state):
+        return legacy_edit_node(state)
+    if state.edit_plan_applied:
+        return state.model_copy(update={"phase": AgentPhase.EDITING, "updated_at": utc_now()})
+
+    edit_plan = state.edit_plan
+    if edit_plan is None:
+        try:
+            result = build_model_gateway().chat(
+                messages=[
+                    ModelMessage(
+                        role="system",
+                        content=(
+                            "Generate a safe, task-specific editing plan. Return only JSON "
+                            "matching the supplied schema. Paths must be workspace-relative."
+                        ),
+                    ),
+                    ModelMessage(role="user", content=_task_prompt(state)),
+                ],
+                temperature=0,
+                response_format=_json_schema_response(
+                    "editing_plan",
+                    EditingPlan.model_json_schema(),
+                ),
+            )
+            edit_plan = EditingPlan.model_validate_json(result.content)
+        except (ModelGatewayError, ValidationError, ValueError) as error:
+            failed = state.model_copy(update={"phase": AgentPhase.FAILED, "updated_at": utc_now()})
+            failed = set_all_todo_status(failed, TodoStatus.FAILED)
+            return append_log(failed, _safe_model_failure("Edit", error), "error")
+        state = state.model_copy(update={"edit_plan": edit_plan, "updated_at": utc_now()})
+
+    delete_approval_content: str | None = None
+    try:
+        if any(edit.operation == "delete" for edit in edit_plan.edits):
+            delete_approval_content = _delete_approval_content(
+                edit_plan,
+                _delete_plan_fingerprint(state, edit_plan),
+            )
+        allow_deletes = _approval_matches_delete_plan(
+            state.approval, delete_approval_content
+        ) and bool(
+            state.approval is not None and state.approval.status == ApprovalStatus.APPROVED
+        )
+        applied = apply_edit_plan(
+            state.worktree_path,
+            edit_plan,
+            allow_deletes=allow_deletes,
+        )
+    except (EditSafetyError, OSError) as error:
+        safe_message = _safe_edit_failure(error)
+        failed = state.model_copy(
+            update={
+                "phase": AgentPhase.FAILED,
+                "edit_plan": _sanitized_failed_edit_plan(edit_plan),
+                "edit_plan_applied": False,
+                "updated_at": utc_now(),
+            }
+        )
+        failed = set_all_todo_status(failed, TodoStatus.FAILED, safe_message)
+        return append_log(failed, safe_message, "error")
+
+    if applied.requires_approval:
+        paths = ", ".join(edit.path for edit in applied.pending_approval)
+        approval = (
+            state.approval
+            if _approval_matches_delete_plan(state.approval, delete_approval_content)
+            else AgentApproval(
+                id=f"approval-{state.task_id}-{state.checkpoint_index + 1}",
+                approvalType="model_delete",
+                content=delete_approval_content or "Approve deletion of workspace files.",
+                reason="Model-generated delete operations require explicit approval.",
+            )
+        )
+        waiting = state.model_copy(
+            update={
+                "phase": AgentPhase.WAITING_APPROVAL,
+                "requires_approval": True,
+                "approval": approval,
+                "updated_at": utc_now(),
+            }
+        )
+        return append_log(waiting, f"Edit plan requires approval before deleting: {paths}.")
+
+    file_edits = [
+        AgentFileEdit(
+            path=edit.path,
+            operation=edit.operation,
+            summary=redact_model_context(edit.summary),
+        )
+        for edit in applied.file_edits
+    ]
+    is_repair = state.phase == AgentPhase.REPAIRING
+    state = set_all_todo_status(state, TodoStatus.IN_PROGRESS)
+    edited = state.model_copy(
+        update={
+            "phase": AgentPhase.EDITING,
+            "requires_approval": False,
+            "file_edits": [*state.file_edits, *file_edits],
+            "repair_file_edits": file_edits if is_repair else [],
+            "edit_plan": _sanitized_applied_edit_plan(edit_plan),
+            "edit_plan_applied": True,
+            "updated_at": utc_now(),
+        }
+    )
+    return append_log(edited, f"Edit node applied {len(file_edits)} model-driven file edits.")
+
+
+def legacy_edit_node(state: AgentState) -> AgentState:
     if state.phase in {
         AgentPhase.WAITING_APPROVAL,
         AgentPhase.NEEDS_INTERVENTION,
@@ -177,21 +554,126 @@ def validate_node(state: AgentState) -> AgentState:
     return append_log(state, f"Validation node requested command: {request.command}.")
 
 
+def _workspace_change_context(state: AgentState) -> str:
+    root = Path(state.worktree_path).expanduser().resolve()
+    sections: list[str] = []
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--no-ext-diff", "--unified=3", "--"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        completed = None
+    if completed is not None and completed.returncode == 0 and completed.stdout.strip():
+        sections.append("Git diff:\n" + completed.stdout[:24_000])
+
+    snapshots: list[str] = []
+    seen: set[Path] = set()
+    for file_edit in reversed(state.file_edits[-20:]):
+        relative = Path(file_edit.path)
+        if relative.is_absolute() or relative.anchor:
+            continue
+        target = (root / relative).resolve(strict=False)
+        if target in seen or not target.is_relative_to(root):
+            continue
+        seen.add(target)
+        if not target.is_file():
+            snapshots.append(f"--- {relative.as_posix()} ({file_edit.operation}; unavailable) ---")
+            continue
+        try:
+            content = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            snapshots.append(f"--- {relative.as_posix()} ({file_edit.operation}; non-text) ---")
+            continue
+        snapshots.append(
+            f"--- {relative.as_posix()} ({file_edit.operation}) ---\n{content[:8_000]}"
+        )
+    if snapshots:
+        sections.append("Edited file snapshots:\n" + "\n".join(reversed(snapshots)))
+    context = "\n\n".join(sections) or "No textual workspace diff was available."
+    return redact_model_context(context)
+
+
+def _bounded_validation_output(text: str, limit: int = 12_000) -> str:
+    if len(text) <= limit:
+        return text
+    head_size = limit // 3
+    tail_size = limit - head_size
+    return f"{text[:head_size]}\n...[validation output truncated]...\n{text[-tail_size:]}"
+
+
+def _generate_model_repair_plan(state: AgentState, result: ValidationResult) -> EditingPlan:
+    prompt = redact_model_context(
+        f"{_task_prompt(state)}\n"
+        f"Repair round: {state.repair_round + 1} of {state.max_repair_rounds}\n"
+        f"Validation command: {result.command}\n"
+        f"Exit code: {result.exit_code}\n\n"
+        f"Validation stdout:\n{_bounded_validation_output(result.stdout)}\n\n"
+        f"Validation stderr:\n{_bounded_validation_output(result.stderr)}\n\n"
+        f"Workspace changes:\n{_workspace_change_context(state)}"
+    )
+    response = build_model_gateway().chat(
+        messages=[
+            ModelMessage(
+                role="system",
+                content=(
+                    "Generate a minimal structured repair editing plan from the real validation "
+                    "output and workspace changes. Return only JSON matching the supplied schema. "
+                    "Do not require special markers in validation output. Paths must be "
+                    "workspace-relative."
+                ),
+            ),
+            ModelMessage(role="user", content=prompt),
+        ],
+        temperature=0,
+        response_format=_json_schema_response(
+            "repair_editing_plan",
+            EditingPlan.model_json_schema(),
+        ),
+    )
+    return EditingPlan.model_validate_json(response.content)
+
+
 def error_analysis_node(state: AgentState) -> AgentState:
     result = state.validation_result
     if result is None or result.passed:
         return state
+    if result.cancelled or result.timed_out:
+        status = validation_status_from_result(state)
+        safe_message = (
+            "Validation was cancelled; automatic repair was not started."
+            if result.cancelled
+            else "Validation timed out; automatic repair was not started."
+        )
+        state = set_all_todo_status(state, TodoStatus.FAILED, safe_message)
+        update: dict[str, object] = {
+            "phase": AgentPhase.NEEDS_INTERVENTION,
+            "repair_plan": None,
+            "updated_at": utc_now(),
+        }
+        if state.validation_request is not None:
+            update["validation_request"] = state.validation_request.model_copy(
+                update={"status": status}
+            )
+        state = state.model_copy(update=update)
+        return append_log(state, safe_message, "warning")
 
     source = result.stderr.strip() or result.stdout.strip() or "Validation failed without output."
-    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    safe_source = redact_model_context(source)
+    lines = [line.strip() for line in safe_source.splitlines() if line.strip()]
     tail = lines[-8:] or [source[:500]]
-    repair_directives = extract_structured_repair_directives(source)
     next_actions = [
         "Inspect the failing validation output.",
         "Apply a targeted repair in the task worktree.",
         "Run the validation command again after the repair.",
     ]
-    if repair_directives:
+    if not _uses_model_workflow(state):
+        repair_directives = extract_structured_repair_directives(source)
         next_actions.extend(directive.raw for directive in repair_directives)
 
     plan = AgentRepairPlan(
@@ -216,6 +698,11 @@ def error_analysis_node(state: AgentState) -> AgentState:
         )
 
     if state.repair_round >= state.max_repair_rounds:
+        state = set_all_todo_status(
+            state,
+            TodoStatus.FAILED,
+            "Automatic repair limit reached; manual intervention is required.",
+        )
         state = state.model_copy(
             update={
                 "phase": AgentPhase.NEEDS_INTERVENTION,
@@ -233,17 +720,35 @@ def error_analysis_node(state: AgentState) -> AgentState:
         )
 
     next_round = state.repair_round + 1
-    state = set_todo_status(state, "edit", TodoStatus.IN_PROGRESS)
-    state = state.model_copy(
-        update={
-            "phase": AgentPhase.REPAIRING,
-            "repair_plan": plan,
-            "repair_round": next_round,
-            "validation_request": None,
-            "validation_result": None,
-            "updated_at": utc_now(),
-        }
-    )
+    update: dict[str, object] = {
+        "phase": AgentPhase.REPAIRING,
+        "repair_plan": plan,
+        "repair_round": next_round,
+        "validation_request": None,
+        "validation_result": None,
+        "repair_file_edits": [],
+        "updated_at": utc_now(),
+    }
+    if _uses_model_workflow(state):
+        attempt = state.model_copy(update=update)
+        try:
+            repair_edit_plan = _generate_model_repair_plan(state, result)
+        except (ModelGatewayError, ValidationError, ValueError) as error:
+            failed = attempt.model_copy(
+                update={"phase": AgentPhase.FAILED, "updated_at": utc_now()}
+            )
+            failed = set_all_todo_status(failed, TodoStatus.FAILED)
+            return append_log(failed, _safe_model_failure("Repair", error), "error")
+        state = set_all_todo_status(state, TodoStatus.IN_PROGRESS)
+        update.update(
+            {
+                "edit_plan": repair_edit_plan,
+                "edit_plan_applied": False,
+            }
+        )
+    else:
+        state = set_todo_status(state, "edit", TodoStatus.IN_PROGRESS)
+    state = state.model_copy(update=update)
     return append_log(
         state,
         f"Error analysis generated repair plan for round {next_round}.",
@@ -261,10 +766,13 @@ def complete_node(state: AgentState) -> AgentState:
             }
         )
 
-    for todo_id in ["edit", "validate"]:
-        state = set_todo_status(state, todo_id, TodoStatus.COMPLETED)
-    if state.repair_plan is None:
-        state = set_todo_status(state, "error-analysis", TodoStatus.SKIPPED)
+    if state.todo_plan is not None:
+        state = set_all_todo_status(state, TodoStatus.COMPLETED)
+    else:
+        for todo_id in ["edit", "validate"]:
+            state = set_todo_status(state, todo_id, TodoStatus.COMPLETED)
+        if state.repair_plan is None:
+            state = set_todo_status(state, "error-analysis", TodoStatus.SKIPPED)
     state = state.model_copy(update={"phase": AgentPhase.COMPLETED, "updated_at": utc_now()})
     return append_log(state, "Validation passed; task state completed.")
 
@@ -276,7 +784,12 @@ def route_after_approval(state: AgentState) -> str:
 
 
 def route_after_edit(state: AgentState) -> str:
-    if state.phase in {AgentPhase.COMPLETED, AgentPhase.FAILED, AgentPhase.NEEDS_INTERVENTION}:
+    if state.phase in {
+        AgentPhase.WAITING_APPROVAL,
+        AgentPhase.COMPLETED,
+        AgentPhase.FAILED,
+        AgentPhase.NEEDS_INTERVENTION,
+    }:
         return "end"
     return "validate"
 
@@ -427,18 +940,27 @@ def apply_structured_repair_directives(
         try:
             original = target.read_text(encoding="utf-8")
         except OSError as error:
-            logs.append((f"Skipped repair directive for unreadable file {target}: {error}", "warning"))
+            logs.append(
+                (f"Skipped repair directive for unreadable file {target}: {error}", "warning")
+            )
             continue
 
         if directive.find not in original:
-            logs.append((f"Skipped repair directive because text was not found in {target}.", "warning"))
+            logs.append(
+                (
+                    f"Skipped repair directive because text was not found in {target}.",
+                    "warning",
+                )
+            )
             continue
 
         updated = original.replace(directive.find, directive.replace, 1)
         try:
             target.write_text(updated, encoding="utf-8")
         except OSError as error:
-            logs.append((f"Skipped repair directive for unwritable file {target}: {error}", "error"))
+            logs.append(
+                (f"Skipped repair directive for unwritable file {target}: {error}", "error")
+            )
             continue
 
         edits.append(

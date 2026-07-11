@@ -3,6 +3,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.editing.models import EditingPlan, TodoPlan
+
 
 def utc_now() -> str:
     return datetime.now(tz=UTC).isoformat()
@@ -149,9 +151,13 @@ class AgentState(AgentModel):
     title: str
     description: str = ""
     model_id: str | None = Field(default=None, alias="modelId")
+    workflow_version: int = Field(default=1, alias="workflowVersion")
     phase: AgentPhase = AgentPhase.CREATED
     context: TaskContext
     todos: list[AgentTodo] = Field(default_factory=list)
+    todo_plan: TodoPlan | None = Field(default=None, alias="todoPlan")
+    edit_plan: EditingPlan | None = Field(default=None, alias="editPlan")
+    edit_plan_applied: bool = Field(default=False, alias="editPlanApplied")
     logs: list[AgentLogEntry] = Field(default_factory=list)
     requires_approval: bool = Field(default=False, alias="requiresApproval")
     approval: AgentApproval | None = None
@@ -163,6 +169,7 @@ class AgentState(AgentModel):
     validation_request: ValidationRequest | None = Field(default=None, alias="validationRequest")
     validation_result: ValidationResult | None = Field(default=None, alias="validationResult")
     file_edits: list[AgentFileEdit] = Field(default_factory=list, alias="fileEdits")
+    repair_file_edits: list[AgentFileEdit] = Field(default_factory=list, alias="repairFileEdits")
     repair_plan: AgentRepairPlan | None = Field(default=None, alias="repairPlan")
     proposals: list[AgentProposalState] = Field(default_factory=list)
     selected_proposal_id: str | None = Field(default=None, alias="selectedProposalId")
@@ -198,6 +205,7 @@ def create_initial_state(
         title=title,
         description=description,
         modelId=model_id,
+        workflowVersion=2 if model_id and model_id.strip() else 1,
         context=context,
         validationCommand=validation_command,
         validationCandidates=validation_candidates or [],
@@ -217,6 +225,18 @@ def append_log(state: AgentState, message: str, level: str = "info") -> AgentSta
         message=message,
     )
     return state.model_copy(update={"logs": [*state.logs, entry], "updated_at": utc_now()})
+
+
+def set_all_todo_status(
+    state: AgentState,
+    status: TodoStatus,
+    error_message: str | None = None,
+) -> AgentState:
+    todos = [
+        todo.model_copy(update={"status": status, "error_message": error_message})
+        for todo in state.todos
+    ]
+    return state.model_copy(update={"todos": todos, "updated_at": utc_now()})
 
 
 def set_todo_status(

@@ -311,7 +311,7 @@ fn redact_assignment_secrets(value: &mut String) -> bool {
 
     for line in value.lines() {
         let lower = line.to_ascii_lowercase();
-        let sensitive_key = [
+        let sensitive_keys = [
             "password",
             "passwd",
             "api_key",
@@ -319,9 +319,8 @@ fn redact_assignment_secrets(value: &mut String) -> bool {
             "access_token",
             "secret",
             "token",
-        ]
-        .iter()
-        .any(|key| lower.contains(key));
+        ];
+        let sensitive_key = sensitive_keys.iter().any(|key| lower.contains(key));
         let separator = line.find('=').or_else(|| line.find(':'));
 
         if sensitive_key {
@@ -332,6 +331,26 @@ fn redact_assignment_secrets(value: &mut String) -> bool {
                     changed = true;
                     continue;
                 }
+            }
+
+            let trimmed = line.trim_start();
+            let indentation_len = line.len() - trimmed.len();
+            if let Some(key) = sensitive_keys.iter().find(|key| {
+                trimmed
+                    .get(..key.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(key))
+                    && trimmed.get(key.len()..).is_some_and(|suffix| {
+                        suffix.starts_with(char::is_whitespace) && suffix.trim().len() >= 4
+                    })
+            }) {
+                output.push(format!(
+                    "{}{} {}",
+                    &line[..indentation_len],
+                    &trimmed[..key.len()],
+                    REDACTED_PLACEHOLDER
+                ));
+                changed = true;
+                continue;
             }
         }
 

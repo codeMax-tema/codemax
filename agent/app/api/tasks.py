@@ -3,7 +3,7 @@ from threading import Lock
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import AgentSettings, load_settings
 from app.graph import (
@@ -56,7 +56,15 @@ class CreateAgentTaskRequest(AgentModel):
     worktree_path: str = Field(alias="worktreePath", min_length=1)
     title: str = Field(min_length=1)
     description: str = ""
-    model_id: str | None = Field(default=None, alias="modelId")
+    model_id: str = Field(alias="modelId", min_length=1)
+
+    @field_validator("model_id")
+    @classmethod
+    def require_model_id(cls, value: str) -> str:
+        model_id = value.strip()
+        if not model_id:
+            raise ValueError("modelId is required for new Agent tasks")
+        return model_id
     validation_command: str | None = Field(default=None, alias="validationCommand")
 
 
