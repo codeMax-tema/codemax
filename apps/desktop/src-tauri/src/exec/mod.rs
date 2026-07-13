@@ -35,6 +35,8 @@ pub struct CommandRequest {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub purpose: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +170,8 @@ impl CommandExecutor {
         output_sink: CommandOutputSink,
         additional_redaction_values: Vec<String>,
     ) -> CommandExecutionResultType<CommandExecutionResult> {
-        let purpose = normalize_command_purpose(request.purpose.as_deref(), request.run_id.as_deref())?;
+        let purpose =
+            normalize_command_purpose(request.purpose.as_deref(), request.run_id.as_deref())?;
         let request = request.with_run_id();
         let command_text = request.command.trim();
         if command_text.is_empty() {
@@ -605,6 +608,7 @@ mod tests {
                     env: BTreeMap::new(),
                     timeout_ms: Some(30_000),
                     purpose: None,
+                    approval_id: None,
                 },
                 log_paths(&root),
                 CommandRunRegistry::default(),
@@ -650,6 +654,7 @@ mod tests {
                     env: BTreeMap::new(),
                     timeout_ms: Some(100),
                     purpose: None,
+                    approval_id: None,
                 },
                 log_paths(&root),
                 CommandRunRegistry::default(),

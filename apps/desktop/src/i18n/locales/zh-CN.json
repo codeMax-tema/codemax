@@ -722,5 +722,10 @@
   "tasks.new.workspace.insufficientSpace": "目标存储空间不足，请更换存储位置或清理空间。",
   "tasks.new.workspace.cleanup.remove_workspace_keep_source": "删除任务时移除隔离工作区，源目录保持不变。",
   "tasks.new.workspace.cleanup.remove_worktree_keep_repository": "删除任务时移除 worktree；已初始化的 Git 仓库会保留。",
-  "tasks.new.workspace.cleanup.keep_original": "任务清理不会删除原目录；修改会直接保留在原目录中。"
+  "tasks.new.workspace.cleanup.keep_original": "任务清理不会删除原目录；修改会直接保留在原目录中。",
+  "approvals.action": "具体动作",
+  "approvals.scope": "授权范围",
+  "approvals.target": "目标",
+  "approvals.authorizationState": "授权状态",
+  "approvals.singleUse": "仅可消费一次，到期时间"
 }

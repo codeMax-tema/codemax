@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::{collections::BTreeMap, time::Instant};
 use tauri::State;
 
 use crate::{
@@ -74,6 +74,53 @@ pub fn test_model_connection(
     id: Option<String>,
 ) -> AppResult<ModelConnectionTestResult> {
     test_model_connection_inner(storage.inner(), id.as_deref())
+}
+
+pub(crate) fn load_agent_runtime_env(
+    storage: &ManagedStorage,
+    id: Option<&str>,
+) -> AppResult<BTreeMap<String, String>> {
+    let id = normalize_config_id(id.unwrap_or(DEFAULT_MODEL_CONFIG_ID))?;
+    let secret_store = SecretStore::new(&storage.roots.app_data_dir);
+    let config = {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        ModelConfigRepository::new(store.connection())
+            .get(id)
+            .map_err(storage_error)?
+    }
+    .ok_or_else(|| {
+        CommandError::new(
+            "model.runtimeConfigMissing",
+            "Configure and test the model connection before starting the Agent.",
+        )
+    })?;
+
+    let provider = required_runtime_value("provider", &config.provider)?;
+    let base_url = required_runtime_value("baseUrl", &config.base_url)?;
+    let model_name = required_runtime_value("modelName", &config.model_name)?;
+    let secret_ref = config.api_key_secret_ref.as_deref().ok_or_else(|| {
+        CommandError::new(
+            "model.runtimeApiKeyMissing",
+            "Configure the model API key before starting the Agent.",
+        )
+    })?;
+    let api_key = secret_store
+        .read_secret_ref(secret_ref)
+        .map_err(secret_error)?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            CommandError::new(
+                "model.runtimeApiKeyMissing",
+                "Configure the model API key before starting the Agent.",
+            )
+        })?;
+
+    Ok(BTreeMap::from([
+        ("CODEMAX_MODEL_PROVIDER".to_string(), provider),
+        ("CODEMAX_MODEL_BASE_URL".to_string(), base_url),
+        ("CODEMAX_MODEL_NAME".to_string(), model_name),
+        ("CODEMAX_MODEL_API_KEY".to_string(), api_key),
+    ]))
 }
 
 pub(crate) fn load_model_api_key_values(storage: &ManagedStorage) -> Vec<String> {
@@ -295,6 +342,18 @@ fn normalize_config_id(value: &str) -> AppResult<&str> {
     }
 }
 
+fn required_runtime_value(field: &str, value: &str) -> AppResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CommandError::new(
+            "model.runtimeConfigIncomplete",
+            format!("Model {field} must be configured before starting the Agent."),
+        ));
+    }
+
+    Ok(value.to_string())
+}
+
 fn required_field(field: &str, value: &str) -> AppResult<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -420,6 +479,71 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).expect("clean temp model storage");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn load_agent_runtime_env_uses_saved_dpapi_model_config() {
+        let (storage, root) = model_storage();
+        let secret = "sk-runtime-dpapi-value";
+
+        save_model_config_inner(
+            &storage,
+            SaveModelConfigRequest {
+                id: None,
+                provider: "openai-compatible".to_string(),
+                base_url: "https://model.example.test/v1".to_string(),
+                model_name: "codemax-runtime".to_string(),
+                api_key: Some(secret.to_string()),
+                clear_api_key: false,
+            },
+        )
+        .expect("save model config");
+
+        let runtime_env = load_agent_runtime_env(&storage, None).expect("load runtime env");
+        assert_eq!(
+            runtime_env
+                .get("CODEMAX_MODEL_PROVIDER")
+                .map(String::as_str),
+            Some("openai-compatible")
+        );
+        assert_eq!(
+            runtime_env
+                .get("CODEMAX_MODEL_BASE_URL")
+                .map(String::as_str),
+            Some("https://model.example.test/v1")
+        );
+        assert_eq!(
+            runtime_env.get("CODEMAX_MODEL_NAME").map(String::as_str),
+            Some("codemax-runtime")
+        );
+        assert_eq!(
+            runtime_env.get("CODEMAX_MODEL_API_KEY").map(String::as_str),
+            Some(secret)
+        );
+
+        let store = storage.store.lock().expect("lock store");
+        let config = ModelConfigRepository::new(store.connection())
+            .get(DEFAULT_MODEL_CONFIG_ID)
+            .expect("get config")
+            .expect("config exists");
+        assert!(!config.provider.contains(secret));
+        assert!(!config.base_url.contains(secret));
+        assert!(!config.model_name.contains(secret));
+        drop(store);
+
+        std::fs::remove_dir_all(root).expect("clean temp model storage");
+    }
+
+    #[test]
+    fn load_agent_runtime_env_rejects_missing_config() {
+        let (storage, root) = model_storage();
+
+        let error = load_agent_runtime_env(&storage, None).expect_err("config must be required");
+
+        assert_eq!(error.code, "model.runtimeConfigMissing");
+        assert!(!error.message.contains("CODEMAX_MODEL_API_KEY"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

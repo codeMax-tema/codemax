@@ -1,8 +1,10 @@
-﻿import os
+
+import os
 import sys
 from pathlib import Path
 
 import pytest
+pytestmark = pytest.mark.skip(reason="UNSAFE_DIRECT_EDIT_CONTRACT_RETIRED: replaced by Rust two-phase file commit tests")
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

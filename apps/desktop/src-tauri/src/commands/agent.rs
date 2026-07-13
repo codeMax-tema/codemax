@@ -14,6 +14,7 @@ use crate::{
         estimate_tokens, record_context_observation, record_token_budget_observation,
         sanitize_for_model_context, ContextObservation, SanitizedContent, TokenBudgetObservation,
     },
+    safe_fs::{self, SafeFileOperation},
     storage::{
         AgentEventRepository, AgentSessionRepository, CommandRunRepository, ManagedStorage,
         NewAgentEvent, NewAgentSession, NewTodo, RunContractRepository, StorageError,
@@ -21,7 +22,7 @@ use crate::{
     },
 };
 
-use super::exec::run_task_command;
+use super::{exec::run_task_command, models::load_agent_runtime_env};
 
 const VALIDATION_LOG_TAIL_BYTES: usize = 64 * 1024;
 const DEFAULT_VALIDATION_TIMEOUT_MS: u64 = 120_000;
@@ -94,7 +95,11 @@ pub struct RunAgentValidationCycleResponse {
 }
 
 #[tauri::command]
-pub async fn start_agent_service(agent: State<'_, AgentService>) -> AppResult<AgentServiceStatus> {
+pub async fn start_agent_service(
+    agent: State<'_, AgentService>,
+    storage: State<'_, ManagedStorage>,
+) -> AppResult<AgentServiceStatus> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     agent.start().await.map_err(agent_error)
 }
 
@@ -121,6 +126,7 @@ pub async fn create_agent_task(
     storage: State<'_, ManagedStorage>,
     mut request: AgentTaskCreateRequest,
 ) -> AppResult<Value> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     let mut contract = load_contract_budget(storage.inner(), &request.task_id)?;
     let model_id =
         resolve_new_task_model_id(request.model_id.as_deref(), contract.model_id.as_deref())?;
@@ -185,8 +191,10 @@ pub async fn create_agent_task(
 #[tauri::command]
 pub async fn get_agent_task_state(
     agent: State<'_, AgentService>,
+    storage: State<'_, ManagedStorage>,
     task_id: String,
 ) -> AppResult<Value> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     let path = format!("/api/v1/tasks/{}", encode_path_segment(&task_id));
     agent
         .api_json("GET", &path, None)
@@ -201,6 +209,7 @@ pub async fn advance_agent_task(
     task_id: String,
     request: AgentTaskAdvanceRequest,
 ) -> AppResult<Value> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     let task_id = task_id.trim().to_string();
     if task_id.is_empty() {
         return Err(CommandError::new(
@@ -214,6 +223,8 @@ pub async fn advance_agent_task(
         .api_json("POST", &path, Some(body))
         .await
         .map_err(agent_error)?;
+    let response =
+        complete_pending_file_commit(agent.inner(), storage.inner(), &task_id, response).await?;
     if let Ok(state) = response_state(&response) {
         sync_agent_state(storage.inner(), &task_id, state)?;
     }
@@ -227,6 +238,7 @@ pub async fn submit_agent_validation_result(
     task_id: String,
     mut request: AgentValidationResultRequest,
 ) -> AppResult<Value> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     let path = format!(
         "/api/v1/tasks/{}/validation-result",
         encode_path_segment(&task_id)
@@ -237,6 +249,8 @@ pub async fn submit_agent_validation_result(
         .api_json("POST", &path, Some(body))
         .await
         .map_err(agent_error)?;
+    let response =
+        complete_pending_file_commit(agent.inner(), storage.inner(), &task_id, response).await?;
     if let Ok(state) = response_state(&response) {
         sync_agent_state(storage.inner(), &task_id, state)?;
     }
@@ -251,6 +265,7 @@ pub async fn run_agent_validation_cycle(
     registry: State<'_, CommandRunRegistry>,
     request: RunAgentValidationCycleRequest,
 ) -> AppResult<RunAgentValidationCycleResponse> {
+    prepare_agent_runtime(agent.inner(), storage.inner()).await?;
     let task_id = request.task_id.trim().to_string();
     if task_id.is_empty() {
         return Err(CommandError::new(
@@ -272,6 +287,8 @@ pub async fn run_agent_validation_cycle(
         )
         .await
         .map_err(agent_error)?;
+    response =
+        complete_pending_file_commit(agent.inner(), storage.inner(), &task_id, response).await?;
     sync_agent_state(storage.inner(), &task_id, response_state(&response)?)?;
 
     let limit = request
@@ -299,6 +316,7 @@ pub async fn run_agent_validation_cycle(
                 env: BTreeMap::new(),
                 timeout_ms: Some(timeout_ms),
                 purpose: Some("validation".to_string()),
+                approval_id: None,
             },
         )
         .await?;
@@ -327,6 +345,8 @@ pub async fn run_agent_validation_cycle(
             )
             .await
             .map_err(agent_error)?;
+        response = complete_pending_file_commit(agent.inner(), storage.inner(), &task_id, response)
+            .await?;
         sync_agent_state(storage.inner(), &task_id, response_state(&response)?)?;
     }
 
@@ -344,6 +364,218 @@ pub async fn run_agent_validation_cycle(
         command_results,
         state,
     })
+}
+
+async fn prepare_agent_runtime(agent: &AgentService, storage: &ManagedStorage) -> AppResult<()> {
+    let runtime_env = load_agent_runtime_env(storage, None)?;
+    let changed = agent.set_runtime_env(runtime_env).map_err(agent_error)?;
+    if changed {
+        agent.stop().await.map_err(agent_error)?;
+    }
+    Ok(())
+}
+
+async fn complete_pending_file_commit(
+    agent: &AgentService,
+    storage: &ManagedStorage,
+    task_id: &str,
+    response: Value,
+) -> AppResult<Value> {
+    let state = response_state(&response)?;
+    if state.get("phase").and_then(Value::as_str) != Some("awaiting_file_commit") {
+        return Ok(response);
+    }
+    let commit_id = state
+        .get("pendingFileCommitId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CommandError::new(
+                "agent.fileCommitIdMissing",
+                "Pending file commit has no id.",
+            )
+        })?;
+    let edits = state
+        .get("editPlan")
+        .and_then(|plan| plan.get("edits"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CommandError::new(
+                "agent.fileCommitPlanMissing",
+                "Pending file commit has no edit plan.",
+            )
+        })?;
+    let workspace_path = {
+        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+        TaskRepository::new(store.connection())
+            .get_required(task_id)
+            .map_err(storage_error)?
+            .worktree_path
+            .ok_or_else(|| {
+                CommandError::new("agent.worktreeUnavailable", "Task worktree is unavailable.")
+            })?
+    };
+    record_file_commit_event(
+        storage,
+        task_id,
+        commit_id,
+        "file_commit_intent",
+        "pending",
+        edits,
+        None,
+    )?;
+    let result = execute_file_commit_plan(&workspace_path, edits);
+    let (success, error) = match result {
+        Ok(()) => (true, None),
+        Err(error) => (false, Some(error.message.clone())),
+    };
+    record_file_commit_event(
+        storage,
+        task_id,
+        commit_id,
+        if success {
+            "file_commit_completed"
+        } else {
+            "file_commit_failed"
+        },
+        if success { "editing" } else { "failed" },
+        edits,
+        error.as_deref(),
+    )?;
+    let path = format!(
+        "/api/v1/tasks/{}/file-commit-result",
+        encode_path_segment(task_id)
+    );
+    agent
+        .api_json(
+            "POST",
+            &path,
+            Some(json!({"commitId": commit_id, "success": success, "error": error})),
+        )
+        .await
+        .map_err(agent_error)
+}
+
+fn execute_file_commit_plan(workspace: &str, edits: &[Value]) -> AppResult<()> {
+    let mut applied: Vec<(SafeFileOperation, Option<String>)> = Vec::new();
+    for edit in edits {
+        let operation = edit
+            .get("operation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CommandError::new("agent.fileCommitInvalid", "Edit operation is missing.")
+            })?;
+        let path = edit
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CommandError::new("agent.fileCommitInvalid", "Edit path is missing."))?
+            .to_string();
+        let previous = if matches!(operation, "update" | "delete") {
+            Some(safe_fs::read_utf8(workspace, &path).map_err(|error| {
+                CommandError::new("agent.fileCommitPreflightFailed", error.to_string())
+            })?)
+        } else {
+            None
+        };
+        let safe_operation = match operation {
+            "create" => SafeFileOperation::Create {
+                path,
+                content: edit
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CommandError::new("agent.fileCommitInvalid", "Create content is missing.")
+                    })?
+                    .to_string(),
+            },
+            "update" => SafeFileOperation::Update {
+                path,
+                content: edit
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CommandError::new("agent.fileCommitInvalid", "Update content is missing.")
+                    })?
+                    .to_string(),
+            },
+            "delete" => SafeFileOperation::Delete { path },
+            _ => {
+                return Err(CommandError::new(
+                    "agent.fileCommitInvalid",
+                    "Unsupported edit operation.",
+                ))
+            }
+        };
+        if let Err(error) = safe_fs::execute_operations(workspace, &[safe_operation.clone()]) {
+            rollback_file_commit(workspace, applied);
+            return Err(CommandError::new(
+                "agent.fileCommitFailed",
+                error.to_string(),
+            ));
+        }
+        applied.push((safe_operation, previous));
+    }
+    Ok(())
+}
+
+fn rollback_file_commit(workspace: &str, applied: Vec<(SafeFileOperation, Option<String>)>) {
+    for (operation, previous) in applied.into_iter().rev() {
+        let rollback = match operation {
+            SafeFileOperation::Create { path, .. } => SafeFileOperation::Delete { path },
+            SafeFileOperation::Update { path, .. } => SafeFileOperation::Update {
+                path,
+                content: previous.unwrap_or_default(),
+            },
+            SafeFileOperation::Delete { path } => SafeFileOperation::Create {
+                path,
+                content: previous.unwrap_or_default(),
+            },
+            _ => continue,
+        };
+        let _ = safe_fs::execute_operations(workspace, &[rollback]);
+    }
+}
+
+fn record_file_commit_event(
+    storage: &ManagedStorage,
+    task_id: &str,
+    commit_id: &str,
+    event_type: &str,
+    stage: &str,
+    edits: &[Value],
+    error: Option<&str>,
+) -> AppResult<()> {
+    let payload = serde_json::to_string(&json!({
+        "commitId": commit_id,
+        "operationCount": edits.len(),
+        "operations": edits.iter().map(|edit| json!({"operation": edit.get("operation"), "path": edit.get("path")})).collect::<Vec<_>>(),
+        "errorCategory": error.map(|_| "safe_file_operation_failed")
+    })).map_err(json_error)?;
+    let store = storage.store.lock().map_err(|_| storage_lock_error())?;
+    let events = AgentEventRepository::new(store.connection());
+    let event_id = format!("{}-{}", event_type, commit_id);
+    if events
+        .list_for_task(task_id)
+        .map_err(storage_error)?
+        .iter()
+        .any(|event| event.event_id == event_id)
+    {
+        return Ok(());
+    }
+    events
+        .create(NewAgentEvent {
+            event_id: &event_id,
+            task_id,
+            event_type,
+            stage,
+            message: if error.is_some() {
+                "Rust safe file commit failed."
+            } else {
+                "Rust safe file commit checkpoint."
+            },
+            payload: &payload,
+        })
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> AppResult<()> {

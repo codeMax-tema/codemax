@@ -877,7 +877,11 @@ pub fn save_memory_item(
         "memory.scopeRequired",
         "Memory scope is required.",
     )?;
-    let key = required_text(&request.key, "memory.keyRequired", "Memory key is required.")?;
+    let key = required_text(
+        &request.key,
+        "memory.keyRequired",
+        "Memory key is required.",
+    )?;
     let sanitized = sanitize_for_model_context(&request.value, &format!("memory.{}", key));
     if sanitized.blocked {
         return Err(CommandError::new(

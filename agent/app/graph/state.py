@@ -13,6 +13,7 @@ def utc_now() -> str:
 class AgentPhase(StrEnum):
     CREATED = "created"
     PLANNED = "planned"
+    AWAITING_FILE_COMMIT = "awaiting_file_commit"
     EDITING = "editing"
     VALIDATING = "validating"
     ANALYZING_ERROR = "analyzing_error"
@@ -158,6 +159,7 @@ class AgentState(AgentModel):
     todo_plan: TodoPlan | None = Field(default=None, alias="todoPlan")
     edit_plan: EditingPlan | None = Field(default=None, alias="editPlan")
     edit_plan_applied: bool = Field(default=False, alias="editPlanApplied")
+    pending_file_commit_id: str | None = Field(default=None, alias="pendingFileCommitId")
     logs: list[AgentLogEntry] = Field(default_factory=list)
     requires_approval: bool = Field(default=False, alias="requiresApproval")
     approval: AgentApproval | None = None

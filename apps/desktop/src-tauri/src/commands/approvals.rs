@@ -38,6 +38,19 @@ pub struct ApprovalResponse {
     pub comment: Option<String>,
     pub created_at: String,
     pub decided_at: Option<String>,
+    pub actor: Option<String>,
+    pub action: Option<String>,
+    pub target: Option<String>,
+    pub arguments_digest: Option<String>,
+    pub content_digest: Option<String>,
+    pub scope: Option<String>,
+    pub nonce: Option<String>,
+    pub contract_digest: Option<String>,
+    pub expires_at: Option<String>,
+    pub consumed_at: Option<String>,
+    pub consumed_by_call_id: Option<String>,
+    pub invalidated_at: Option<String>,
+    pub invalidation_reason: Option<String>,
 }
 
 #[tauri::command]
@@ -100,11 +113,17 @@ pub fn decide_approval(
         .update_status_for_approval(approval_id, decision)
         .map_err(storage_error)?;
 
-    if matches!(decision, "rejected" | "revise") {
-        TaskRepository::new(connection)
-            .update_status(&decided.task_id, "needsIntervention", None)
-            .map_err(storage_error)?;
-    }
+    TaskRepository::new(connection)
+        .update_status(
+            &decided.task_id,
+            if decision == "approved" {
+                "editing"
+            } else {
+                "needsIntervention"
+            },
+            None,
+        )
+        .map_err(storage_error)?;
     record_agent_event_with_connection(
         connection,
         &decided.task_id,
@@ -150,6 +169,19 @@ impl From<ApprovalRecord> for ApprovalResponse {
             comment: record.comment,
             created_at: record.created_at,
             decided_at: record.decided_at,
+            actor: record.actor,
+            action: record.action,
+            target: record.target,
+            arguments_digest: record.arguments_digest,
+            content_digest: record.content_digest,
+            scope: record.scope,
+            nonce: record.nonce,
+            contract_digest: record.contract_digest,
+            expires_at: record.expires_at,
+            consumed_at: record.consumed_at,
+            consumed_by_call_id: record.consumed_by_call_id,
+            invalidated_at: record.invalidated_at,
+            invalidation_reason: record.invalidation_reason,
         }
     }
 }

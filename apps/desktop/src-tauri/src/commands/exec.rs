@@ -8,6 +8,7 @@ use std::{
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -20,12 +21,11 @@ use crate::{
     privacy::redact_known_user_paths,
     safety::{self, RiskAssessment},
     storage::{
-        AgentEventRepository, AgentSessionRepository, ApprovalRecord, ApprovalRepository,
-        CommandRunRecord, CommandRunRepository, ContractBreachRepository, ManagedStorage,
-        NewAgentEvent, NewApproval,
-        NewCommandRun, NewContractBreachRecord, NewValidationRound, RunContractRepository,
-        StorageError, StoragePolicyRepository, TaskRecord, TaskRepository,
-        ValidationRoundRepository,
+        AgentEventRepository, AgentSessionRepository, ApprovalAuthorization, ApprovalRecord,
+        ApprovalRepository, CommandRunRecord, CommandRunRepository, ContractBreachRepository,
+        ManagedStorage, NewAgentEvent, NewBoundApproval, NewCommandRun, NewContractBreachRecord,
+        NewValidationRound, RunContractRepository, StorageError, StoragePolicyRepository,
+        TaskRecord, TaskRepository, ValidationRoundRepository,
     },
 };
 
@@ -409,7 +409,6 @@ fn enforce_command_safety(
 ) -> AppResult<()> {
     let assessment =
         safety::assess_command(&request.command, &path_guard.cwd, &path_guard.worktree);
-
     if assessment.denied {
         return Err(CommandError::new(
             "command.blockedBySafetyPolicy",
@@ -419,47 +418,140 @@ fn enforce_command_safety(
             ),
         ));
     }
-
     if !assessment.requires_approval {
         return Ok(());
     }
 
     let content = approval_content(request, redactor);
+    let arguments_digest = command_arguments_digest(request, path_guard);
+    let content_digest = command_content_digest(path_guard)?;
+    let target = path_guard.cwd.to_string_lossy().to_string();
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let connection = store.connection();
     let approvals = ApprovalRepository::new(connection);
+    let contract_digest = current_contract_digest(connection, &task.id)?;
+
+    if let Some(approval_id) = request
+        .approval_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        approvals
+            .consume_authorization(ApprovalAuthorization {
+                approval_id,
+                task_id: &task.id,
+                actor: "user",
+                action: "command.execute",
+                target: &target,
+                arguments_digest: &arguments_digest,
+                content_digest: &content_digest,
+                scope: "task_worktree",
+                contract_digest: &contract_digest,
+                call_id: request.run_id.as_deref().unwrap_or(approval_id),
+            })
+            .map_err(|_| {
+                CommandError::new(
+                    "approval.authorizationInvalid",
+                    "The approval is expired, consumed, changed, or does not match this command.",
+                )
+            })?;
+        record_agent_event_with_connection(
+            connection,
+            &task.id,
+            "approval.consumed",
+            "editing",
+            "Bound command approval was consumed.",
+            json!({"approval_id": approval_id, "call_id": request.run_id, "action": "command.execute", "arguments_digest": arguments_digest, "content_digest": content_digest}),
+        )?;
+        return Ok(());
+    }
 
     if let Some(existing) = approvals
-        .find_for_content(&task.id, "command", &content)
+        .find_bound(
+            &task.id,
+            "command.execute",
+            &arguments_digest,
+            &content_digest,
+        )
         .map_err(storage_error)?
     {
         return match existing.decision.as_deref() {
-            Some("approved") => Ok(()),
+            Some("approved") => {
+                approvals
+                    .consume_authorization(ApprovalAuthorization {
+                        approval_id: &existing.id,
+                        task_id: &task.id,
+                        actor: "user",
+                        action: "command.execute",
+                        target: &target,
+                        arguments_digest: &arguments_digest,
+                        content_digest: &content_digest,
+                        scope: "task_worktree",
+                        contract_digest: &contract_digest,
+                        call_id: request.run_id.as_deref().unwrap_or(&existing.id),
+                    })
+                    .map_err(|_| {
+                        CommandError::new(
+                            "approval.authorizationInvalid",
+                            "The approval could not be consumed atomically.",
+                        )
+                    })?;
+                record_agent_event_with_connection(
+                    connection,
+                    &task.id,
+                    "approval.consumed",
+                    "editing",
+                    "Bound command approval was consumed.",
+                    json!({"approval_id": existing.id, "call_id": request.run_id, "action": "command.execute", "arguments_digest": arguments_digest, "content_digest": content_digest}),
+                )?;
+                Ok(())
+            }
             Some("rejected") => Err(CommandError::new(
                 "approval.rejected",
-                format!(
-                    "Command was rejected by the user and will not run: {}",
-                    existing.comment.unwrap_or(existing.reason)
-                ),
+                existing.comment.unwrap_or(existing.reason),
             )),
             Some("revise") => Err(CommandError::new(
                 "approval.reviseRequested",
-                format!(
-                    "User requested a revised plan before this command can run: {}",
-                    existing.comment.unwrap_or(existing.reason)
-                ),
+                existing.comment.unwrap_or(existing.reason),
             )),
             _ => Err(CommandError::new(
                 "approval.pending",
                 format!(
-                    "Command requires approval before execution. Approval id: {}",
+                    "Command requires its bound approval id before execution. Approval id: {}",
                     existing.id
                 ),
             )),
         };
     }
 
-    let approval = create_command_approval(&approvals, &task.id, &content, &assessment)?;
+    let id = format!("approval-{}", uuid::Uuid::new_v4());
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let expires_at = (SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + 900)
+        .to_string();
+    let approval = approvals
+        .create_bound(NewBoundApproval {
+            id: &id,
+            task_id: &task.id,
+            approval_type: "command",
+            risk_level: assessment.level.as_str(),
+            content: &content,
+            reason: &approval_reason(&assessment),
+            actor: "user",
+            action: "command.execute",
+            target: &target,
+            arguments_digest: &arguments_digest,
+            content_digest: &content_digest,
+            scope: "task_worktree",
+            nonce: &nonce,
+            contract_digest: &contract_digest,
+            expires_at: &expires_at,
+        })
+        .map_err(storage_error)?;
     let breach = record_command_contract_breach(connection, &task.id, request, &approval)?;
     TaskRepository::new(connection)
         .update_status(&task.id, "awaitingApproval", None)
@@ -471,13 +563,11 @@ fn enforce_command_safety(
         "awaitingApproval",
         "Command requires approval before execution.",
         json!({
-            "approval_id": &approval.id,
-            "contract_breach_id": &breach.id,
-            "risk_level": &approval.risk_level,
-            "content": &approval.content,
+            "approval_id": &approval.id, "contract_breach_id": &breach.id, "risk_level": &approval.risk_level,
+            "action": "command.execute", "target": target, "scope": "task_worktree", "nonce": nonce,
+            "arguments_digest": arguments_digest, "content_digest": content_digest, "contract_digest": contract_digest,
         }),
     )?;
-
     Err(CommandError::new(
         "approval.required",
         format!(
@@ -487,23 +577,72 @@ fn enforce_command_safety(
     ))
 }
 
-fn create_command_approval(
-    approvals: &ApprovalRepository<'_>,
-    task_id: &str,
-    content: &str,
-    assessment: &RiskAssessment,
-) -> AppResult<ApprovalRecord> {
-    let id = format!("approval-{}", uuid::Uuid::new_v4());
-    approvals
-        .create(NewApproval {
-            id: &id,
-            task_id,
-            approval_type: "command",
-            risk_level: assessment.level.as_str(),
-            content,
-            reason: &approval_reason(assessment),
-        })
-        .map_err(storage_error)
+fn hash_parts(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn command_arguments_digest(request: &CommandRequest, guard: &CommandPathGuard) -> String {
+    let env = serde_json::to_string(&request.env).unwrap_or_default();
+    hash_parts(&[
+        request.command.trim(),
+        &guard.cwd.to_string_lossy(),
+        &env,
+        request.purpose.as_deref().unwrap_or("edit"),
+    ])
+}
+
+fn command_content_digest(guard: &CommandPathGuard) -> AppResult<String> {
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(&guard.worktree)
+        .output()
+        .map_err(|error| CommandError::new("approval.contentDigestFailed", error.to_string()))?;
+    if !status.status.success() {
+        return Ok(hash_parts(&[&guard.worktree.to_string_lossy()]));
+    }
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "HEAD"])
+        .current_dir(&guard.worktree)
+        .output()
+        .map_err(|error| CommandError::new("approval.contentDigestFailed", error.to_string()))?;
+    let untracked = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .current_dir(&guard.worktree)
+        .output()
+        .map_err(|error| CommandError::new("approval.contentDigestFailed", error.to_string()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(guard.worktree.to_string_lossy().as_bytes());
+    hasher.update(&status.stdout);
+    hasher.update(&diff.stdout);
+    for relative in untracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+    {
+        hasher.update(relative);
+        let path = guard
+            .worktree
+            .join(String::from_utf8_lossy(relative).as_ref());
+        if let Ok(bytes) = fs::read(path) {
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(bytes);
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn current_contract_digest(connection: &rusqlite::Connection, task_id: &str) -> AppResult<String> {
+    let contract = RunContractRepository::new(connection)
+        .get_for_task(task_id)
+        .map_err(storage_error)?;
+    Ok(contract
+        .map(|item| hash_parts(&[&item.contract_json, &item.updated_at]))
+        .unwrap_or_else(|| hash_parts(&["no-contract"])))
 }
 
 fn record_command_contract_breach(
@@ -1178,10 +1317,9 @@ fn command_execution_error(error: CommandExecutionError) -> CommandError {
             "command.registryUnavailable",
             "Command execution registry is temporarily unavailable.",
         ),
-        CommandExecutionError::InvalidPurpose(_) => CommandError::new(
-            "command.invalidPurpose",
-            "Unsupported command purpose.",
-        ),
+        CommandExecutionError::InvalidPurpose(_) => {
+            CommandError::new("command.invalidPurpose", "Unsupported command purpose.")
+        }
         CommandExecutionError::LogFile(error) => CommandError::new(
             "command.logFileUnavailable",
             format!("Unable to write command log file: {error}"),
@@ -1313,6 +1451,7 @@ mod tests {
             env: BTreeMap::new(),
             timeout_ms: Some(30_000),
             purpose: None,
+            approval_id: None,
         };
 
         (storage, task, guard, request)
@@ -1332,6 +1471,7 @@ mod tests {
             env: BTreeMap::new(),
             timeout_ms: Some(30_000),
             purpose: None,
+            approval_id: None,
         };
         let redactor = LogRedactor::from_values(vec!["sk-test-secret-value".to_string()]);
         let content = approval_content(&request, &redactor);

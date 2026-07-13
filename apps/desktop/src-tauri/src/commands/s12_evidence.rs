@@ -1192,15 +1192,22 @@ pub(crate) fn resolve_hook_approval_inner(
         .execute(
             "UPDATE hook_approvals
              SET status = ?3, reviewer = ?4, resolved_reason = ?5, resolved_at = ?6
-             WHERE task_id = ?1 AND id = ?2",
+             WHERE task_id = ?1 AND id = ?2 AND status = 'pending'",
             params![task_id, approval_id, status, reviewer, reason, resolved_at],
         )
         .map_err(storage_error)?;
     if updated == 0 {
-        return Err(CommandError::new(
-            "hookApproval.notFound",
-            format!("Hook approval {approval_id} was not found."),
-        ));
+        let existing = load_hook_approval_record(connection, &task_id, &approval_id);
+        return match existing {
+            Ok(_) => Err(CommandError::new(
+                "hookApproval.alreadyResolved",
+                format!("Hook approval {approval_id} has already been resolved."),
+            )),
+            Err(_) => Err(CommandError::new(
+                "hookApproval.notFound",
+                format!("Hook approval {approval_id} was not found."),
+            )),
+        };
     }
     let record = load_hook_approval_record(connection, &task_id, &approval_id)?;
     drop(store);
@@ -2441,10 +2448,8 @@ fn validation_status_for_commands(storage: &ManagedStorage, task_id: &str) -> Ap
     if runs.is_empty() {
         return Ok("notRun".to_string());
     }
-    if runs
-        .iter()
-        .all(|run| run.status == "passed" && run.exit_code.unwrap_or(0) == 0)
-    {
+    let latest = runs.last().expect("validation runs are not empty");
+    if latest.status == "passed" && latest.exit_code.unwrap_or(0) == 0 {
         Ok("passed".to_string())
     } else {
         Ok("failed".to_string())
@@ -3821,13 +3826,26 @@ mod tests {
             &storage,
             ResolveHookApprovalRequest {
                 task_id: "task-s12-proof".to_string(),
-                approval_id: approval.id,
+                approval_id: approval.id.clone(),
                 approved: true,
                 reviewer: Some("tester".to_string()),
                 reason: "Command is validation-only and within the task contract.".to_string(),
             },
         )
         .expect("resolve hook approval");
+
+        let replay = resolve_hook_approval_inner(
+            &storage,
+            ResolveHookApprovalRequest {
+                task_id: "task-s12-proof".to_string(),
+                approval_id: approval.id,
+                approved: false,
+                reviewer: Some("replay".to_string()),
+                reason: "Attempt to overwrite the recorded decision.".to_string(),
+            },
+        )
+        .expect_err("resolved hook approval cannot be replayed");
+        assert_eq!(replay.code, "hookApproval.alreadyResolved");
 
         let passed = delivery_review_state_for_task(&storage, "task-s12-proof")
             .expect("read passed delivery review");

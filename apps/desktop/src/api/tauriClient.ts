@@ -153,6 +153,7 @@ export interface ExecuteTaskCommandRequest {
   env?: Record<string, string>;
   timeoutMs?: number;
   purpose?: CommandRunPurpose;
+  approvalId?: string;
 }
 
 export function executeTaskCommand(request: ExecuteTaskCommandRequest) {
@@ -715,4 +716,38 @@ export function mergeTask(request: MergeTaskRequest) {
 
 export function cleanupTaskWorktree(taskId: string, confirmed: boolean) {
   return invokeCommand<WorktreeCleanupResult>('cleanup_task_worktree', { taskId, confirmed });
+}
+
+export type SafeFileOperation =
+  | { operation: 'create'; path: string; content: string }
+  | { operation: 'update'; path: string; content: string }
+  | { operation: 'delete'; path: string }
+  | { operation: 'rename'; path: string; destination: string };
+
+export interface ExecuteSafeFileOperationsRequest {
+  taskId: string;
+  requestId: string;
+  operations: SafeFileOperation[];
+  approvalId: string | null;
+  diffArtifactId: string | null;
+  validationRoundId: string | null;
+  proofPackId: string | null;
+}
+
+export interface SafeFileOperationResult {
+  operation: string;
+  path: string;
+  destination: string | null;
+}
+
+export interface ExecuteSafeFileOperationsResponse {
+  transactionId: string;
+  status: 'committed';
+  results: SafeFileOperationResult[];
+}
+
+export function executeSafeFileOperations(request: ExecuteSafeFileOperationsRequest) {
+  return invokeCommand<ExecuteSafeFileOperationsResponse>('execute_safe_file_operations', {
+    request,
+  });
 }

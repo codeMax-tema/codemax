@@ -6,6 +6,8 @@ pub mod core;
 pub mod exec;
 pub mod git;
 pub mod privacy;
+pub mod recovery;
+pub mod safe_fs;
 pub mod safety;
 pub mod secrets;
 pub mod storage;
@@ -13,17 +15,25 @@ pub mod workspace;
 
 use tauri::Manager;
 
+use crate::commands::files;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
+            let resource_dir = app.path().resource_dir()?;
             let managed_storage = storage::ManagedStorage::initialize(app_data_dir)?;
+            files::recover_incomplete_file_transactions(&managed_storage)?;
+            recovery::recover_interrupted_runtime(&managed_storage)?;
             let agent_app_data_dir = managed_storage.roots.app_data_dir.clone();
             app.manage(managed_storage);
             app.manage(exec::CommandRunRegistry::default());
-            app.manage(agent::AgentService::with_app_data_dir(agent_app_data_dir));
+            app.manage(agent::AgentService::with_runtime_paths(
+                agent_app_data_dir,
+                resource_dir,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -55,6 +65,7 @@ pub fn run() {
             commands::exec::read_task_command_log,
             commands::exec::summarize_task_command_log,
             commands::exec::cleanup_expired_task_logs,
+            commands::files::execute_safe_file_operations,
             commands::merge::prepare_task_merge,
             commands::merge::merge_task,
             commands::models::get_model_config,

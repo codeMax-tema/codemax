@@ -28,6 +28,7 @@ pub struct AgentServiceConfig {
     pub startup_timeout_ms: u64,
     pub health_timeout_ms: u64,
     pub runtime_env: BTreeMap<String, String>,
+    pub standalone: bool,
 }
 
 impl Default for AgentServiceConfig {
@@ -48,11 +49,29 @@ impl Default for AgentServiceConfig {
                 DEFAULT_HEALTH_TIMEOUT_MS,
             ),
             runtime_env: BTreeMap::new(),
+            standalone: false,
         }
     }
 }
 
 impl AgentServiceConfig {
+    pub fn with_resource_dir(mut self, resource_dir: impl AsRef<Path>) -> Self {
+        let executable = resource_dir.as_ref().join("agent").join(if cfg!(windows) {
+            "codemax-agent.exe"
+        } else {
+            "codemax-agent"
+        });
+        if executable.is_file() {
+            self.agent_dir = executable
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| resource_dir.as_ref().to_path_buf());
+            self.python_executable = executable;
+            self.standalone = true;
+        }
+        self
+    }
+
     pub fn with_app_data_defaults(mut self, app_data_dir: impl AsRef<Path>) -> Self {
         let app_data_dir = app_data_dir.as_ref();
         self.set_env_default("CODEMAX_APP_DATA_DIR", app_data_dir);
@@ -132,25 +151,53 @@ pub enum AgentServiceError {
 }
 
 pub struct AgentService {
-    config: AgentServiceConfig,
+    config: Mutex<AgentServiceConfig>,
     child: Mutex<Option<Child>>,
 }
 
 impl Default for AgentService {
     fn default() -> Self {
         Self {
-            config: AgentServiceConfig::default(),
+            config: Mutex::new(AgentServiceConfig::default()),
             child: Mutex::new(None),
         }
     }
 }
 
 impl AgentService {
-    pub fn with_app_data_dir(app_data_dir: impl AsRef<Path>) -> Self {
+    pub fn with_runtime_paths(
+        app_data_dir: impl AsRef<Path>,
+        resource_dir: impl AsRef<Path>,
+    ) -> Self {
         Self {
-            config: AgentServiceConfig::default().with_app_data_defaults(app_data_dir),
+            config: Mutex::new(
+                AgentServiceConfig::default()
+                    .with_resource_dir(resource_dir)
+                    .with_app_data_defaults(app_data_dir),
+            ),
             child: Mutex::new(None),
         }
+    }
+
+    pub fn set_runtime_env(
+        &self,
+        values: BTreeMap<String, String>,
+    ) -> Result<bool, AgentServiceError> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?;
+        let previous = config.runtime_env.clone();
+        for key in [
+            "CODEMAX_MODEL_PROVIDER",
+            "CODEMAX_MODEL_BASE_URL",
+            "CODEMAX_MODEL_NAME",
+            "CODEMAX_MODEL_API_KEY",
+        ] {
+            config.runtime_env.remove(key);
+        }
+        config.runtime_env.extend(values);
+        Ok(config.runtime_env != previous)
     }
 
     pub async fn start(&self) -> Result<AgentServiceStatus, AgentServiceError> {
@@ -160,29 +207,33 @@ impl AgentService {
             }
         }
 
-        if !self.config.agent_dir.is_dir() {
-            return Err(AgentServiceError::AgentDirMissing(
-                self.config.agent_dir.clone(),
-            ));
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?
+            .clone();
+        if !config.agent_dir.is_dir() {
+            return Err(AgentServiceError::AgentDirMissing(config.agent_dir.clone()));
         }
 
         if let Some(mut child) = self.take_child()? {
             terminate_child(&mut child).await?;
         }
 
-        let mut command = Command::new(&self.config.python_executable);
+        let mut command = Command::new(&config.python_executable);
+        if !config.standalone {
+            command.arg("-m").arg("app.main");
+        }
         command
-            .arg("-m")
-            .arg("app.main")
-            .current_dir(&self.config.agent_dir)
-            .env("CODEMAX_AGENT_HOST", &self.config.host)
-            .env("CODEMAX_AGENT_PORT", self.config.port.to_string())
-            .envs(&self.config.runtime_env)
+            .current_dir(&config.agent_dir)
+            .env("CODEMAX_AGENT_HOST", &config.host)
+            .env("CODEMAX_AGENT_PORT", config.port.to_string())
+            .envs(&config.runtime_env)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
         let child = command.spawn().map_err(|source| AgentServiceError::Spawn {
-            python: self.config.python_executable.to_string_lossy().to_string(),
+            python: config.python_executable.to_string_lossy().to_string(),
             source,
         })?;
         self.replace_child(Some(child))?;
@@ -212,7 +263,11 @@ impl AgentService {
     }
 
     pub async fn health_check(&self) -> Result<AgentHealthResponse, AgentServiceError> {
-        let config = self.config.clone();
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?
+            .clone();
         tokio::task::spawn_blocking(move || health_probe(&config))
             .await
             .map_err(|error| AgentServiceError::Join(error.to_string()))?
@@ -226,7 +281,11 @@ impl AgentService {
     ) -> Result<Value, AgentServiceError> {
         self.start().await?;
 
-        let config = self.config.clone();
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?
+            .clone();
         let method = method.to_string();
         let path = path.to_string();
         tokio::task::spawn_blocking(move || api_json_request(&config, &method, &path, body))
@@ -238,6 +297,11 @@ impl AgentService {
         &self,
         health: Option<AgentHealthResponse>,
     ) -> Result<AgentServiceStatus, AgentServiceError> {
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?
+            .clone();
         let pid = self.current_pid()?;
         let running = health
             .as_ref()
@@ -246,11 +310,11 @@ impl AgentService {
         Ok(AgentServiceStatus {
             running,
             pid,
-            host: self.config.host.clone(),
-            port: self.config.port,
-            health_url: self.config.health_url(),
-            agent_dir: self.config.agent_dir.to_string_lossy().to_string(),
-            python_executable: self.config.python_executable.to_string_lossy().to_string(),
+            host: config.host.clone(),
+            port: config.port,
+            health_url: config.health_url(),
+            agent_dir: config.agent_dir.to_string_lossy().to_string(),
+            python_executable: config.python_executable.to_string_lossy().to_string(),
             health,
         })
     }
@@ -310,8 +374,12 @@ impl AgentService {
     }
 
     async fn wait_until_healthy(&self) -> Result<AgentHealthResponse, AgentServiceError> {
-        let deadline =
-            Instant::now() + Duration::from_millis(self.config.startup_timeout_ms.max(1));
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| AgentServiceError::LockUnavailable)?
+            .clone();
+        let deadline = Instant::now() + Duration::from_millis(config.startup_timeout_ms.max(1));
 
         loop {
             match self.health_check().await {
@@ -326,7 +394,7 @@ impl AgentService {
 
             if Instant::now() >= deadline {
                 return Err(AgentServiceError::StartupTimeout {
-                    timeout_ms: self.config.startup_timeout_ms,
+                    timeout_ms: config.startup_timeout_ms,
                 });
             }
 
@@ -573,5 +641,80 @@ mod tests {
                 .map(PathBuf::from),
             Some(root.join("agent").join("memory"))
         );
+    }
+
+    #[test]
+    fn runtime_model_env_replaces_stale_secret_without_exposing_status() {
+        let service = AgentService::default();
+        let old_secret = "sk-old-runtime-secret";
+        let new_secret = "sk-new-runtime-secret";
+
+        let changed = service
+            .set_runtime_env(BTreeMap::from([
+                (
+                    "CODEMAX_MODEL_PROVIDER".to_string(),
+                    "openai-compatible".to_string(),
+                ),
+                (
+                    "CODEMAX_MODEL_BASE_URL".to_string(),
+                    "https://old.example/v1".to_string(),
+                ),
+                ("CODEMAX_MODEL_NAME".to_string(), "old-model".to_string()),
+                ("CODEMAX_MODEL_API_KEY".to_string(), old_secret.to_string()),
+            ]))
+            .expect("set initial runtime env");
+        assert!(changed);
+
+        let changed = service
+            .set_runtime_env(BTreeMap::from([
+                (
+                    "CODEMAX_MODEL_PROVIDER".to_string(),
+                    "openai-compatible".to_string(),
+                ),
+                (
+                    "CODEMAX_MODEL_BASE_URL".to_string(),
+                    "https://new.example/v1".to_string(),
+                ),
+                ("CODEMAX_MODEL_NAME".to_string(), "new-model".to_string()),
+                ("CODEMAX_MODEL_API_KEY".to_string(), new_secret.to_string()),
+            ]))
+            .expect("replace runtime env");
+        assert!(changed);
+
+        let config = service.config.lock().expect("lock config").clone();
+        assert_eq!(
+            config
+                .runtime_env
+                .get("CODEMAX_MODEL_API_KEY")
+                .map(String::as_str),
+            Some(new_secret)
+        );
+        assert!(!config.runtime_env.values().any(|value| value == old_secret));
+
+        let status = service.status_with_health(None).expect("status");
+        let serialized = serde_json::to_string(&status).expect("serialize status");
+        assert!(!serialized.contains(old_secret));
+        assert!(!serialized.contains(new_secret));
+    }
+
+    #[test]
+    fn packaged_agent_executable_is_preferred_when_present() {
+        let root =
+            std::env::temp_dir().join(format!("codemax-agent-resource-{}", uuid::Uuid::new_v4()));
+        let agent_root = root.join("agent");
+        std::fs::create_dir_all(&agent_root).expect("create resource agent directory");
+        let executable = agent_root.join(if cfg!(windows) {
+            "codemax-agent.exe"
+        } else {
+            "codemax-agent"
+        });
+        std::fs::write(&executable, b"fixture").expect("create packaged agent fixture");
+
+        let config = AgentServiceConfig::default().with_resource_dir(&root);
+
+        assert!(config.standalone);
+        assert_eq!(config.python_executable, executable);
+        assert_eq!(config.agent_dir, agent_root);
+        std::fs::remove_dir_all(root).expect("cleanup resource fixture");
     }
 }

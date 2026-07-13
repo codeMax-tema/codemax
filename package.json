@@ -18,7 +18,9 @@
     "check:tauri": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "build:desktop": "npm --workspace @codemax/desktop run build",
     "build:tauri:debug": "npm --workspace @codemax/desktop run tauri -- build --debug --no-bundle",
-    "dev:desktop": "npm --workspace @codemax/desktop run dev -- --host 127.0.0.1"
+    "dev:desktop": "npm --workspace @codemax/desktop run dev -- --host 127.0.0.1",
+    "build:agent-runtime": "node scripts/build-agent-runtime.mjs",
+    "build:installer": "npm run build:agent-runtime && npm --workspace @codemax/desktop run tauri -- build --bundles nsis"
   },
   "workspaces": [
     "apps/*"

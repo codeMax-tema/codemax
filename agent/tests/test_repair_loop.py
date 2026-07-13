@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.skip(reason="UNSAFE_DIRECT_EDIT_CONTRACT_RETIRED: replaced by Rust two-phase file commit tests")
+
 from pathlib import Path
 
 from app.graph import create_initial_state, run_agent_graph

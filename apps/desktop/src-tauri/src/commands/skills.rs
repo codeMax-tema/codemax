@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -35,7 +34,9 @@ pub fn get_skill_sources(project_path: Option<String>) -> AppResult<Vec<SkillSou
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let workspace_dir = project_dir.as_ref().and_then(|path| path.parent().map(Path::to_path_buf));
+    let workspace_dir = project_dir
+        .as_ref()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
     let global_root = user_home_dir().map(|path| path.join(".codex").join("skills"));
     let built_in_root = global_root.as_ref().map(|path| path.join(".system"));
 
@@ -116,7 +117,11 @@ fn collect_skill_entries(root: &Path) -> std::io::Result<Vec<SkillEntryView>> {
 }
 
 fn read_skill_entry(path: &Path) -> std::io::Result<SkillEntryView> {
-    let skill_file = if path.is_dir() { path.join("SKILL.md") } else { path.to_path_buf() };
+    let skill_file = if path.is_dir() {
+        path.join("SKILL.md")
+    } else {
+        path.to_path_buf()
+    };
     let content = fs::read_to_string(&skill_file)?;
     let (name, description) = parse_skill_frontmatter(&content).unwrap_or_else(|| {
         (
@@ -186,14 +191,32 @@ mod tests {
         let workspace = temp_path("workspace");
         let project = workspace.join("project");
         let global = temp_path("global");
-        fs::create_dir_all(project.join(".codemax/skills/project-skill")).expect("create project skill");
-        fs::create_dir_all(workspace.join(".codemax/skills/workspace-skill")).expect("create workspace skill");
+        fs::create_dir_all(project.join(".codemax/skills/project-skill"))
+            .expect("create project skill");
+        fs::create_dir_all(workspace.join(".codemax/skills/workspace-skill"))
+            .expect("create workspace skill");
         fs::create_dir_all(global.join("global-skill")).expect("create global skill");
         fs::create_dir_all(global.join(".system/system-skill")).expect("create system skill");
-        fs::write(project.join(".codemax/skills/project-skill/SKILL.md"), "---\nname: project-skill\ndescription: Project skill\n---\n").expect("write project skill");
-        fs::write(workspace.join(".codemax/skills/workspace-skill/SKILL.md"), "---\nname: workspace-skill\ndescription: Workspace skill\n---\n").expect("write workspace skill");
-        fs::write(global.join("global-skill/SKILL.md"), "---\nname: global-skill\ndescription: Global skill\n---\n").expect("write global skill");
-        fs::write(global.join(".system/system-skill/SKILL.md"), "---\nname: built-in-skill\ndescription: Built in skill\n---\n").expect("write system skill");
+        fs::write(
+            project.join(".codemax/skills/project-skill/SKILL.md"),
+            "---\nname: project-skill\ndescription: Project skill\n---\n",
+        )
+        .expect("write project skill");
+        fs::write(
+            workspace.join(".codemax/skills/workspace-skill/SKILL.md"),
+            "---\nname: workspace-skill\ndescription: Workspace skill\n---\n",
+        )
+        .expect("write workspace skill");
+        fs::write(
+            global.join("global-skill/SKILL.md"),
+            "---\nname: global-skill\ndescription: Global skill\n---\n",
+        )
+        .expect("write global skill");
+        fs::write(
+            global.join(".system/system-skill/SKILL.md"),
+            "---\nname: built-in-skill\ndescription: Built in skill\n---\n",
+        )
+        .expect("write system skill");
 
         let sources = build_skill_sources(
             Some(project.join(".codemax/skills")),

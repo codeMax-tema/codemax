@@ -74,7 +74,9 @@ fn resolve_workspace_strategy(
         return Ok(ResolvedWorkspaceStrategy::GitWorktree);
     }
 
-    let requested_strategy = requested_strategy.map(str::trim).filter(|value| !value.is_empty());
+    let requested_strategy = requested_strategy
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     match (work_mode, requested_strategy) {
         ("daily", Some("initialize_git")) => Ok(ResolvedWorkspaceStrategy::InitializeGit),
         ("daily", Some("isolated_copy")) => Ok(ResolvedWorkspaceStrategy::IsolatedCopy),
@@ -157,10 +159,10 @@ fn prepare_task_workspace(
             initialized_git: false,
         }),
         ResolvedWorkspaceStrategy::InitializeGit => {
-            let estimate = workspace::estimate_isolated_copy(&project.path)
-                .map_err(workspace_io_error)?;
-            let initialized = git::initialize_repository_with_baseline(&project.path)
-                .map_err(task_git_error)?;
+            let estimate =
+                workspace::estimate_isolated_copy(&project.path).map_err(workspace_io_error)?;
+            let initialized =
+                git::initialize_repository_with_baseline(&project.path).map_err(task_git_error)?;
             let worktree = match git::create_task_worktree(
                 &initialized.path,
                 storage.roots.worktree_root.clone(),
@@ -465,12 +467,14 @@ fn estimate_task_workspace_inner(
 ) -> AppResult<TaskWorkspaceEstimateView> {
     let project = git::inspect_project(request.repository_path.trim()).map_err(task_git_error)?;
     let requested_strategy = request.workspace_strategy.as_deref().map(str::trim);
-    let (workspace_kind, destination_root, estimate, cleanup_policy) = if project.is_git_repository {
+    let (workspace_kind, destination_root, estimate, cleanup_policy) = if project.is_git_repository
+    {
         (
             "git_worktree",
             storage.roots.worktree_root.to_string_lossy().to_string(),
-            workspace::estimate_isolated_copy(&project.path)
-                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+            workspace::estimate_isolated_copy(&project.path).map_err(|error| {
+                workspace_operation_error(error, "estimate source", Path::new(&project.path))
+            })?,
             "remove_workspace_keep_source",
         )
     } else {
@@ -484,8 +488,9 @@ fn estimate_task_workspace_inner(
             Some("initialize_git") => (
                 "git_initialized_worktree",
                 storage.roots.worktree_root.to_string_lossy().to_string(),
-                workspace::estimate_isolated_copy(&project.path)
-                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+                workspace::estimate_isolated_copy(&project.path).map_err(|error| {
+                    workspace_operation_error(error, "estimate source", Path::new(&project.path))
+                })?,
                 "remove_worktree_keep_repository",
             ),
             None | Some("isolated_copy") => (
@@ -495,7 +500,9 @@ fn estimate_task_workspace_inner(
                     &project.path,
                     &request.workspace_exclusions,
                 )
-                .map_err(|error| workspace_operation_error(error, "estimate source", Path::new(&project.path)))?,
+                .map_err(|error| {
+                    workspace_operation_error(error, "estimate source", Path::new(&project.path))
+                })?,
                 "remove_workspace_keep_source",
             ),
             Some(_) => {
@@ -506,9 +513,10 @@ fn estimate_task_workspace_inner(
             }
         }
     };
-    let available_bytes = workspace_available_space(Path::new(&destination_root)).map_err(|error| {
-        workspace_operation_error(error, "inspect target space", Path::new(&destination_root))
-    })?;
+    let available_bytes =
+        workspace_available_space(Path::new(&destination_root)).map_err(|error| {
+            workspace_operation_error(error, "inspect target space", Path::new(&destination_root))
+        })?;
     Ok(TaskWorkspaceEstimateView {
         source_path: project.path,
         destination_root,
@@ -1415,7 +1423,9 @@ fn rollback_created_task_files(
             && matches!(workspace_kind, "git_worktree" | "git_initialized_worktree")
         {
             if let Err(error) = git::remove_task_worktree(repository_path, workspace_root) {
-                cleanup_failures.push(format!("failed to remove worktree {worktree_path}: {error}"));
+                cleanup_failures.push(format!(
+                    "failed to remove worktree {worktree_path}: {error}"
+                ));
             }
         } else if workspace_root.exists() && workspace_kind == "isolated_copy" {
             if let Err(error) = fs::remove_dir_all(workspace_root) {
@@ -1429,14 +1439,18 @@ fn rollback_created_task_files(
     if matches!(workspace_kind, "git_worktree" | "git_initialized_worktree") {
         if let Some(task_branch) = task_branch {
             if let Err(error) = git::delete_task_branch(repository_path, task_id, task_branch) {
-                cleanup_failures.push(format!("failed to delete task branch {task_branch}: {error}"));
+                cleanup_failures.push(format!(
+                    "failed to delete task branch {task_branch}: {error}"
+                ));
             }
         }
     }
 
     if remove_initialized_git {
         if let Err(error) = git::remove_initialized_repository_metadata(repository_path) {
-            cleanup_failures.push(format!("failed to remove initialized Git metadata: {error}"));
+            cleanup_failures.push(format!(
+                "failed to remove initialized Git metadata: {error}"
+            ));
         }
     }
 
@@ -1721,7 +1735,8 @@ mod a_line_tests {
             &storage,
             CreateTaskRecordRequest {
                 repository_path: repository.to_string_lossy().to_string(),
-                description: "Persist chosen mode and permissions into the task contract.".to_string(),
+                description: "Persist chosen mode and permissions into the task contract."
+                    .to_string(),
                 title: Some("Contract override task".to_string()),
                 task_type: Some("custom".to_string()),
                 model_id: Some("gpt-5-codex".to_string()),
@@ -1818,7 +1833,10 @@ mod a_line_tests {
             project.canonicalize().expect("canonical project source")
         );
         assert!(!task.original_write_authorized);
-        assert_eq!(task.workspace_estimated_bytes, summary.workspace_estimated_bytes);
+        assert_eq!(
+            task.workspace_estimated_bytes,
+            summary.workspace_estimated_bytes
+        );
         assert_eq!(task.branch_name, None);
         drop(store);
 
@@ -1898,7 +1916,8 @@ mod a_line_tests {
         assert!(summary.task_branch.is_some());
         assert!(!summary.target_branch.is_empty());
         assert_eq!(summary.workspace_kind, "git_initialized_worktree");
-        let workspace_path = PathBuf::from(summary.worktree_path.as_deref().expect("worktree path"));
+        let workspace_path =
+            PathBuf::from(summary.worktree_path.as_deref().expect("worktree path"));
         assert_ne!(
             workspace_path.canonicalize().expect("canonical worktree"),
             project.canonicalize().expect("canonical source")
@@ -2143,11 +2162,7 @@ fn workspace_available_space(path: &Path) -> std::io::Result<u64> {
     }
 }
 
-fn workspace_operation_error(
-    error: std::io::Error,
-    operation: &str,
-    path: &Path,
-) -> CommandError {
+fn workspace_operation_error(error: std::io::Error, operation: &str, path: &Path) -> CommandError {
     let code = match error.kind() {
         std::io::ErrorKind::AlreadyExists => "workspace.alreadyExists",
         std::io::ErrorKind::InvalidInput => "workspace.invalidPath",
@@ -2168,7 +2183,10 @@ fn workspace_io_error(error: std::io::Error) -> CommandError {
         std::io::ErrorKind::PermissionDenied => "workspace.permissionDenied",
         _ => "workspace.copyFailed",
     };
-    CommandError::new(code, format!("Unable to create isolated workspace: {error}"))
+    CommandError::new(
+        code,
+        format!("Unable to create isolated workspace: {error}"),
+    )
 }
 
 fn task_git_error(error: GitError) -> CommandError {
@@ -2299,23 +2317,13 @@ mod tests {
     #[test]
     fn non_git_modes_resolve_to_user_approved_safe_strategies() {
         assert_eq!(
-            resolve_workspace_strategy(
-                false,
-                Some("daily"),
-                Some("initialize_git"),
-                false,
-            )
-            .expect("daily Git initialization"),
+            resolve_workspace_strategy(false, Some("daily"), Some("initialize_git"), false,)
+                .expect("daily Git initialization"),
             ResolvedWorkspaceStrategy::InitializeGit
         );
         assert_eq!(
-            resolve_workspace_strategy(
-                false,
-                Some("daily"),
-                Some("isolated_copy"),
-                false,
-            )
-            .expect("daily isolated copy"),
+            resolve_workspace_strategy(false, Some("daily"), Some("isolated_copy"), false,)
+                .expect("daily isolated copy"),
             ResolvedWorkspaceStrategy::IsolatedCopy
         );
         assert_eq!(
@@ -2328,24 +2336,15 @@ mod tests {
     #[test]
     fn direct_original_requires_coding_mode_and_explicit_authorization() {
         for (mode, authorized) in [("daily", true), ("coding", false)] {
-            let error = resolve_workspace_strategy(
-                false,
-                Some(mode),
-                Some("direct_original"),
-                authorized,
-            )
-            .expect_err("unsafe direct original strategy must fail");
+            let error =
+                resolve_workspace_strategy(false, Some(mode), Some("direct_original"), authorized)
+                    .expect_err("unsafe direct original strategy must fail");
             assert_eq!(error.code, "workspace.directOriginalNotAuthorized");
         }
 
         assert_eq!(
-            resolve_workspace_strategy(
-                false,
-                Some("coding"),
-                Some("direct_original"),
-                true,
-            )
-            .expect("authorized coding direct edit"),
+            resolve_workspace_strategy(false, Some("coding"), Some("direct_original"), true,)
+                .expect("authorized coding direct edit"),
             ResolvedWorkspaceStrategy::DirectOriginal
         );
     }

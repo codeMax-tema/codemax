@@ -963,6 +963,18 @@
             }
           },
           "required": ["request", "response"]
+        },
+        "execute_safe_file_operations": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/ExecuteSafeFileOperationsRequest"
+            },
+            "response": {
+              "$ref": "#/$defs/ExecuteSafeFileOperationsResponse"
+            }
+          },
+          "required": ["request", "response"]
         }
       },
       "required": [
@@ -1032,6 +1044,7 @@
         "advance_agent_task",
         "submit_agent_validation_result",
         "run_agent_validation_cycle",
+        "execute_safe_file_operations",
         "generate_task_diff",
         "prepare_task_merge",
         "merge_task",
@@ -1463,6 +1476,45 @@
         },
         "decidedAt": {
           "type": ["string", "null"]
+        },
+        "actor": {
+          "type": ["string", "null"]
+        },
+        "action": {
+          "type": ["string", "null"]
+        },
+        "target": {
+          "type": ["string", "null"]
+        },
+        "argumentsDigest": {
+          "type": ["string", "null"]
+        },
+        "contentDigest": {
+          "type": ["string", "null"]
+        },
+        "scope": {
+          "type": ["string", "null"]
+        },
+        "nonce": {
+          "type": ["string", "null"]
+        },
+        "contractDigest": {
+          "type": ["string", "null"]
+        },
+        "expiresAt": {
+          "type": ["string", "null"]
+        },
+        "consumedAt": {
+          "type": ["string", "null"]
+        },
+        "consumedByCallId": {
+          "type": ["string", "null"]
+        },
+        "invalidatedAt": {
+          "type": ["string", "null"]
+        },
+        "invalidationReason": {
+          "type": ["string", "null"]
         }
       },
       "required": [
@@ -1475,7 +1527,20 @@
         "decision",
         "comment",
         "createdAt",
-        "decidedAt"
+        "decidedAt",
+        "actor",
+        "action",
+        "target",
+        "argumentsDigest",
+        "contentDigest",
+        "scope",
+        "nonce",
+        "contractDigest",
+        "expiresAt",
+        "consumedAt",
+        "consumedByCallId",
+        "invalidatedAt",
+        "invalidationReason"
       ],
       "additionalProperties": false
     },
@@ -2963,6 +3028,10 @@
         },
         "purpose": {
           "enum": ["validation", "edit", "diagnostic"]
+        },
+        "approvalId": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": ["taskId", "command", "cwd"]
@@ -5892,6 +5961,193 @@
         "sufficientSpace",
         "cleanupPolicy"
       ],
+      "additionalProperties": false
+    },
+    "SafeFileOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "create"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": ["operation", "path", "content"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "update"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": ["operation", "path", "content"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "delete"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["operation", "path"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "rename"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destination": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["operation", "path", "destination"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SafeFileOperationResult": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "destination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["operation", "path", "destination"],
+      "additionalProperties": false
+    },
+    "ExecuteSafeFileOperationsRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/SafeFileOperation"
+          }
+        },
+        "approvalId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diffArtifactId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validationRoundId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proofPackId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "taskId",
+        "requestId",
+        "operations",
+        "approvalId",
+        "diffArtifactId",
+        "validationRoundId",
+        "proofPackId"
+      ],
+      "additionalProperties": false
+    },
+    "ExecuteSafeFileOperationsResponse": {
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "committed"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SafeFileOperationResult"
+          }
+        }
+      },
+      "required": ["transactionId", "status", "results"],
       "additionalProperties": false
     }
   }

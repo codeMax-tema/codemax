@@ -37,6 +37,15 @@ const AGENT_TELEMETRY_MIGRATION: &str =
 const TASK_WORKSPACE_CONTRACT_MIGRATION_VERSION: &str = "0009_task_workspace_contract";
 const TASK_WORKSPACE_CONTRACT_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0009_task_workspace_contract.sql");
+const FILE_EDIT_TRANSACTIONS_MIGRATION_VERSION: &str = "0010_file_edit_transactions";
+const FILE_EDIT_TRANSACTIONS_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0010_file_edit_transactions.sql");
+const CRASH_RECOVERY_MIGRATION_VERSION: &str = "0011_crash_recovery";
+const CRASH_RECOVERY_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0011_crash_recovery.sql");
+const APPROVAL_AUTHORIZATION_MIGRATION_VERSION: &str = "0012_approval_authorization";
+const APPROVAL_AUTHORIZATION_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0012_approval_authorization.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -120,6 +129,15 @@ impl SqliteStore {
         self.apply_migration(
             TASK_WORKSPACE_CONTRACT_MIGRATION_VERSION,
             TASK_WORKSPACE_CONTRACT_MIGRATION,
+        )?;
+        self.apply_migration(
+            FILE_EDIT_TRANSACTIONS_MIGRATION_VERSION,
+            FILE_EDIT_TRANSACTIONS_MIGRATION,
+        )?;
+        self.apply_migration(CRASH_RECOVERY_MIGRATION_VERSION, CRASH_RECOVERY_MIGRATION)?;
+        self.apply_migration(
+            APPROVAL_AUTHORIZATION_MIGRATION_VERSION,
+            APPROVAL_AUTHORIZATION_MIGRATION,
         )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
@@ -822,6 +840,19 @@ pub struct ApprovalRecord {
     pub comment: Option<String>,
     pub created_at: String,
     pub decided_at: Option<String>,
+    pub actor: Option<String>,
+    pub action: Option<String>,
+    pub target: Option<String>,
+    pub arguments_digest: Option<String>,
+    pub content_digest: Option<String>,
+    pub scope: Option<String>,
+    pub nonce: Option<String>,
+    pub contract_digest: Option<String>,
+    pub expires_at: Option<String>,
+    pub consumed_at: Option<String>,
+    pub consumed_by_call_id: Option<String>,
+    pub invalidated_at: Option<String>,
+    pub invalidation_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -832,6 +863,39 @@ pub struct NewApproval<'a> {
     pub risk_level: &'a str,
     pub content: &'a str,
     pub reason: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewBoundApproval<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub approval_type: &'a str,
+    pub risk_level: &'a str,
+    pub content: &'a str,
+    pub reason: &'a str,
+    pub actor: &'a str,
+    pub action: &'a str,
+    pub target: &'a str,
+    pub arguments_digest: &'a str,
+    pub content_digest: &'a str,
+    pub scope: &'a str,
+    pub nonce: &'a str,
+    pub contract_digest: &'a str,
+    pub expires_at: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ApprovalAuthorization<'a> {
+    pub approval_id: &'a str,
+    pub task_id: &'a str,
+    pub actor: &'a str,
+    pub action: &'a str,
+    pub target: &'a str,
+    pub arguments_digest: &'a str,
+    pub content_digest: &'a str,
+    pub scope: &'a str,
+    pub contract_digest: &'a str,
+    pub call_id: &'a str,
 }
 
 pub struct ApprovalRepository<'conn> {
@@ -862,6 +926,14 @@ impl<'conn> ApprovalRepository<'conn> {
         self.get_required(approval.id)
     }
 
+    pub fn create_bound(&self, approval: NewBoundApproval<'_>) -> StorageResult<ApprovalRecord> {
+        self.connection.execute(
+            "INSERT INTO approvals (id, task_id, type, risk_level, content, reason, created_at, actor, action, target, arguments_digest, content_digest, scope, nonce, contract_digest, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![approval.id, approval.task_id, approval.approval_type, approval.risk_level, approval.content, approval.reason, now_text(), approval.actor, approval.action, approval.target, approval.arguments_digest, approval.content_digest, approval.scope, approval.nonce, approval.contract_digest, approval.expires_at],
+        )?;
+        self.get_required(approval.id)
+    }
+
     pub fn decide(
         &self,
         approval_id: &str,
@@ -871,7 +943,7 @@ impl<'conn> ApprovalRepository<'conn> {
         let updated = self.connection.execute(
             "UPDATE approvals
              SET decision = ?2, comment = ?3, decided_at = ?4
-             WHERE id = ?1",
+             WHERE id = ?1 AND decision IS NULL AND consumed_at IS NULL AND invalidated_at IS NULL",
             params![approval_id, decision, comment, now_text()],
         )?;
 
@@ -882,10 +954,30 @@ impl<'conn> ApprovalRepository<'conn> {
         self.get_required(approval_id)
     }
 
+    pub fn consume_authorization(
+        &self,
+        authorization: ApprovalAuthorization<'_>,
+    ) -> StorageResult<ApprovalRecord> {
+        let now = now_text();
+        let updated = self.connection.execute(
+            "UPDATE approvals SET consumed_at = ?11, consumed_by_call_id = ?10 WHERE id = ?1 AND task_id = ?2 AND actor = ?3 AND action = ?4 AND target = ?5 AND arguments_digest = ?6 AND content_digest = ?7 AND scope = ?8 AND contract_digest = ?9 AND decision = 'approved' AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?11 AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id = approvals.task_id AND tasks.status NOT IN ('cancelled', 'failed', 'completed', 'merged'))",
+            params![authorization.approval_id, authorization.task_id, authorization.actor, authorization.action, authorization.target, authorization.arguments_digest, authorization.content_digest, authorization.scope, authorization.contract_digest, authorization.call_id, now],
+        )?;
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!(
+                "usable approval authorization {}",
+                authorization.approval_id
+            )));
+        }
+        self.get_required(authorization.approval_id)
+    }
+
     pub fn list_for_task(&self, task_id: &str) -> StorageResult<Vec<ApprovalRecord>> {
         let mut statement = self.connection.prepare(
             "SELECT id, task_id, type, risk_level, content, reason, decision,
-                comment, created_at, decided_at
+                comment, created_at, decided_at, actor, action, target, arguments_digest,
+                content_digest, scope, nonce, contract_digest, expires_at, consumed_at,
+                consumed_by_call_id, invalidated_at, invalidation_reason
              FROM approvals
              WHERE task_id = ?1
              ORDER BY created_at, id",
@@ -903,7 +995,9 @@ impl<'conn> ApprovalRepository<'conn> {
     pub fn list_pending(&self) -> StorageResult<Vec<ApprovalRecord>> {
         let mut statement = self.connection.prepare(
             "SELECT id, task_id, type, risk_level, content, reason, decision,
-                comment, created_at, decided_at
+                comment, created_at, decided_at, actor, action, target, arguments_digest,
+                content_digest, scope, nonce, contract_digest, expires_at, consumed_at,
+                consumed_by_call_id, invalidated_at, invalidation_reason
              FROM approvals
              WHERE decision IS NULL
              ORDER BY created_at, id",
@@ -918,6 +1012,20 @@ impl<'conn> ApprovalRepository<'conn> {
         Ok(approvals)
     }
 
+    pub fn find_bound(
+        &self,
+        task_id: &str,
+        action: &str,
+        arguments_digest: &str,
+        content_digest: &str,
+    ) -> StorageResult<Option<ApprovalRecord>> {
+        self.connection.query_row(
+            "SELECT id, task_id, type, risk_level, content, reason, decision, comment, created_at, decided_at, actor, action, target, arguments_digest, content_digest, scope, nonce, contract_digest, expires_at, consumed_at, consumed_by_call_id, invalidated_at, invalidation_reason FROM approvals WHERE task_id = ?1 AND action = ?2 AND arguments_digest = ?3 AND content_digest = ?4 AND consumed_at IS NULL AND invalidated_at IS NULL AND (expires_at IS NULL OR CAST(expires_at AS INTEGER) > CAST(strftime('%s','now') AS INTEGER)) ORDER BY created_at DESC LIMIT 1",
+            params![task_id, action, arguments_digest, content_digest],
+            map_approval_record,
+        ).optional().map_err(StorageError::from)
+    }
+
     pub fn find_for_content(
         &self,
         task_id: &str,
@@ -927,7 +1035,9 @@ impl<'conn> ApprovalRepository<'conn> {
         self.connection
             .query_row(
                 "SELECT id, task_id, type, risk_level, content, reason, decision,
-                    comment, created_at, decided_at
+                    comment, created_at, decided_at, actor, action, target, arguments_digest,
+                    content_digest, scope, nonce, contract_digest, expires_at, consumed_at,
+                    consumed_by_call_id, invalidated_at, invalidation_reason
                  FROM approvals
                  WHERE task_id = ?1 AND type = ?2 AND content = ?3
                  ORDER BY created_at DESC, id DESC
@@ -943,7 +1053,9 @@ impl<'conn> ApprovalRepository<'conn> {
         self.connection
             .query_row(
                 "SELECT id, task_id, type, risk_level, content, reason, decision,
-                    comment, created_at, decided_at
+                    comment, created_at, decided_at, actor, action, target, arguments_digest,
+                    content_digest, scope, nonce, contract_digest, expires_at, consumed_at,
+                    consumed_by_call_id, invalidated_at, invalidation_reason
                  FROM approvals WHERE id = ?1",
                 params![approval_id],
                 map_approval_record,
@@ -3174,6 +3286,19 @@ fn map_approval_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalReco
         comment: row.get(7)?,
         created_at: row.get(8)?,
         decided_at: row.get(9)?,
+        actor: row.get(10)?,
+        action: row.get(11)?,
+        target: row.get(12)?,
+        arguments_digest: row.get(13)?,
+        content_digest: row.get(14)?,
+        scope: row.get(15)?,
+        nonce: row.get(16)?,
+        contract_digest: row.get(17)?,
+        expires_at: row.get(18)?,
+        consumed_at: row.get(19)?,
+        consumed_by_call_id: row.get(20)?,
+        invalidated_at: row.get(21)?,
+        invalidation_reason: row.get(22)?,
     })
 }
 
@@ -3559,6 +3684,7 @@ mod tests {
             "delivery_scores",
             "agent_sessions",
             "agent_events",
+            "file_edit_transactions",
             "validation_rounds",
             "merge_records",
             "personal_profiles",
@@ -3621,6 +3747,11 @@ mod tests {
                     updated_at TEXT NOT NULL,
                     completed_at TEXT
                 );
+                CREATE TABLE approvals (
+                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    type TEXT NOT NULL, risk_level TEXT NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL,
+                    decision TEXT, comment TEXT, created_at TEXT NOT NULL, decided_at TEXT
+                );
                 CREATE TABLE storage_policies (
                     id TEXT PRIMARY KEY,
                     scope TEXT NOT NULL,
@@ -3645,6 +3776,7 @@ mod tests {
             "delivery_scores",
             "agent_sessions",
             "agent_events",
+            "file_edit_transactions",
             "validation_rounds",
             "merge_records",
             "rule_registry",
@@ -3699,7 +3831,10 @@ mod tests {
             "original_write_authorized",
             "workspace_estimated_bytes",
         ] {
-            assert!(columns.iter().any(|value| value == column), "missing {column}");
+            assert!(
+                columns.iter().any(|value| value == column),
+                "missing {column}"
+            );
         }
     }
 
@@ -4277,5 +4412,160 @@ mod tests {
                 .as_deref(),
             Some("memory-accepted-001")
         );
+    }
+
+    fn create_bound_test_approval(store: &SqliteStore, id: &str, task_id: &str, expires_at: &str) {
+        ApprovalRepository::new(store.connection())
+            .create_bound(NewBoundApproval {
+                id,
+                task_id,
+                approval_type: "command",
+                risk_level: "high",
+                content: "dangerous command",
+                reason: "test",
+                actor: "user",
+                action: "command.execute",
+                target: "D:/worktree",
+                arguments_digest: "args-a",
+                content_digest: "content-a",
+                scope: "task_worktree",
+                nonce: id,
+                contract_digest: "contract-a",
+                expires_at,
+            })
+            .expect("create bound approval");
+        ApprovalRepository::new(store.connection())
+            .decide(id, "approved", None)
+            .expect("approve");
+    }
+
+    fn authorization<'a>(
+        approval_id: &'a str,
+        task_id: &'a str,
+        call_id: &'a str,
+    ) -> ApprovalAuthorization<'a> {
+        ApprovalAuthorization {
+            approval_id,
+            task_id,
+            actor: "user",
+            action: "command.execute",
+            target: "D:/worktree",
+            arguments_digest: "args-a",
+            content_digest: "content-a",
+            scope: "task_worktree",
+            contract_digest: "contract-a",
+            call_id,
+        }
+    }
+
+    #[test]
+    fn bound_approval_rejects_context_tampering_and_expiry() {
+        let store = migrated_store();
+        create_test_task(&store);
+        create_bound_test_approval(&store, "approval-bound", "task-001", "9999999999");
+        let approvals = ApprovalRepository::new(store.connection());
+        let mut wrong_task = authorization("approval-bound", "task-other", "call-1");
+        assert!(approvals.consume_authorization(wrong_task).is_err());
+        wrong_task.task_id = "task-001";
+        wrong_task.arguments_digest = "args-changed";
+        assert!(approvals.consume_authorization(wrong_task).is_err());
+        wrong_task.arguments_digest = "args-a";
+        wrong_task.target = "D:/other";
+        assert!(approvals.consume_authorization(wrong_task).is_err());
+
+        create_bound_test_approval(&store, "approval-expired", "task-001", "1");
+        assert!(approvals
+            .consume_authorization(authorization(
+                "approval-expired",
+                "task-001",
+                "call-expired"
+            ))
+            .is_err());
+    }
+
+    #[test]
+    fn bound_approval_is_consumed_once() {
+        let store = migrated_store();
+        create_test_task(&store);
+        create_bound_test_approval(&store, "approval-once", "task-001", "9999999999");
+        let approvals = ApprovalRepository::new(store.connection());
+        approvals
+            .consume_authorization(authorization("approval-once", "task-001", "call-1"))
+            .expect("first consume");
+        assert!(approvals
+            .consume_authorization(authorization("approval-once", "task-001", "call-2"))
+            .is_err());
+    }
+
+    #[test]
+    fn bound_approval_cannot_replay_after_database_restart() {
+        let root =
+            std::env::temp_dir().join(format!("codemax-approval-restart-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp");
+        let database = root.join("app.db");
+        {
+            let store = SqliteStore::open(&database).expect("open");
+            store.migrate().expect("migrate");
+            create_test_task(&store);
+            create_bound_test_approval(&store, "approval-restart", "task-001", "9999999999");
+            ApprovalRepository::new(store.connection())
+                .consume_authorization(authorization(
+                    "approval-restart",
+                    "task-001",
+                    "call-before-restart",
+                ))
+                .expect("consume");
+        }
+        {
+            let store = SqliteStore::open(&database).expect("reopen");
+            assert!(ApprovalRepository::new(store.connection())
+                .consume_authorization(authorization(
+                    "approval-restart",
+                    "task-001",
+                    "call-after-restart"
+                ))
+                .is_err());
+        }
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn concurrent_consumers_allow_exactly_one_winner() {
+        let root =
+            std::env::temp_dir().join(format!("codemax-approval-race-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp");
+        let database = root.join("app.db");
+        {
+            let store = SqliteStore::open(&database).expect("open");
+            store.migrate().expect("migrate");
+            create_test_task(&store);
+            create_bound_test_approval(&store, "approval-race", "task-001", "9999999999");
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let handles = (0..2)
+            .map(|index| {
+                let database = database.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let store = SqliteStore::open(database).expect("thread open");
+                    barrier.wait();
+                    ApprovalRepository::new(store.connection())
+                        .consume_authorization(authorization(
+                            "approval-race",
+                            "task-001",
+                            if index == 0 { "call-a" } else { "call-b" },
+                        ))
+                        .is_ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let winners = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join"))
+            .filter(|won| *won)
+            .count();
+        assert_eq!(winners, 1);
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

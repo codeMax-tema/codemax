@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.skip(reason="UNSAFE_DIRECT_EDIT_CONTRACT_RETIRED: replaced by Rust two-phase file commit tests")
+
 import subprocess
 import sys
 import tempfile

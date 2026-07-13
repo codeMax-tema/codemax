@@ -1047,6 +1047,19 @@ export interface ApprovalSummary {
   comment?: string | null;
   createdAt: string;
   decidedAt?: string | null;
+  actor?: string | null;
+  action?: string | null;
+  target?: string | null;
+  argumentsDigest?: string | null;
+  contentDigest?: string | null;
+  scope?: string | null;
+  nonce?: string | null;
+  contractDigest?: string | null;
+  expiresAt?: string | null;
+  consumedAt?: string | null;
+  consumedByCallId?: string | null;
+  invalidatedAt?: string | null;
+  invalidationReason?: string | null;
 }
 
 export type ApprovalDecision = 'approved' | 'rejected' | 'revise';

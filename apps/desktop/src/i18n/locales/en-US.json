@@ -722,5 +722,10 @@
   "tasks.new.workspace.insufficientSpace": "The target storage does not have enough space. Choose another location or free disk space.",
   "tasks.new.workspace.cleanup.remove_workspace_keep_source": "Deleting the task removes the isolated workspace and keeps the source folder.",
   "tasks.new.workspace.cleanup.remove_worktree_keep_repository": "Deleting the task removes the worktree and keeps the initialized Git repository.",
-  "tasks.new.workspace.cleanup.keep_original": "Task cleanup never deletes the original folder; edits remain in place."
+  "tasks.new.workspace.cleanup.keep_original": "Task cleanup never deletes the original folder; edits remain in place.",
+  "approvals.action": "Action",
+  "approvals.scope": "Permission scope",
+  "approvals.target": "Target",
+  "approvals.authorizationState": "Authorization state",
+  "approvals.singleUse": "Single use; expires"
 }

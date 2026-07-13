@@ -1141,10 +1141,16 @@ mod tests {
 
         assert!(project.is_git_repository);
         assert_eq!(
-            PathBuf::from(project.path).canonicalize().expect("canonical project path"),
-            repository.canonicalize().expect("canonical repository path")
+            PathBuf::from(project.path)
+                .canonicalize()
+                .expect("canonical project path"),
+            repository
+                .canonicalize()
+                .expect("canonical repository path")
         );
-        assert!(project.branch.is_some_and(|branch| !branch.trim().is_empty()));
+        assert!(project
+            .branch
+            .is_some_and(|branch| !branch.trim().is_empty()));
 
         fs::remove_dir_all(repository).expect("clean repository");
     }

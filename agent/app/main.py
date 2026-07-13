@@ -20,11 +20,19 @@ app = create_app()
 
 
 def main() -> None:
+    import os
+    import sys
+
     import uvicorn
+
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
     settings = load_settings()
     uvicorn.run(
-        "app.main:app",
+        app,
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,

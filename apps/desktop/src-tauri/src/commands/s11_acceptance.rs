@@ -287,6 +287,7 @@ async fn run_validation(
                 env: BTreeMap::new(),
                 timeout_ms: Some(30_000),
                 purpose: Some("validation".to_string()),
+                approval_id: None,
             },
             CommandLogPaths {
                 stdout_path: paths.logs_dir.join(format!("{run_id}.stdout.log")),

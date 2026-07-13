@@ -31,6 +31,8 @@ from app.model_gateway import ModelGatewayError, build_model_gateway
 from app.privacy import redact_model_context
 from app.providers import ModelMessage
 
+EDITING_SYSTEM_PROMPT = "Generate a minimal structured editing plan. Paths must be workspace-relative. Do not include binary content."
+
 PLAN_TODOS = [
     AgentTodo(
         id="plan",
@@ -355,13 +357,7 @@ def _sanitized_applied_edit_plan(edit_plan: EditingPlan) -> EditingPlan:
 
 
 def edit_node(state: AgentState) -> AgentState:
-    if state.phase in {AgentPhase.NEEDS_INTERVENTION, AgentPhase.COMPLETED, AgentPhase.FAILED}:
-        return state
-    if state.phase == AgentPhase.WAITING_APPROVAL and (
-        state.approval is None or state.approval.status != ApprovalStatus.APPROVED
-    ):
-        return state
-    if not _uses_model_workflow(state):
+    if state.workflow_version < 2:
         return legacy_edit_node(state)
     if state.edit_plan_applied:
         return state.model_copy(update={"phase": AgentPhase.EDITING, "updated_at": utc_now()})
@@ -369,158 +365,48 @@ def edit_node(state: AgentState) -> AgentState:
     edit_plan = state.edit_plan
     if edit_plan is None:
         try:
-            result = build_model_gateway().chat(
-                messages=[
-                    ModelMessage(
-                        role="system",
-                        content=(
-                            "Generate a safe, task-specific editing plan. Return only JSON "
-                            "matching the supplied schema. Paths must be workspace-relative."
-                        ),
-                    ),
+            gateway = build_model_gateway()
+            result = gateway.chat(
+                [
+                    ModelMessage(role="system", content=EDITING_SYSTEM_PROMPT),
                     ModelMessage(role="user", content=_task_prompt(state)),
                 ],
                 temperature=0,
-                response_format=_json_schema_response(
-                    "editing_plan",
-                    EditingPlan.model_json_schema(),
-                ),
+                response_format=_json_schema_response("editing_plan", EditingPlan.model_json_schema()),
             )
             edit_plan = EditingPlan.model_validate_json(result.content)
         except (ModelGatewayError, ValidationError, ValueError) as error:
             failed = state.model_copy(update={"phase": AgentPhase.FAILED, "updated_at": utc_now()})
             failed = set_all_todo_status(failed, TodoStatus.FAILED)
             return append_log(failed, _safe_model_failure("Edit", error), "error")
-        state = state.model_copy(update={"edit_plan": edit_plan, "updated_at": utc_now()})
 
-    delete_approval_content: str | None = None
-    try:
-        if any(edit.operation == "delete" for edit in edit_plan.edits):
-            delete_approval_content = _delete_approval_content(
-                edit_plan,
-                _delete_plan_fingerprint(state, edit_plan),
-            )
-        allow_deletes = _approval_matches_delete_plan(
-            state.approval, delete_approval_content
-        ) and bool(
-            state.approval is not None and state.approval.status == ApprovalStatus.APPROVED
-        )
-        applied = apply_edit_plan(
-            state.worktree_path,
-            edit_plan,
-            allow_deletes=allow_deletes,
-        )
-    except (EditSafetyError, OSError) as error:
-        safe_message = _safe_edit_failure(error)
-        failed = state.model_copy(
-            update={
-                "phase": AgentPhase.FAILED,
-                "edit_plan": _sanitized_failed_edit_plan(edit_plan),
-                "edit_plan_applied": False,
-                "updated_at": utc_now(),
-            }
-        )
-        failed = set_all_todo_status(failed, TodoStatus.FAILED, safe_message)
-        return append_log(failed, safe_message, "error")
+    delete_approval_content = None
+    if any(edit.operation == "delete" for edit in edit_plan.edits):
+        delete_approval_content = _delete_approval_content(edit_plan, _delete_plan_fingerprint(state, edit_plan))
+        approved = _approval_matches_delete_plan(state.approval, delete_approval_content) and bool(state.approval and state.approval.status == ApprovalStatus.APPROVED)
+        if not approved:
+            approval = state.approval if _approval_matches_delete_plan(state.approval, delete_approval_content) else AgentApproval(
+                id=f"approval-{state.task_id}-{state.checkpoint_index + 1}", approvalType="model_delete",
+                content=delete_approval_content, reason="Model-generated delete operations require explicit approval.")
+            waiting = state.model_copy(update={"phase": AgentPhase.WAITING_APPROVAL, "requires_approval": True, "approval": approval, "edit_plan": edit_plan, "updated_at": utc_now()})
+            return append_log(waiting, "Edit plan requires approval before deleting workspace files.")
 
-    if applied.requires_approval:
-        paths = ", ".join(edit.path for edit in applied.pending_approval)
-        approval = (
-            state.approval
-            if _approval_matches_delete_plan(state.approval, delete_approval_content)
-            else AgentApproval(
-                id=f"approval-{state.task_id}-{state.checkpoint_index + 1}",
-                approvalType="model_delete",
-                content=delete_approval_content or "Approve deletion of workspace files.",
-                reason="Model-generated delete operations require explicit approval.",
-            )
-        )
-        waiting = state.model_copy(
-            update={
-                "phase": AgentPhase.WAITING_APPROVAL,
-                "requires_approval": True,
-                "approval": approval,
-                "updated_at": utc_now(),
-            }
-        )
-        return append_log(waiting, f"Edit plan requires approval before deleting: {paths}.")
-
-    file_edits = [
-        AgentFileEdit(
-            path=edit.path,
-            operation=edit.operation,
-            summary=redact_model_context(edit.summary),
-        )
-        for edit in applied.file_edits
-    ]
-    is_repair = state.phase == AgentPhase.REPAIRING
-    state = set_all_todo_status(state, TodoStatus.IN_PROGRESS)
-    edited = state.model_copy(
-        update={
-            "phase": AgentPhase.EDITING,
-            "requires_approval": False,
-            "file_edits": [*state.file_edits, *file_edits],
-            "repair_file_edits": file_edits if is_repair else [],
-            "edit_plan": _sanitized_applied_edit_plan(edit_plan),
-            "edit_plan_applied": True,
-            "updated_at": utc_now(),
-        }
-    )
-    return append_log(edited, f"Edit node applied {len(file_edits)} model-driven file edits.")
+    commit_id = state.pending_file_commit_id or f"file-commit-{state.task_id}-{state.checkpoint_index + 1}"
+    pending = state.model_copy(update={
+        "phase": AgentPhase.AWAITING_FILE_COMMIT,
+        "edit_plan": edit_plan,
+        "edit_plan_applied": False,
+        "pending_file_commit_id": commit_id,
+        "requires_approval": False,
+        "updated_at": utc_now(),
+    })
+    return append_log(pending, f"File commit {commit_id} is waiting for the Rust safety service.")
 
 
 def legacy_edit_node(state: AgentState) -> AgentState:
-    if state.phase in {
-        AgentPhase.WAITING_APPROVAL,
-        AgentPhase.NEEDS_INTERVENTION,
-        AgentPhase.COMPLETED,
-        AgentPhase.FAILED,
-    }:
-        return state
-
-    target_path = edit_target_path(state)
-    if any(Path(edit.path) == target_path for edit in state.file_edits):
-        return state
-
-    worktree = Path(state.worktree_path).expanduser()
-    if not worktree.is_dir():
-        state = set_todo_status(
-            state,
-            "edit",
-            TodoStatus.FAILED,
-            f"Worktree path does not exist: {state.worktree_path}",
-        )
-        state = state.model_copy(update={"phase": AgentPhase.FAILED, "updated_at": utc_now()})
-        return append_log(
-            state, f"Edit node failed; missing worktree: {state.worktree_path}.", "error"
-        )
-
-    try:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(render_edit_plan(state), encoding="utf-8")
-    except OSError as error:
-        state = set_todo_status(state, "edit", TodoStatus.FAILED, str(error))
-        state = state.model_copy(update={"phase": AgentPhase.FAILED, "updated_at": utc_now()})
-        return append_log(state, f"Edit node failed while writing worktree file: {error}", "error")
-
-    edit = AgentFileEdit(
-        path=str(target_path),
-        operation="write",
-        summary=edit_summary(state),
-    )
-    repair_edits, repair_logs = apply_structured_repair_directives(state)
-    state = set_todo_status(state, "edit", TodoStatus.COMPLETED)
-    state = state.model_copy(
-        update={
-            "phase": AgentPhase.EDITING,
-            "file_edits": [*state.file_edits, edit, *repair_edits],
-            "updated_at": utc_now(),
-        }
-    )
-    state = append_log(state, f"Edit node wrote {target_path}.")
-    for message, level in repair_logs:
-        state = append_log(state, message, level)
-    return state
+    failed = state.model_copy(update={"phase": AgentPhase.NEEDS_INTERVENTION, "updated_at": utc_now()})
+    failed = set_all_todo_status(failed, TodoStatus.FAILED, "Legacy Python workspace editing is disabled.")
+    return append_log(failed, "Legacy workflow cannot edit user files; recreate the task with the Rust safe-file protocol.", "error")
 
 
 def validate_node(state: AgentState) -> AgentState:
@@ -786,6 +672,7 @@ def route_after_approval(state: AgentState) -> str:
 def route_after_edit(state: AgentState) -> str:
     if state.phase in {
         AgentPhase.WAITING_APPROVAL,
+        AgentPhase.AWAITING_FILE_COMMIT,
         AgentPhase.COMPLETED,
         AgentPhase.FAILED,
         AgentPhase.NEEDS_INTERVENTION,
@@ -917,62 +804,10 @@ def extract_structured_repair_directives(text: str) -> list[StructuredRepairDire
     return directives
 
 
-def apply_structured_repair_directives(
-    state: AgentState,
-) -> tuple[list[AgentFileEdit], list[tuple[str, str]]]:
-    if state.repair_plan is None or state.repair_round <= 0:
-        return [], []
-
-    directives = extract_structured_repair_directives("\n".join(state.repair_plan.next_actions))
-    if not directives:
-        return [], []
-
-    worktree = Path(state.worktree_path).expanduser().resolve()
-    edits: list[AgentFileEdit] = []
-    logs: list[tuple[str, str]] = []
-
-    for directive in directives:
-        target = safe_repair_target(worktree, directive.path)
-        if target is None:
-            logs.append((f"Skipped repair directive outside worktree: {directive.path}", "warning"))
-            continue
-
-        try:
-            original = target.read_text(encoding="utf-8")
-        except OSError as error:
-            logs.append(
-                (f"Skipped repair directive for unreadable file {target}: {error}", "warning")
-            )
-            continue
-
-        if directive.find not in original:
-            logs.append(
-                (
-                    f"Skipped repair directive because text was not found in {target}.",
-                    "warning",
-                )
-            )
-            continue
-
-        updated = original.replace(directive.find, directive.replace, 1)
-        try:
-            target.write_text(updated, encoding="utf-8")
-        except OSError as error:
-            logs.append(
-                (f"Skipped repair directive for unwritable file {target}: {error}", "error")
-            )
-            continue
-
-        edits.append(
-            AgentFileEdit(
-                path=str(target),
-                operation="replace",
-                summary=f"Applied structured repair directive during round {state.repair_round}.",
-            )
-        )
-        logs.append((f"Applied structured repair directive to {target}.", "info"))
-
-    return edits, logs
+def apply_structured_repair_directives(state: AgentState) -> tuple[list[AgentFileEdit], list[tuple[str, str]]]:
+    if state.repair_directives:
+        return [], [("Legacy structured repair directives were not applied because Python workspace writes are disabled.", "warning")]
+    return [], []
 
 
 def safe_repair_target(worktree: Path, relative_path: str) -> Path | None:

@@ -185,6 +185,45 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
     return advance_response(state)
 
 
+
+
+class FileCommitResultRequest(AgentModel):
+    commit_id: str = Field(alias="commitId", min_length=1)
+    success: bool
+    error: str | None = None
+
+
+@router.post("/{task_id}/file-commit-result", response_model=AdvanceAgentTaskResponse)
+def submit_file_commit_result(task_id: str, request: FileCommitResultRequest) -> AdvanceAgentTaskResponse:
+    with _tasks_lock:
+        state = load_state_or_404(task_id)
+        if state.phase != AgentPhase.AWAITING_FILE_COMMIT or state.pending_file_commit_id != request.commit_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File commit result does not match the pending commit.")
+        if not request.success:
+            message = request.error or "Rust safety service rejected the file commit."
+            state = state.model_copy(update={"phase": AgentPhase.FAILED, "pending_file_commit_id": None, "updated_at": utc_now()})
+            state = append_log(state, message, "error")
+        else:
+            edits = [
+                {"path": edit.path, "operation": edit.operation, "summary": edit.summary}
+                for edit in (state.edit_plan.edits if state.edit_plan else [])
+            ]
+            is_repair = state.repair_round > 0
+            state = state.model_copy(update={
+                "phase": AgentPhase.EDITING,
+                "edit_plan_applied": True,
+                "pending_file_commit_id": None,
+                "file_edits": [*state.file_edits, *edits],
+                "repair_file_edits": edits if is_repair else [],
+                "updated_at": utc_now(),
+            })
+            state = append_log(state, f"File commit {request.commit_id} completed through the Rust safety service.")
+            state = run_agent_graph(state)
+        update_scheduler_from_state(state)
+        state = _store.save(state)
+    return advance_response(state)
+
+
 @router.post("/{task_id}/validation-result", response_model=AdvanceAgentTaskResponse)
 def submit_validation_result(
     task_id: str,

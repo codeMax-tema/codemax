@@ -86,9 +86,18 @@ export function ApprovalsPage() {
       </section>
 
       <section className="approval-metrics" aria-label={t('approvals.metrics', locale)}>
-        <ApprovalMetric label={t('approvals.pendingCount', locale)} value={pendingCount.toString()} />
-        <ApprovalMetric label={t('approvals.highRiskCount', locale)} value={highRiskCount.toString()} />
-        <ApprovalMetric label={t('approvals.policy', locale)} value={t('approvals.policyValue', locale)} />
+        <ApprovalMetric
+          label={t('approvals.pendingCount', locale)}
+          value={pendingCount.toString()}
+        />
+        <ApprovalMetric
+          label={t('approvals.highRiskCount', locale)}
+          value={highRiskCount.toString()}
+        />
+        <ApprovalMetric
+          label={t('approvals.policy', locale)}
+          value={t('approvals.policyValue', locale)}
+        />
       </section>
 
       {error ? (
@@ -132,6 +141,34 @@ export function ApprovalsPage() {
                   <dt>{t('approvals.type', locale)}</dt>
                   <dd>{approval.approvalType ?? 'command'}</dd>
                 </div>
+                {approval.action ? (
+                  <div>
+                    <dt>{t('approvals.action', locale)}</dt>
+                    <dd>{approval.action}</dd>
+                  </div>
+                ) : null}
+                {approval.scope ? (
+                  <div>
+                    <dt>{t('approvals.scope', locale)}</dt>
+                    <dd>{approval.scope}</dd>
+                  </div>
+                ) : null}
+                {approval.target ? (
+                  <div className="wide">
+                    <dt>{t('approvals.target', locale)}</dt>
+                    <dd>
+                      <code>{approval.target}</code>
+                    </dd>
+                  </div>
+                ) : null}
+                {approval.expiresAt ? (
+                  <div className="wide">
+                    <dt>{t('approvals.authorizationState', locale)}</dt>
+                    <dd>
+                      {t('approvals.singleUse', locale)} · {formatTimestamp(approval.expiresAt)}
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="wide">
                   <dt>{t('approvals.operation', locale)}</dt>
                   <dd>
