@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,7 +14,9 @@ from app.providers.errors import ModelProviderError, map_openai_error
 @dataclass(frozen=True, slots=True)
 class ModelMessage:
     role: str
-    content: str
+    content: str = ""
+    tool_call_id: str | None = None
+    tool_calls: tuple[ModelToolCall, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,12 +27,20 @@ class ModelUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelToolCall:
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
 class ModelChatResult:
     id: str
     model: str
     content: str
     finish_reason: str | None
     usage: ModelUsage | None
+    tool_calls: tuple[ModelToolCall, ...] = ()
 
 
 class OpenAICompatibleTransport:
@@ -63,14 +74,14 @@ class OpenAICompatibleTransport:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | dict[str, object] | None = None,
         *,
         model: str | None = None,
     ) -> ModelChatResult:
         request: dict[str, object] = {
             "model": model or self._model_name,
-            "messages": [
-                {"role": message.role, "content": message.content} for message in messages
-            ],
+            "messages": [serialize_model_message(message) for message in messages],
         }
         if temperature is not None:
             request["temperature"] = temperature
@@ -78,6 +89,10 @@ class OpenAICompatibleTransport:
             request["max_tokens"] = max_tokens
         if response_format is not None:
             request["response_format"] = response_format
+        if tools is not None:
+            request["tools"] = tools
+        if tool_choice is not None:
+            request["tool_choice"] = tool_choice
 
         translated_error: ModelProviderError | None = None
         try:
@@ -96,6 +111,28 @@ class OpenAICompatibleTransport:
 
 
 OpenAICompatibleChatClient = OpenAICompatibleTransport
+
+
+def serialize_model_message(message: ModelMessage) -> dict[str, object]:
+    serialized: dict[str, object] = {
+        "role": message.role,
+        "content": message.content,
+    }
+    if message.tool_calls:
+        serialized["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        serialized["tool_call_id"] = message.tool_call_id
+    return serialized
 
 
 def parse_chat_response(response: object) -> ModelChatResult:
@@ -128,7 +165,41 @@ def parse_chat_response(response: object) -> ModelChatResult:
         content=content or "",
         finish_reason=finish_reason,
         usage=model_usage(getattr(response, "usage", None)),
+        tool_calls=parse_tool_calls(message),
     )
+
+
+def parse_tool_calls(message: object) -> tuple[ModelToolCall, ...]:
+    raw_tool_calls = getattr(message, "tool_calls", None)
+    if raw_tool_calls is None:
+        return ()
+    if not isinstance(raw_tool_calls, (list, tuple)):
+        raise invalid_provider_response()
+
+    tool_calls: list[ModelToolCall] = []
+    for raw_tool_call in raw_tool_calls:
+        call_id = getattr(raw_tool_call, "id", None)
+        call_type = getattr(raw_tool_call, "type", None)
+        function = getattr(raw_tool_call, "function", None)
+        name = getattr(function, "name", None)
+        arguments = getattr(function, "arguments", None)
+        if (
+            not isinstance(call_id, str)
+            or not call_id
+            or call_type != "function"
+            or not isinstance(name, str)
+            or not name
+            or not isinstance(arguments, str)
+        ):
+            raise invalid_provider_response()
+        try:
+            parsed_arguments = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            parsed_arguments = None
+        if not isinstance(parsed_arguments, dict):
+            raise invalid_provider_response()
+        tool_calls.append(ModelToolCall(id=call_id, name=name, arguments=arguments))
+    return tuple(tool_calls)
 
 
 def model_usage(usage: object | None) -> ModelUsage | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import traceback
 from dataclasses import replace
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ from app.model_gateway import (
 from app.providers import ModelChatResult, ModelMessage, ModelUsage
 from app.providers.config import ModelConfig, ModelProvider
 from app.providers.errors import ModelProviderError
-from app.providers.openai_compatible import OpenAICompatibleTransport
+from app.providers.openai_compatible import ModelToolCall, OpenAICompatibleTransport
 
 
 class RecordingTransport:
@@ -125,6 +126,76 @@ def test_gateway_forwards_model_messages_and_structured_response_format() -> Non
         max_tokens=128,
         response_format=response_format,
     ), result)]
+
+
+def test_gateway_forwards_tool_definitions_and_tool_choice() -> None:
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(
+        transport=transport,
+        model="configured-model",
+        request_id_factory=lambda: "gateway-tool-request-1",
+    )
+    messages = [ModelMessage(role="user", content="Inspect the repository.")]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_text",
+                "description": "Search repository text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    gateway.chat(messages=messages, tools=tools, tool_choice="auto")
+
+    assert transport.calls == [
+        {
+            "model": "configured-model",
+            "messages": messages,
+            "temperature": None,
+            "max_tokens": None,
+            "response_format": None,
+            "tools": tools,
+            "tool_choice": "auto",
+        }
+    ]
+
+
+def test_gateway_returns_normalized_tool_calls() -> None:
+    transport = RecordingTransport(
+        ModelChatResult(
+            id="provider-tool-response-1",
+            model="configured-model",
+            content="",
+            finish_reason="tool_calls",
+            usage=ModelUsage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+            tool_calls=(
+                ModelToolCall(
+                    id="call-read-1",
+                    name="read_file",
+                    arguments='{"path":"agent/app/model_gateway.py"}',
+                ),
+            ),
+        )
+    )
+    gateway = ModelGateway(transport=transport, model="configured-model")
+
+    result = gateway.chat(messages=[ModelMessage(role="user", content="Read gateway.")])
+
+    assert result.content == ""
+    assert result.tool_calls == (
+        ModelToolCall(
+            id="call-read-1",
+            name="read_file",
+            arguments='{"path":"agent/app/model_gateway.py"}',
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -572,6 +643,212 @@ def test_openai_transport_allows_explicit_none_content_as_empty_response() -> No
     )
 
     assert result.content == ""
+
+
+def test_openai_transport_serializes_tools_and_parses_tool_calls() -> None:
+    requests: list[dict[str, Any]] = []
+
+    class FakeCompletions:
+        def create(self, **request: Any) -> object:
+            requests.append(request)
+            return SimpleNamespace(
+                id="provider-tool-response-1",
+                model="test-model",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    id="call-search-1",
+                                    type="function",
+                                    function=SimpleNamespace(
+                                        name="search_text",
+                                        arguments='{"query":"AgentState"}',
+                                    ),
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=9,
+                    completion_tokens=4,
+                    total_tokens=13,
+                ),
+            )
+
+    config = ModelConfig(
+        provider=ModelProvider.OPENAI_COMPATIBLE,
+        apiKey="test-key",
+        modelName="test-model",
+        timeoutSeconds=1,
+    )
+    transport = OpenAICompatibleTransport(
+        config,
+        client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_text",
+                "description": "Search repository text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    result = transport.chat(
+        model="test-model",
+        messages=[ModelMessage(role="user", content="Find AgentState.")],
+        tools=tools,
+        tool_choice="auto",
+    )
+
+    assert requests[0]["tools"] == tools
+    assert requests[0]["tool_choice"] == "auto"
+    assert result.content == ""
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].id == "call-search-1"
+    assert result.tool_calls[0].name == "search_text"
+    assert result.tool_calls[0].arguments == '{"query":"AgentState"}'
+
+
+def test_openai_transport_serializes_assistant_and_tool_history() -> None:
+    requests: list[dict[str, Any]] = []
+
+    class FakeCompletions:
+        def create(self, **request: Any) -> object:
+            requests.append(request)
+            return SimpleNamespace(
+                id="provider-final-response-1",
+                model="test-model",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="Done.", tool_calls=None),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=12,
+                    completion_tokens=2,
+                    total_tokens=14,
+                ),
+            )
+
+    config = ModelConfig(
+        provider=ModelProvider.OPENAI_COMPATIBLE,
+        apiKey="test-key",
+        modelName="test-model",
+        timeoutSeconds=1,
+    )
+    transport = OpenAICompatibleTransport(
+        config,
+        client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+    )
+    call = ModelToolCall(
+        id="call-read-1",
+        name="read_file",
+        arguments='{"path":"README.md"}',
+    )
+
+    transport.chat(
+        model="test-model",
+        messages=[
+            ModelMessage(role="user", content="Read the README."),
+            ModelMessage(role="assistant", content="", tool_calls=(call,)),
+            ModelMessage(
+                role="tool",
+                content='{"content":"hello"}',
+                tool_call_id="call-read-1",
+            ),
+        ],
+    )
+
+    assert requests[0]["messages"] == [
+        {"role": "user", "content": "Read the README."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-read-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"content":"hello"}',
+            "tool_call_id": "call-read-1",
+        },
+    ]
+
+
+def test_openai_transport_rejects_malformed_tool_arguments_without_leaking_payload() -> None:
+    secret = "tool-arguments-secret"
+
+    class FakeCompletions:
+        def create(self, **request: Any) -> object:
+            return SimpleNamespace(
+                id="provider-tool-response-invalid",
+                model="test-model",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    id="call-invalid-1",
+                                    type="function",
+                                    function=SimpleNamespace(
+                                        name="read_file",
+                                        arguments=f'{{"path":"{secret}"',
+                                    ),
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=5,
+                    completion_tokens=3,
+                    total_tokens=8,
+                ),
+            )
+
+    config = ModelConfig(
+        provider=ModelProvider.OPENAI_COMPATIBLE,
+        apiKey="test-key",
+        modelName="test-model",
+        timeoutSeconds=1,
+    )
+    transport = OpenAICompatibleTransport(
+        config,
+        client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        transport.chat(
+            model="test-model",
+            messages=[ModelMessage(role="user", content="Read a file.")],
+        )
+
+    assert raised.value.code == "model.invalidResponse"
+    assert raised.value.http_status == 502
+    assert_secret_absent_from_exception(raised.value, secret)
 
 
 def test_gateway_and_transport_repr_hide_prompt_response_and_url_credentials() -> None:

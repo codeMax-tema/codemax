@@ -14,6 +14,7 @@ from app.providers.errors import ModelProviderError
 from app.providers.openai_compatible import (
     ModelChatResult,
     ModelMessage,
+    ModelToolCall,
     ModelUsage,
     OpenAICompatibleTransport,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "ModelConfigError",
     "ModelConfigView",
     "ModelMessage",
+    "ModelToolCall",
     "ModelProvider",
     "ModelProviderError",
     "ModelUsage",
