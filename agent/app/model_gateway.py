@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.providers import (
     ModelChatResult,
     ModelMessage,
+    ModelToolCall,
     ModelUsage,
     build_chat_client,
     load_model_config,
@@ -25,6 +26,8 @@ class ModelGatewayRequest:
     temperature: float | None = None
     max_tokens: int | None = None
     response_format: dict[str, object] | None = None
+    tools: list[dict[str, object]] | None = field(default=None, repr=False)
+    tool_choice: str | dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +47,7 @@ class ModelGatewayResult:
     finish_reason: str | None
     latency_ms: float
     usage: ModelUsage
+    tool_calls: tuple[ModelToolCall, ...] = field(default=(), repr=False)
 
     @property
     def observation(self) -> ModelGatewayObservation:
@@ -64,6 +68,8 @@ class ModelGatewayTransport(Protocol):
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | dict[str, object] | None = None,
     ) -> ModelChatResult: ...
 
 
@@ -124,6 +130,8 @@ class ModelGateway:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | dict[str, object] | None = None,
     ) -> ModelGatewayResult:
         request = ModelGatewayRequest(
             request_id=self._request_id_factory(),
@@ -132,19 +140,26 @@ class ModelGateway:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            tools=tools,
+            tool_choice=tool_choice,
         )
         request = self._apply_before_interceptors(request)
 
         started_at = self._clock()
         translated_error: ModelGatewayError | None = None
         try:
-            raw_result = self._transport.chat(
-                model=request.model,
-                messages=request.messages,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                response_format=request.response_format,
-            )
+            transport_request: dict[str, object] = {
+                "model": request.model,
+                "messages": request.messages,
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens,
+                "response_format": request.response_format,
+            }
+            if request.tools is not None:
+                transport_request["tools"] = request.tools
+            if request.tool_choice is not None:
+                transport_request["tool_choice"] = request.tool_choice
+            raw_result = self._transport.chat(**transport_request)
         except ModelProviderError as error:
             translated_error = ModelGatewayError(
                 code=error.code,
@@ -221,6 +236,10 @@ class ModelGateway:
             raise invalid_response_error()
         if raw_result.finish_reason is not None and not isinstance(raw_result.finish_reason, str):
             raise invalid_response_error()
+        if not isinstance(raw_result.tool_calls, tuple) or not all(
+            isinstance(tool_call, ModelToolCall) for tool_call in raw_result.tool_calls
+        ):
+            raise invalid_response_error()
 
         usage = raw_result.usage
         if usage is None or usage_is_missing(usage):
@@ -240,6 +259,7 @@ class ModelGateway:
             finish_reason=raw_result.finish_reason,
             latency_ms=latency_ms,
             usage=usage,
+            tool_calls=raw_result.tool_calls,
         )
 
 

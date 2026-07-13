@@ -47,6 +47,20 @@ class ValidationStatus(StrEnum):
     TIMED_OUT = "timed_out"
 
 
+class ToolRequestStatus(StrEnum):
+    REQUESTED = "requested"
+    WAITING_APPROVAL = "waiting_approval"
+    EXECUTING = "executing"
+
+
+class ToolResultStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    WAITING_APPROVAL = "waiting_approval"
+
+
 class AgentModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -109,6 +123,47 @@ class ValidationResult(AgentModel):
     @property
     def passed(self) -> bool:
         return self.exit_code == 0 and not self.timed_out and not self.cancelled
+
+
+class AgentToolCall(AgentModel):
+    id: str
+    name: str
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
+class AgentMessage(AgentModel):
+    role: str
+    content: str = ""
+    tool_call_id: str | None = Field(default=None, alias="toolCallId")
+    tool_calls: list[AgentToolCall] = Field(default_factory=list, alias="toolCalls")
+
+
+class AgentToolRequest(AgentModel):
+    call_id: str = Field(alias="callId")
+    tool_name: str = Field(alias="toolName")
+    arguments: dict[str, object] = Field(default_factory=dict)
+    reason: str = ""
+    status: ToolRequestStatus = ToolRequestStatus.REQUESTED
+    created_at: str = Field(default_factory=utc_now, alias="createdAt")
+
+
+class AgentToolResult(AgentModel):
+    call_id: str = Field(alias="callId")
+    tool_name: str = Field(alias="toolName")
+    status: ToolResultStatus
+    output: dict[str, object] = Field(default_factory=dict)
+    error_code: str | None = Field(default=None, alias="errorCode")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+    artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    truncated: bool = False
+    created_at: str = Field(default_factory=utc_now, alias="createdAt")
+
+
+class AgentCompletion(AgentModel):
+    summary: str
+    validation_summary: str = Field(default="", alias="validationSummary")
+    changed_files: list[str] = Field(default_factory=list, alias="changedFiles")
+    remaining_risks: list[str] = Field(default_factory=list, alias="remainingRisks")
 
 
 class AgentFileEdit(AgentModel):
@@ -177,6 +232,27 @@ class AgentState(AgentModel):
     selected_proposal_id: str | None = Field(default=None, alias="selectedProposalId")
     repair_round: int = Field(default=0, alias="repairRound")
     max_repair_rounds: int = Field(default=5, alias="maxRepairRounds")
+    agent_messages: list[AgentMessage] = Field(default_factory=list, alias="agentMessages")
+    pending_tool_request: AgentToolRequest | None = Field(
+        default=None,
+        alias="pendingToolRequest",
+    )
+    last_tool_result: AgentToolResult | None = Field(default=None, alias="lastToolResult")
+    executed_tool_call_ids: list[str] = Field(
+        default_factory=list,
+        alias="executedToolCallIds",
+    )
+    agent_round: int = Field(default=0, ge=0, alias="agentRound")
+    max_agent_rounds: int = Field(default=32, ge=1, le=256, alias="maxAgentRounds")
+    consecutive_duplicate_calls: int = Field(
+        default=0,
+        ge=0,
+        alias="consecutiveDuplicateCalls",
+    )
+    max_duplicate_calls: int = Field(default=3, ge=1, le=20, alias="maxDuplicateCalls")
+    token_budget: int | None = Field(default=None, ge=1, alias="tokenBudget")
+    consumed_tokens: int = Field(default=0, ge=0, alias="consumedTokens")
+    completion: AgentCompletion | None = None
     checkpoint_index: int = Field(default=0, alias="checkpointIndex")
     created_at: str = Field(default_factory=utc_now, alias="createdAt")
     updated_at: str = Field(default_factory=utc_now, alias="updatedAt")
@@ -193,12 +269,20 @@ def create_initial_state(
     validation_candidates: list[ValidationCommandCandidate] | None = None,
     max_repair_rounds: int = 5,
     context_notes: list[str] | None = None,
+    workflow_version: int | None = None,
+    max_agent_rounds: int = 32,
+    token_budget: int | None = None,
 ) -> AgentState:
     context = TaskContext(
         repositoryPath=repository_path,
         title=title,
         description=description,
         notes=context_notes or [],
+    )
+    resolved_workflow_version = (
+        workflow_version
+        if workflow_version is not None
+        else (2 if model_id and model_id.strip() else 1)
     )
     state = AgentState(
         taskId=task_id,
@@ -207,11 +291,13 @@ def create_initial_state(
         title=title,
         description=description,
         modelId=model_id,
-        workflowVersion=2 if model_id and model_id.strip() else 1,
+        workflowVersion=resolved_workflow_version,
         context=context,
         validationCommand=validation_command,
         validationCandidates=validation_candidates or [],
         maxRepairRounds=max_repair_rounds,
+        maxAgentRounds=max_agent_rounds,
+        tokenBudget=token_budget,
     )
     return append_log(state, "Agent task state created.")
 
