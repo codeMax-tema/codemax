@@ -16,8 +16,9 @@ codemax-agent = "app.main:main"
 
 [project.optional-dependencies]
 dev = [
+  "pyinstaller>=6,<7",
   "pytest>=8.0.0",
-  "ruff>=0.5.0"
+  "ruff>=0.5.0",
 ]
 
 [tool.pytest.ini_options]

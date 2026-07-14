@@ -2,12 +2,17 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { resolveAgentPython } from './lib/agent-python.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function run(command, args, options = {}) {
   const cwd = options.cwd ?? root;
-  console.log(`\n> ${command} ${args.join(' ')}`);
+  const commandLabel = options.commandLabel ?? command;
+  const diagnosticLabel = options.commandLabel ?? (command === 'cargo' ? 'cargo' : 'Command');
+  if (options.logCommand !== false) {
+    console.log(`\n> ${commandLabel} ${args.join(' ')}`);
+  }
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'inherit',
@@ -15,7 +20,17 @@ function run(command, args, options = {}) {
   });
 
   if (result.error) {
-    console.error(`Unable to start ${command}: ${result.error.message}`);
+    console.error(`${diagnosticLabel} could not be started.`);
+    process.exit(1);
+  }
+
+  if (result.signal) {
+    console.error(`${diagnosticLabel} was interrupted.`);
+    process.exit(1);
+  }
+
+  if (result.status === null) {
+    console.error(`${diagnosticLabel} did not complete.`);
     process.exit(1);
   }
 
@@ -24,8 +39,12 @@ function run(command, args, options = {}) {
   }
 }
 
-run('python', ['tests/test_s11_mvp_acceptance.py'], {
+const python = resolveAgentPython({ root });
+console.log(`Using Agent Python source: ${python.source}`);
+run(python.command, ['-m', 'pytest', 'tests/test_s11_mvp_acceptance.py', '-q'], {
   cwd: path.join(root, 'agent'),
+  commandLabel: 'Agent Python',
+  logCommand: false,
 });
 run('cargo', [
   'test',
