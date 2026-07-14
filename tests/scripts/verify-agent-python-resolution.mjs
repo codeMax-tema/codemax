@@ -171,7 +171,8 @@ for (const [result, diagnostic] of [
 }
 assert.doesNotThrow(() => assertPythonBuild({ status: 1 }));
 
-const buildScript = readFileSync(new URL('../../scripts/build-agent-runtime.mjs', import.meta.url), 'utf8');
+const readSource = (url) => readFileSync(url, 'utf8').replace(/\r\n/g, '\n');
+const buildScript = readSource(new URL('../../scripts/build-agent-runtime.mjs', import.meta.url));
 assert.match(buildScript, /console\.log\(`Using Agent Python source: \$\{python\.source\}`\);/);
 assert.doesNotMatch(buildScript, /console\.log\([^\n]*python\.command/);
 assert.match(buildScript, /throw new Error\('Agent runtime was not created\.'\);/);
@@ -197,7 +198,7 @@ assert.ok(
   'A failed build must exit before later steps can inspect or copy a runtime artifact.',
 );
 
-const s11Script = readFileSync(new URL('../../scripts/check-s11.mjs', import.meta.url), 'utf8');
+const s11Script = readSource(new URL('../../scripts/check-s11.mjs', import.meta.url));
 assert.match(s11Script, /import \{ resolveAgentPython \} from '\.\/lib\/agent-python\.mjs';/);
 assert.match(s11Script, /const python = resolveAgentPython\(\{ root \}\);/);
 assert.match(s11Script, /console\.log\(`Using Agent Python source: \$\{python\.source\}`\);/);
