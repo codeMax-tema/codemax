@@ -27,7 +27,7 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.ico"
+      "icons/CodeMax.ico"
     ],
     "resources": {
       "../../../output/runtime/agent/codemax-agent.exe": "agent/codemax-agent.exe"
