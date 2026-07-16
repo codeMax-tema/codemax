@@ -168,6 +168,37 @@ def test_tool_result_http_boundary_rejects_unsafe_payloads(tmp_path, monkeypatch
     assert store.saved_states == []
 
 
+def test_tool_result_http_boundary_rejects_oversized_request_before_json_parsing(
+    tmp_path, monkeypatch
+) -> None:
+    from app.api import tasks
+
+    store = InMemoryStore(waiting_state(tmp_path))
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", SchedulerSpy(store.state.task_id))
+    payload = b"{" + (b" " * (tasks._TOOL_RESULT_MAX_PAYLOAD_BYTES + 1)) + b"}"
+
+    response = TestClient(create_app()).post(
+        f"/api/v1/tasks/{store.state.task_id}/tool-result",
+        content=payload,
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Runtime tool-result payload is too large."
+    assert store.saved_states == []
+
+
+def test_tool_result_openapi_declares_the_strict_json_request_body() -> None:
+    schema = create_app().openapi()
+    operation = schema["paths"]["/api/v1/tasks/{task_id}/tool-result"]["post"]
+    request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
+
+    assert request_schema["properties"]["callId"]["minLength"] == 1
+    assert request_schema["properties"]["toolName"]["minLength"] == 1
+    assert request_schema["additionalProperties"] is False
+
+
 def test_tool_result_mismatch_or_conflicting_replay_is_409_without_checkpoint_or_scheduler_mutation(
     tmp_path, monkeypatch
 ) -> None:
