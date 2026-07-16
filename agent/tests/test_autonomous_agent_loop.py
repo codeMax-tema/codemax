@@ -153,3 +153,31 @@ def test_workflow_v2_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) 
 
     assert advance_state_for_workflow(state) is resumed
     assert calls == [state]
+
+
+def test_legacy_workflow_v1_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) -> None:
+    import app.graph as graph
+    from app.graph.state import advance_state_for_workflow
+
+    payload = create_initial_state(
+        task_id="legacy-v1-recovery",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="Resume legacy V1 task",
+        model_id="test-model",
+        workflow_version=2,
+    ).model_dump(mode="json", by_alias=True)
+    payload.pop("workflowVersion")
+    legacy_state = AgentState.model_validate(payload)
+    resumed = legacy_state.model_copy(update={"checkpoint_index": 1})
+    calls: list[AgentState] = []
+
+    def run_full_graph(received: AgentState) -> AgentState:
+        calls.append(received)
+        return resumed
+
+    monkeypatch.setattr(graph, "run_agent_graph", run_full_graph)
+
+    assert legacy_state.workflow_version == 1
+    assert advance_state_for_workflow(legacy_state) is resumed
+    assert calls == [legacy_state]
