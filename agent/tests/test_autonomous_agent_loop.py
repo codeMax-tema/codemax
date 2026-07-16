@@ -936,3 +936,203 @@ def test_round_or_budget_limit_prevents_another_model_turn(
     assert stopped.agent_round == expected_rounds
     assert stopped.pending_tool_request is None
     assert gateway.requests == []
+
+
+def _waiting_for_complete_task(tmp_path) -> AgentState:
+    from app.graph.state import AgentPhase, AgentToolRequest, ToolRequestStatus
+
+    return v3_state(tmp_path).model_copy(
+        update={
+            "phase": AgentPhase.WAITING_RUNTIME,
+            "pending_tool_request": AgentToolRequest(
+                callId="call-complete-1",
+                toolName="complete_task",
+                arguments={
+                    "summary": "Finished safely.",
+                    "changedFiles": [],
+                    "remainingRisks": [],
+                },
+                status=ToolRequestStatus.WAITING_RUNTIME,
+            ),
+        }
+    )
+
+
+def test_consumed_runtime_results_replay_strictly_after_failure_and_completion(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-complete-2",
+                name="complete_task",
+                arguments=(
+                    '{"summary":"Search failed","changedFiles":[],"remainingRisks":[]}'
+                ),
+            )
+        ),
+    )
+    waiting = advance_autonomous_turn(v3_state(tmp_path), gateway=gateway)
+    failed = ToolResult(
+        call_id="call-search-1",
+        tool_name="search_text",
+        status="failed",
+        output={"details": "search service unavailable"},
+        error_code="runtime.unavailable",
+        error_message="Try again later.",
+        artifact_refs=("runtime-log-1",),
+    )
+
+    after_failure = apply_runtime_tool_result(waiting, failed, gateway=gateway)
+    replayed_failure = apply_runtime_tool_result(after_failure, failed, gateway=gateway)
+    conflicted_failure = apply_runtime_tool_result(
+        after_failure,
+        ToolResult(
+            call_id=failed.call_id,
+            tool_name=failed.tool_name,
+            status=failed.status,
+            output={"details": "a different failure payload"},
+            error_code=failed.error_code,
+            error_message=failed.error_message,
+            artifact_refs=failed.artifact_refs,
+            truncated=failed.truncated,
+        ),
+    )
+
+    assert after_failure.phase is AgentPhase.WAITING_RUNTIME
+    assert replayed_failure is after_failure
+    assert conflicted_failure.phase is AgentPhase.NEEDS_INTERVENTION
+    assert [item.call_id for item in after_failure.consumed_tool_results] == ["call-search-1"]
+
+    complete = ToolResult(
+        call_id="call-complete-2",
+        tool_name="complete_task",
+        status="succeeded",
+        output={"summary": "Search failed", "changedFiles": [], "remainingRisks": []},
+    )
+    completed = apply_runtime_tool_result(after_failure, complete)
+    replayed_completion = apply_runtime_tool_result(completed, complete)
+    conflicted_completion = apply_runtime_tool_result(
+        completed,
+        ToolResult(
+            call_id=complete.call_id,
+            tool_name=complete.tool_name,
+            status=complete.status,
+            output={"summary": "Different delivery", "changedFiles": [], "remainingRisks": []},
+        ),
+    )
+
+    assert completed.phase is AgentPhase.COMPLETED
+    assert replayed_completion is completed
+    assert conflicted_completion.phase is AgentPhase.NEEDS_INTERVENTION
+
+
+def test_runtime_result_redacts_sensitive_checkpoint_context_and_replays_raw_payload(
+    tmp_path,
+) -> None:
+    from app.autonomous import apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    secret = "sk-runtime-sensitive-token"
+    result = ToolResult(
+        call_id="call-complete-1",
+        tool_name="complete_task",
+        status="succeeded",
+        output={"summary": "Finished", "token": secret, "changedFiles": [], "remainingRisks": []},
+    )
+
+    completed = apply_runtime_tool_result(_waiting_for_complete_task(tmp_path), result)
+    replayed = apply_runtime_tool_result(completed, result)
+    checkpoint = completed.model_dump_json(by_alias=True)
+
+    assert completed.phase is AgentPhase.COMPLETED
+    assert replayed is completed
+    assert secret not in checkpoint
+    assert completed.last_tool_result is not None
+    assert completed.last_tool_result.output["token"] == "[REDACTED]"
+    assert secret not in completed.agent_messages[-1].content
+
+
+def test_runtime_result_truncates_large_output_when_runtime_marks_it_truncated(tmp_path) -> None:
+    from app.autonomous import apply_runtime_tool_result
+
+    original_output = {
+        "summary": "Finished",
+        "log": "x" * 80_000,
+        "changedFiles": [],
+        "remainingRisks": [],
+    }
+    completed = apply_runtime_tool_result(
+        _waiting_for_complete_task(tmp_path),
+        ToolResult(
+            call_id="call-complete-1",
+            tool_name="complete_task",
+            status="succeeded",
+            output=original_output,
+            truncated=True,
+        ),
+    )
+
+    assert completed.last_tool_result is not None
+    assert completed.last_tool_result.truncated is True
+    assert completed.last_tool_result.output != original_output
+    assert len(completed.agent_messages[-1].content.encode("utf-8")) < 20_000
+
+
+def _too_deep_runtime_output() -> dict[str, object]:
+    output: dict[str, object] = {"child": "too deep"}
+    for _ in range(15):
+        output = {"child": output}
+    return output
+
+
+@pytest.mark.parametrize(
+    "output",
+    [{"value": object()}, _too_deep_runtime_output()],
+)
+def test_runtime_result_invalid_or_too_deep_payload_needs_intervention_without_throwing(
+    tmp_path, output: dict[str, object]
+) -> None:
+    from app.autonomous import apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    waiting = _waiting_for_complete_task(tmp_path)
+    recovered = apply_runtime_tool_result(
+        waiting,
+        ToolResult(
+            call_id="call-complete-1",
+            tool_name="complete_task",
+            status="succeeded",
+            output=output,
+        ),
+    )
+
+    assert recovered.phase is AgentPhase.NEEDS_INTERVENTION
+    assert recovered.pending_tool_request == waiting.pending_tool_request
+    assert recovered.agent_messages == waiting.agent_messages
+
+
+def test_workflow_v4_dispatches_to_the_autonomous_runner(tmp_path, monkeypatch) -> None:
+    import app.autonomous as autonomous
+    from app.graph.state import advance_state_for_workflow
+
+    state = v3_state(tmp_path).model_copy(update={"workflow_version": 4})
+    resumed = state.model_copy(update={"checkpoint_index": 1})
+    calls: list[AgentState] = []
+
+    def advance(received: AgentState) -> AgentState:
+        calls.append(received)
+        return resumed
+
+    monkeypatch.setattr(autonomous, "advance_autonomous_turn", advance)
+
+    assert advance_state_for_workflow(state) is resumed
+    assert calls == [state]

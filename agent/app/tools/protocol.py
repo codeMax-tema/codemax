@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypeAlias
+
+JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
 ToolRiskLevel = Literal["read_only", "workspace_write", "command", "high"]
 ToolExecutionDomain = Literal["rust_runtime"]
@@ -57,7 +59,7 @@ class ToolResult:
     call_id: str
     tool_name: str
     status: ToolResultStatus
-    output: dict[str, object] = field(default_factory=dict, repr=False)
+    output: dict[str, JsonValue] = field(default_factory=dict, repr=False)
     error_code: str | None = None
     error_message: str | None = field(default=None, repr=False)
     artifact_refs: tuple[str, ...] = ()
