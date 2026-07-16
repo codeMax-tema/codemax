@@ -18,9 +18,11 @@ class AgentPhase(StrEnum):
     VALIDATING = "validating"
     ANALYZING_ERROR = "analyzing_error"
     REPAIRING = "repairing"
+    WAITING_RUNTIME = "waiting_runtime"
     WAITING_APPROVAL = "waiting_approval"
     NEEDS_INTERVENTION = "needs_intervention"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -49,6 +51,7 @@ class ValidationStatus(StrEnum):
 
 class ToolRequestStatus(StrEnum):
     REQUESTED = "requested"
+    WAITING_RUNTIME = "waiting_runtime"
     WAITING_APPROVAL = "waiting_approval"
     EXECUTING = "executing"
 
@@ -143,6 +146,8 @@ class AgentToolRequest(AgentModel):
     tool_name: str = Field(alias="toolName")
     arguments: dict[str, object] = Field(default_factory=dict)
     reason: str = ""
+    risk_level: str = Field(default="read_only", alias="riskLevel")
+    context_source: str = Field(default="model", alias="contextSource")
     status: ToolRequestStatus = ToolRequestStatus.REQUESTED
     created_at: str = Field(default_factory=utc_now, alias="createdAt")
 

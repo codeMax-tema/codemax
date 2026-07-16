@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-
 ToolRiskLevel = Literal["read_only", "workspace_write", "command", "high"]
 ToolExecutionDomain = Literal["rust_runtime"]
 ToolResultStatus = Literal[
@@ -49,6 +48,8 @@ class ToolRequest:
     tool_name: str
     arguments: dict[str, object] = field(repr=False)
     reason: str = ""
+    risk_level: ToolRiskLevel = "read_only"
+    context_source: str = "model"
 
 
 @dataclass(frozen=True, slots=True)
