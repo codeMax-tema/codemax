@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.autonomous import apply_runtime_tool_result
 from app.core.config import AgentSettings, load_settings
 from app.graph import (
     AgentPhase,
@@ -25,6 +26,7 @@ from app.graph.state import (
 from app.memory import MemoryService
 from app.proposals import ProposalService
 from app.scheduler import TaskScheduler
+from app.tools.protocol import ToolResult, ToolResultStatus
 from app.validation import detect_validation_candidates
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
@@ -118,6 +120,19 @@ class ValidationResultRequest(AgentModel):
     cancelled: bool = False
 
 
+class ToolResultRequest(AgentModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", strict=True)
+
+    call_id: str = Field(alias="callId", min_length=1)
+    tool_name: str = Field(alias="toolName", min_length=1)
+    status: ToolResultStatus
+    output: dict[str, object] = Field(default_factory=dict)
+    error_code: str | None = Field(default=None, alias="errorCode")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+    artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    truncated: bool = False
+
+
 @router.post("", response_model=CreateAgentTaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
     with _tasks_lock:
@@ -204,6 +219,39 @@ class FileCommitResultRequest(AgentModel):
     commit_id: str = Field(alias="commitId", min_length=1)
     success: bool
     error: str | None = None
+
+
+@router.post("/{task_id}/tool-result", response_model=AdvanceAgentTaskResponse)
+def submit_tool_result(task_id: str, request: ToolResultRequest) -> AdvanceAgentTaskResponse:
+    with _tasks_lock:
+        state = load_state_or_404(task_id)
+        if state.workflow_version < 3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=WORKFLOW_V3_NOT_READY_DETAIL,
+            )
+        if state.pending_tool_request is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Runtime tool result requires a pending V3 tool request.",
+            )
+
+        state = apply_runtime_tool_result(
+            state,
+            ToolResult(
+                call_id=request.call_id,
+                tool_name=request.tool_name,
+                status=request.status,
+                output=request.output,
+                error_code=request.error_code,
+                error_message=request.error_message,
+                artifact_refs=tuple(request.artifact_refs),
+                truncated=request.truncated,
+            ),
+        )
+        state = _store.save(state)
+
+    return advance_response(state)
 
 
 @router.post("/{task_id}/file-commit-result", response_model=AdvanceAgentTaskResponse)
