@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
@@ -50,6 +51,11 @@ const APPROVAL_AUTHORIZATION_MIGRATION: &str =
 const AGENT_TOOL_CALLS_MIGRATION_VERSION: &str = "0013_agent_tool_calls";
 const AGENT_TOOL_CALLS_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0013_agent_tool_calls.sql");
+const AGENT_TOOL_CALL_MAX_SUMMARY_BYTES: usize = 4 * 1024;
+const AGENT_TOOL_CALL_MAX_REFERENCE_BYTES: usize = 8 * 1024;
+const AGENT_TOOL_CALL_MAX_REFERENCES: usize = 128;
+const AGENT_TOOL_CALL_MAX_REFERENCE_LENGTH: usize = 512;
+const REDACTED_AUDIT_SUMMARY: &str = r#"{"redacted":true}"#;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -4581,11 +4587,12 @@ mod tests {
     #[test]
     fn agent_tool_call_is_idempotent_per_task_and_call_id() {
         let store = migrated_store();
+        create_test_task(&store);
         let repo = AgentToolCallRepository::new(store.connection());
 
         let first = repo
             .begin(NewAgentToolCall::requested(
-                "task-1",
+                "task-001",
                 "call-1",
                 "search_text",
                 "{\"query\":\"redacted\"}",
@@ -4593,7 +4600,7 @@ mod tests {
             .expect("first request");
         let duplicate = repo
             .begin(NewAgentToolCall::requested(
-                "task-1",
+                "task-001",
                 "call-1",
                 "search_text",
                 "{\"query\":\"redacted\"}",
@@ -4607,10 +4614,11 @@ mod tests {
     #[test]
     fn agent_tool_call_rejects_reused_call_id_with_different_request_digest() {
         let store = migrated_store();
+        create_test_task(&store);
         let repo = AgentToolCallRepository::new(store.connection());
 
         repo.begin(NewAgentToolCall::requested(
-            "task-1",
+            "task-001",
             "call-1",
             "search_text",
             "{\"query\":\"redacted\"}",
@@ -4619,7 +4627,7 @@ mod tests {
 
         let error = repo
             .begin(NewAgentToolCall::requested(
-                "task-1",
+                "task-001",
                 "call-1",
                 "search_text",
                 "{\"query\":\"different-redacted\"}",
@@ -4629,16 +4637,17 @@ mod tests {
         assert!(matches!(
             error,
             StorageError::NotFound(message)
-                if message == "agent tool call task-1/call-1 idempotency conflict"
+                if message == "agent tool call task-001/call-1 idempotency conflict"
         ));
     }
 
     #[test]
     fn agent_tool_call_completes_with_sanitized_audit_summaries() {
         let store = migrated_store();
+        create_test_task(&store);
         let repo = AgentToolCallRepository::new(store.connection());
         repo.begin(NewAgentToolCall::requested(
-            "task-1",
+            "task-001",
             "call-1",
             "search_text",
             "{\"query\":\"redacted\"}",
@@ -4647,7 +4656,7 @@ mod tests {
 
         let completed = repo
             .complete(
-                "task-1",
+                "task-001",
                 "call-1",
                 CompleteAgentToolCall {
                     status: "succeeded",
@@ -4661,13 +4670,193 @@ mod tests {
             .expect("complete request");
 
         let loaded = repo
-            .get_required("task-1", "call-1")
+            .get_required("task-001", "call-1")
             .expect("load audit call");
         assert_eq!(completed, loaded);
         assert_eq!(loaded.status, "succeeded");
         assert_eq!(loaded.result_summary.as_deref(), Some("{\"matchCount\":1}"));
         assert_eq!(loaded.artifact_refs_json, "[\"artifact-1\"]");
         assert!(loaded.completed_at.is_some());
+    }
+
+    #[test]
+    fn agent_tool_call_completion_transitions_once_and_replays_only_equivalent_payloads() {
+        let store = migrated_store();
+        create_test_task(&store);
+        let repo = AgentToolCallRepository::new(store.connection());
+        repo.begin(NewAgentToolCall::requested(
+            "task-001",
+            "call-complete-once",
+            "search_text",
+            "{\"query\":\"needle\"}",
+        ))
+        .expect("begin request");
+
+        let completion = CompleteAgentToolCall {
+            status: "succeeded",
+            result_summary: Some("{\"matchCount\":1}"),
+            duration_ms: Some(12),
+            transaction_id: Some("transaction-1"),
+            command_run_id: Some("command-1"),
+            artifact_refs_json: "[\"artifact-1\"]",
+        };
+        let first = repo
+            .complete("task-001", "call-complete-once", completion)
+            .expect("first completion");
+        let replay = repo
+            .complete("task-001", "call-complete-once", completion)
+            .expect("equivalent completion replay");
+
+        assert_eq!(replay, first);
+
+        let conflict = repo.complete(
+            "task-001",
+            "call-complete-once",
+            CompleteAgentToolCall {
+                result_summary: Some("{\"matchCount\":2}"),
+                ..completion
+            },
+        );
+        assert!(matches!(conflict, Err(StorageError::NotFound(_))));
+        assert_eq!(
+            repo.get_required("task-001", "call-complete-once")
+                .expect("load completed call"),
+            first
+        );
+    }
+
+    #[test]
+    fn agent_tool_call_rejects_non_terminal_completion_statuses() {
+        let store = migrated_store();
+        create_test_task(&store);
+        let repo = AgentToolCallRepository::new(store.connection());
+        repo.begin(NewAgentToolCall::requested(
+            "task-001",
+            "call-invalid-status",
+            "search_text",
+            "{\"query\":\"needle\"}",
+        ))
+        .expect("begin request");
+
+        assert!(matches!(
+            repo.complete(
+                "task-001",
+                "call-invalid-status",
+                CompleteAgentToolCall {
+                    status: "running",
+                    result_summary: None,
+                    duration_ms: None,
+                    transaction_id: None,
+                    command_run_id: None,
+                    artifact_refs_json: "[]",
+                },
+            ),
+            Err(StorageError::NotFound(_))
+        ));
+        assert_eq!(
+            repo.get_required("task-001", "call-invalid-status")
+                .expect("load requested call")
+                .status,
+            "requested"
+        );
+    }
+
+    #[test]
+    fn agent_tool_call_repository_never_persists_untrusted_audit_values_verbatim() {
+        let store = migrated_store();
+        create_test_task(&store);
+        let repo = AgentToolCallRepository::new(store.connection());
+        let secret = "sk-live-agent-tool-call-secret";
+        let oversized = "x".repeat(32 * 1024);
+        let request_summary = format!("{{invalid:{secret}{oversized}");
+        let result_summary = format!("{{invalid:{secret}{oversized}");
+        let mut call = NewAgentToolCall::requested(
+            "task-001",
+            "call-untrusted-audit",
+            "search_text",
+            &request_summary,
+        );
+        call.context_sources_json =
+            format!("{{\"source\":\"{secret}\",\"padding\":\"{oversized}\"}}");
+        let begun = repo.begin(call).expect("begin request");
+        let completed = repo
+            .complete(
+                "task-001",
+                "call-untrusted-audit",
+                CompleteAgentToolCall {
+                    status: "failed",
+                    result_summary: Some(&result_summary),
+                    duration_ms: None,
+                    transaction_id: None,
+                    command_run_id: None,
+                    artifact_refs_json: &format!(
+                        "{{\"artifact\":\"{secret}\",\"padding\":\"{oversized}\"}}"
+                    ),
+                },
+            )
+            .expect("complete request");
+
+        let result_summary = completed
+            .result_summary
+            .as_deref()
+            .expect("sanitized result summary");
+        for value in [
+            begun.request_summary.as_str(),
+            begun.context_sources_json.as_str(),
+            result_summary,
+            completed.artifact_refs_json.as_str(),
+        ] {
+            assert!(!value.contains(secret), "secret must not be persisted");
+            assert!(
+                value.len() < oversized.len(),
+                "oversized value must be bounded"
+            );
+        }
+        assert_eq!(begun.context_sources_json, "[]");
+        assert_eq!(completed.artifact_refs_json, "[]");
+    }
+
+    #[test]
+    fn agent_tool_call_migration_retries_existing_table_and_cascades_task_deletion() {
+        let store = migrated_store();
+        create_test_task(&store);
+        let repo = AgentToolCallRepository::new(store.connection());
+        repo.begin(NewAgentToolCall::requested(
+            "task-001",
+            "call-cascade",
+            "search_text",
+            "{\"query\":\"needle\"}",
+        ))
+        .expect("persist call before retry");
+
+        store
+            .connection()
+            .execute(
+                "DELETE FROM schema_migrations WHERE version = ?1",
+                params![AGENT_TOOL_CALLS_MIGRATION_VERSION],
+            )
+            .expect("remove migration marker");
+        store.migrate().expect("retry migration");
+        TaskRepository::new(store.connection())
+            .delete("task-001")
+            .expect("delete parent task");
+
+        let remaining: i64 = store
+            .connection()
+            .query_row("SELECT COUNT(*) FROM agent_tool_calls", [], |row| {
+                row.get(0)
+            })
+            .expect("count cascaded calls");
+        assert_eq!(remaining, 0);
+        let migration_recorded: bool = store
+            .connection()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+                params![AGENT_TOOL_CALLS_MIGRATION_VERSION],
+                |row| row.get(0),
+            )
+            .expect("read migration marker");
+        assert!(migration_recorded);
     }
 }
 
@@ -4697,6 +4886,83 @@ fn agent_tool_call_request_digest(tool_name: &str, request_summary: &str) -> Str
     hasher.update([0]);
     hasher.update(request_summary.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn sanitize_agent_tool_call_summary(value: &str) -> String {
+    if value.len() > AGENT_TOOL_CALL_MAX_SUMMARY_BYTES {
+        return REDACTED_AUDIT_SUMMARY.to_string();
+    }
+
+    let parsed: Value = match serde_json::from_str(value) {
+        Ok(Value::Object(object)) => Value::Object(object),
+        _ => return REDACTED_AUDIT_SUMMARY.to_string(),
+    };
+    if agent_tool_call_value_contains_secret(&parsed) {
+        return REDACTED_AUDIT_SUMMARY.to_string();
+    }
+
+    match serde_json::to_string(&parsed) {
+        Ok(summary) if summary.len() <= AGENT_TOOL_CALL_MAX_SUMMARY_BYTES => summary,
+        _ => REDACTED_AUDIT_SUMMARY.to_string(),
+    }
+}
+
+fn sanitize_agent_tool_call_references(value: &str) -> String {
+    if value.len() > AGENT_TOOL_CALL_MAX_REFERENCE_BYTES {
+        return "[]".to_string();
+    }
+
+    let Value::Array(references) = serde_json::from_str(value).unwrap_or(Value::Null) else {
+        return "[]".to_string();
+    };
+    if references.len() > AGENT_TOOL_CALL_MAX_REFERENCES
+        || references.iter().any(|reference| {
+            !matches!(reference, Value::String(value) if value.len() <= AGENT_TOOL_CALL_MAX_REFERENCE_LENGTH && !agent_tool_call_text_contains_secret(value))
+        })
+    {
+        return "[]".to_string();
+    }
+
+    serde_json::to_string(&references).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn agent_tool_call_value_contains_secret(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            agent_tool_call_key_is_sensitive(key) || agent_tool_call_value_contains_secret(value)
+        }),
+        Value::Array(values) => values.iter().any(agent_tool_call_value_contains_secret),
+        Value::String(value) => agent_tool_call_text_contains_secret(value),
+        _ => false,
+    }
+}
+
+fn agent_tool_call_key_is_sensitive(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key"
+            | "apikey"
+            | "authorization"
+            | "credential"
+            | "credentials"
+            | "password"
+            | "private_key"
+            | "secret"
+            | "token"
+    )
+}
+
+fn agent_tool_call_text_contains_secret(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("sk-")
+        || lower.contains("ghp_")
+        || lower.contains("github_pat_")
+        || lower.contains("bearer ")
+        || value.contains("AKIA")
+}
+
+fn is_terminal_agent_tool_call_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4778,6 +5044,8 @@ impl<'conn> AgentToolCallRepository<'conn> {
     }
 
     pub fn begin(&self, call: NewAgentToolCall) -> StorageResult<AgentToolCallRecord> {
+        let request_summary = sanitize_agent_tool_call_summary(&call.request_summary);
+        let context_sources_json = sanitize_agent_tool_call_references(&call.context_sources_json);
         self.connection.execute(
             "INSERT INTO agent_tool_calls (
                 id, task_id, call_id, tool_name, request_digest, request_summary, status,
@@ -4790,8 +5058,8 @@ impl<'conn> AgentToolCallRepository<'conn> {
                 call.call_id,
                 call.tool_name,
                 call.request_digest,
-                call.request_summary,
-                call.context_sources_json,
+                request_summary,
+                context_sources_json,
                 now_text(),
             ],
         )?;
@@ -4813,6 +5081,34 @@ impl<'conn> AgentToolCallRepository<'conn> {
         call_id: &str,
         completion: CompleteAgentToolCall<'_>,
     ) -> StorageResult<AgentToolCallRecord> {
+        if !is_terminal_agent_tool_call_status(completion.status) {
+            return Err(StorageError::NotFound(format!(
+                "completion status {} is not terminal",
+                completion.status
+            )));
+        }
+
+        let result_summary = completion
+            .result_summary
+            .map(sanitize_agent_tool_call_summary);
+        let artifact_refs_json = sanitize_agent_tool_call_references(completion.artifact_refs_json);
+        let record = self.get_required(task_id, call_id)?;
+        if record.status != "requested" {
+            return if agent_tool_call_completion_matches(
+                &record,
+                completion.status,
+                result_summary.as_deref(),
+                completion.duration_ms,
+                completion.transaction_id,
+                completion.command_run_id,
+                &artifact_refs_json,
+            ) {
+                Ok(record)
+            } else {
+                Err(agent_tool_call_completion_conflict(task_id, call_id))
+            };
+        }
+
         let updated = self.connection.execute(
             "UPDATE agent_tool_calls
              SET status = ?3,
@@ -4822,24 +5118,35 @@ impl<'conn> AgentToolCallRepository<'conn> {
                  command_run_id = ?7,
                  artifact_refs_json = ?8,
                  completed_at = ?9
-             WHERE task_id = ?1 AND call_id = ?2",
+             WHERE task_id = ?1 AND call_id = ?2 AND status = 'requested'",
             params![
                 task_id,
                 call_id,
                 completion.status,
-                completion.result_summary,
+                result_summary.as_deref(),
                 completion.duration_ms,
                 completion.transaction_id,
                 completion.command_run_id,
-                completion.artifact_refs_json,
+                &artifact_refs_json,
                 now_text(),
             ],
         )?;
 
         if updated == 0 {
-            return Err(StorageError::NotFound(format!(
-                "agent tool call {task_id}/{call_id}"
-            )));
+            let record = self.get_required(task_id, call_id)?;
+            return if agent_tool_call_completion_matches(
+                &record,
+                completion.status,
+                result_summary.as_deref(),
+                completion.duration_ms,
+                completion.transaction_id,
+                completion.command_run_id,
+                &artifact_refs_json,
+            ) {
+                Ok(record)
+            } else {
+                Err(agent_tool_call_completion_conflict(task_id, call_id))
+            };
         }
 
         self.get_required(task_id, call_id)
@@ -4859,4 +5166,27 @@ impl<'conn> AgentToolCallRepository<'conn> {
             .optional()?
             .ok_or_else(|| StorageError::NotFound(format!("agent tool call {task_id}/{call_id}")))
     }
+}
+
+fn agent_tool_call_completion_matches(
+    record: &AgentToolCallRecord,
+    status: &str,
+    result_summary: Option<&str>,
+    duration_ms: Option<i64>,
+    transaction_id: Option<&str>,
+    command_run_id: Option<&str>,
+    artifact_refs_json: &str,
+) -> bool {
+    record.status == status
+        && record.result_summary.as_deref() == result_summary
+        && record.duration_ms == duration_ms
+        && record.transaction_id.as_deref() == transaction_id
+        && record.command_run_id.as_deref() == command_run_id
+        && record.artifact_refs_json == artifact_refs_json
+}
+
+fn agent_tool_call_completion_conflict(task_id: &str, call_id: &str) -> StorageError {
+    StorageError::NotFound(format!(
+        "agent tool call {task_id}/{call_id} completion conflict"
+    ))
 }
