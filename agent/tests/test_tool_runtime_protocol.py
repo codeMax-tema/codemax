@@ -1,265 +1,259 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import math
+from types import SimpleNamespace
 
 import pytest
 from app.graph.state import AgentPhase, AgentState, AgentToolRequest, create_initial_state
 from app.main import create_app
-from app.scheduler import TaskScheduler
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
 class InMemoryStore:
     def __init__(self, state: AgentState) -> None:
         self.state = state
-        self.saved: list[AgentState] = []
+        self.saved_states: list[AgentState] = []
 
     def load(self, task_id: str) -> AgentState | None:
         return self.state if task_id == self.state.task_id else None
 
     def save(self, state: AgentState) -> AgentState:
-        self.state = state
-        self.saved.append(state)
-        return state
+        saved = state.model_copy(update={"checkpoint_index": state.checkpoint_index + 1})
+        self.saved_states.append(saved)
+        self.state = saved
+        return saved
 
 
-def _waiting_for_complete_task(
-    tmp_path: Path, *, task_id: str = "runtime-tool-result"
-) -> AgentState:
+class SchedulerSpy:
+    def __init__(self, task_id: str, task_status: str = "running") -> None:
+        self.task_id = task_id
+        self.task_status = task_status
+        self.mutations: list[tuple[str, object]] = []
+
+    def status(self, task_id: str):
+        if task_id != self.task_id:
+            raise KeyError(task_id)
+        return SimpleNamespace(status=self.task_status)
+
+    def submit(self, task_id: str):
+        self.mutations.append(("submit", task_id))
+        self.task_id = task_id
+        return SimpleNamespace(status=self.task_status)
+
+    def finish(self, task_id: str, *, success: bool):
+        self.mutations.append(("finish", task_id, success))
+        return SimpleNamespace(status="completed" if success else "failed")
+
+
+def waiting_state(tmp_path, *, workflow_version: int = 3) -> AgentState:
     state = create_initial_state(
-        task_id=task_id,
+        task_id="runtime-task",
         repository_path=str(tmp_path),
         worktree_path=str(tmp_path),
-        title="Runtime tool result",
+        title="Runtime task",
         model_id="test-model",
-        workflow_version=3,
+        workflow_version=workflow_version,
     )
     return state.model_copy(
         update={
             "phase": AgentPhase.WAITING_RUNTIME,
             "pending_tool_request": AgentToolRequest(
-                callId="call-complete-1",
-                toolName="complete_task",
-                arguments={
-                    "summary": "Finish the task",
-                    "changedFiles": [],
-                    "remainingRisks": [],
-                },
+                callId="call-search-1",
+                toolName="search_text",
+                arguments={"query": "AgentState"},
             ),
         }
     )
 
 
-def _client_for(state: AgentState, monkeypatch) -> tuple[TestClient, InMemoryStore]:
+def valid_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "callId": "call-search-1",
+        "toolName": "search_text",
+        "status": "succeeded",
+        "output": {"matches": ["agent/app/graph/state.py"]},
+        "artifactRefs": ["audit://runtime/call-search-1"],
+        "truncated": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_v3_tool_result_round_trip_then_identical_replay_is_200_without_new_mutation(
+    tmp_path, monkeypatch
+) -> None:
     from app.api import tasks
 
-    store = InMemoryStore(state)
+    store = InMemoryStore(waiting_state(tmp_path))
+    scheduler = SchedulerSpy(store.state.task_id)
     monkeypatch.setattr(tasks, "_store", store)
-    return TestClient(create_app()), store
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+    import app.autonomous.loop as autonomous_loop
 
-
-def _completed_result(
-    *, call_id: str = "call-complete-1", output: dict[str, object] | None = None
-) -> dict[str, object]:
-    return {
-        "callId": call_id,
-        "toolName": "complete_task",
-        "status": "succeeded",
-        "output": output
-        or {
-            "summary": "Task completed through Runtime.",
-            "changedFiles": [],
-            "remainingRisks": [],
-        },
-    }
-
-
-def test_tool_result_api_round_trip_saves_v3_runtime_completion(
-    tmp_path: Path, monkeypatch
-) -> None:
-    state = _waiting_for_complete_task(tmp_path)
-    client, store = _client_for(state, monkeypatch)
-
-    response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json=_completed_result(),
+    monkeypatch.setattr(
+        autonomous_loop, "advance_autonomous_turn", lambda state, gateway=None: state
     )
+    client = TestClient(create_app())
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["taskId"] == state.task_id
-    assert body["status"] == "accepted"
-    assert body["phase"] == "completed"
-    assert body["checkpointId"] == f"{state.task_id}:checkpoint:0"
-    assert body["state"]["phase"] == "completed"
-    assert body["state"]["pendingToolRequest"] is None
-    assert body["state"]["lastToolResult"]["callId"] == "call-complete-1"
-    assert len(store.saved) == 1
-    assert store.saved[0].phase is AgentPhase.COMPLETED
+    first = client.post(f"/api/v1/tasks/{store.state.task_id}/tool-result", json=valid_payload())
+    assert first.status_code == 200
+    assert len(store.saved_states) == 1
+    checkpoint_index = store.state.checkpoint_index
+    scheduler_mutations = list(scheduler.mutations)
 
+    replay = client.post(f"/api/v1/tasks/{store.state.task_id}/tool-result", json=valid_payload())
 
-def test_tool_result_api_mismatched_call_is_saved_as_runtime_intervention(
-    tmp_path: Path, monkeypatch
-) -> None:
-    state = _waiting_for_complete_task(tmp_path)
-    client, store = _client_for(state, monkeypatch)
-
-    response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json=_completed_result(call_id="call-other"),
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["phase"] == "needs_intervention"
-    assert body["state"]["pendingToolRequest"]["callId"] == "call-complete-1"
-    assert body["state"]["lastToolResult"] is None
-    assert len(store.saved) == 1
-    assert store.saved[0].phase is AgentPhase.NEEDS_INTERVENTION
+    assert replay.status_code == 200
+    assert replay.json()["checkpointId"].endswith(f":{checkpoint_index}")
+    assert len(store.saved_states) == 1
+    assert scheduler.mutations == scheduler_mutations
 
 
-def test_tool_result_api_returns_redacted_runtime_state(tmp_path: Path, monkeypatch) -> None:
-    secret = "runtime-secret-must-not-leak"
-    state = _waiting_for_complete_task(tmp_path)
-    client, _store = _client_for(state, monkeypatch)
-
-    response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json=_completed_result(
+@pytest.mark.parametrize(
+    "payload",
+    [
+        valid_payload(callId="x" * 257),
+        valid_payload(toolName="x" * 257),
+        valid_payload(artifactRefs=["x" * 4097]),
+        valid_payload(artifactRefs=[42]),
+        valid_payload(output={"value": math.nan}),
+        valid_payload(
             output={
-                "summary": "Task completed through Runtime.",
-                "changedFiles": [],
-                "remainingRisks": [],
-                "giteeToken": secret,
+                "child": {
+                    "child": {
+                        "child": {
+                            "child": {
+                                "child": {
+                                    "child": {
+                                        "child": {
+                                            "child": {
+                                                "child": {
+                                                    "child": {
+                                                        "child": {"child": {"child": "too deep"}}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         ),
-    )
+    ],
+)
+def test_tool_result_http_boundary_rejects_unsafe_payloads(tmp_path, monkeypatch, payload) -> None:
+    from app.api import tasks
 
-    assert response.status_code == 200
-    assert secret not in response.text
-    result = response.json()["state"]["lastToolResult"]
-    assert result["output"]["giteeToken"] == "[REDACTED]"
-
-
-def test_tool_result_api_returns_redacted_and_budgeted_runtime_state(
-    tmp_path: Path, monkeypatch
-) -> None:
-    secret = "runtime-secret-must-not-leak"
-    state = _waiting_for_complete_task(tmp_path)
-    client, _store = _client_for(state, monkeypatch)
-    output = {
-        "summary": "Task completed through Runtime.",
-        "changedFiles": [],
-        "remainingRisks": [],
-        "giteeToken": secret,
-        "log": "x" * 80_000,
-    }
+    store = InMemoryStore(waiting_state(tmp_path))
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", SchedulerSpy(store.state.task_id))
+    client = TestClient(create_app())
 
     response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json={**_completed_result(output=output), "truncated": True},
-    )
-
-    assert response.status_code == 200
-    assert secret not in response.text
-    state_payload = response.json()["state"]
-    result = state_payload["lastToolResult"]
-    assert result["truncated"] is True
-    assert result["output"]["truncated"] is True
-    assert len(state_payload["agentMessages"][-1]["content"].encode("utf-8")) <= 16_000
-
-
-def test_tool_result_api_rejects_unknown_request_fields(tmp_path: Path, monkeypatch) -> None:
-    state = _waiting_for_complete_task(tmp_path)
-    client, store = _client_for(state, monkeypatch)
-
-    response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json={**_completed_result(), "unexpected": "not permitted"},
+        f"/api/v1/tasks/{store.state.task_id}/tool-result",
+        content=json.dumps(payload, allow_nan=True),
+        headers={"content-type": "application/json"},
     )
 
     assert response.status_code == 422
-    assert store.saved == []
+    assert store.saved_states == []
 
 
-def test_tool_result_api_requires_a_pending_v3_tool_request(tmp_path: Path, monkeypatch) -> None:
-    state = create_initial_state(
-        task_id="v3-no-pending-tool-result",
-        repository_path=str(tmp_path),
-        worktree_path=str(tmp_path),
-        title="No pending Runtime tool",
-        model_id="test-model",
-        workflow_version=3,
-    )
-    client, store = _client_for(state, monkeypatch)
-
-    response = client.post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json=_completed_result(),
-    )
-
-    assert response.status_code == 409
-    assert store.saved == []
-
-
-def test_tool_result_api_remains_closed_for_legacy_workflows(tmp_path: Path, monkeypatch) -> None:
-    for workflow_version in (1, 2):
-        state = create_initial_state(
-            task_id=f"legacy-v{workflow_version}-tool-result",
-            repository_path=str(tmp_path),
-            worktree_path=str(tmp_path),
-            title="Legacy Runtime tool result",
-            model_id="test-model",
-            workflow_version=workflow_version,
-        )
-        client, store = _client_for(state, monkeypatch)
-
-        response = client.post(
-            f"/api/v1/tasks/{state.task_id}/tool-result",
-            json=_completed_result(),
-        )
-
-        assert response.status_code == 503
-        assert store.saved == []
-
-@pytest.mark.parametrize(
-    ("runtime_status", "call_id", "expected_phase", "expected_scheduler_status"),
-    [
-        ("succeeded", "call-complete-1", AgentPhase.COMPLETED, "completed"),
-        ("cancelled", "call-complete-1", AgentPhase.CANCELLED, "cancelled"),
-        ("succeeded", "call-other", AgentPhase.NEEDS_INTERVENTION, "failed"),
-    ],
-)
-def test_tool_result_api_syncs_terminal_runtime_state_to_scheduler_before_save(
-    tmp_path: Path,
-    monkeypatch,
-    runtime_status: str,
-    call_id: str,
-    expected_phase: AgentPhase,
-    expected_scheduler_status: str,
+def test_tool_result_mismatch_or_conflicting_replay_is_409_without_checkpoint_or_scheduler_mutation(
+    tmp_path, monkeypatch
 ) -> None:
     from app.api import tasks
 
-    state = _waiting_for_complete_task(tmp_path)
-    scheduler = TaskScheduler(max_concurrent_tasks=1)
-    store = InMemoryStore(state)
-    saved_scheduler_statuses: list[str] = []
-    original_save = store.save
+    store = InMemoryStore(waiting_state(tmp_path))
+    scheduler = SchedulerSpy(store.state.task_id)
+    import app.autonomous.loop as autonomous_loop
 
-    def save(saved_state: AgentState) -> AgentState:
-        saved_scheduler_statuses.append(scheduler.status(saved_state.task_id).status)
-        return original_save(saved_state)
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+    monkeypatch.setattr(
+        autonomous_loop, "advance_autonomous_turn", lambda state, gateway=None: state
+    )
 
-    monkeypatch.setattr(store, "save", save)
+    with pytest.raises(HTTPException) as mismatch:
+        tasks.submit_tool_result(
+            store.state.task_id,
+            tasks.ToolResultRequest(**valid_payload(callId="wrong-call")),
+        )
+    assert mismatch.value.status_code == 409
+    assert store.saved_states == []
+    assert scheduler.mutations == []
+
+    accepted = tasks.submit_tool_result(
+        store.state.task_id,
+        tasks.ToolResultRequest(**valid_payload()),
+    )
+    assert accepted.phase == AgentPhase.CREATED
+    saved_count = len(store.saved_states)
+
+    with pytest.raises(HTTPException) as conflict:
+        tasks.submit_tool_result(
+            store.state.task_id,
+            tasks.ToolResultRequest(**valid_payload(output={"matches": ["different"]})),
+        )
+    assert conflict.value.status_code == 409
+    assert len(store.saved_states) == saved_count
+    assert scheduler.mutations == []
+
+
+def test_tool_result_checkpoint_save_failure_does_not_sync_scheduler(tmp_path, monkeypatch) -> None:
+    from app.api import tasks
+
+    class FailingStore(InMemoryStore):
+        def save(self, state: AgentState) -> AgentState:
+            raise OSError("disk full")
+
+    store = FailingStore(waiting_state(tmp_path))
+    scheduler = SchedulerSpy(store.state.task_id)
+    import app.autonomous.loop as autonomous_loop
+
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+    monkeypatch.setattr(
+        autonomous_loop, "advance_autonomous_turn", lambda state, gateway=None: state
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        tasks.submit_tool_result(
+            store.state.task_id,
+            tasks.ToolResultRequest(**valid_payload()),
+        )
+
+    assert scheduler.mutations == []
+
+
+def test_unknown_workflow_version_is_fail_closed_without_mutation(tmp_path, monkeypatch) -> None:
+    from app.api import tasks
+
+    store = InMemoryStore(waiting_state(tmp_path, workflow_version=4))
+    scheduler = SchedulerSpy(store.state.task_id)
     monkeypatch.setattr(tasks, "_store", store)
     monkeypatch.setattr(tasks, "_scheduler", scheduler)
 
-    response = TestClient(create_app()).post(
-        f"/api/v1/tasks/{state.task_id}/tool-result",
-        json={**_completed_result(call_id=call_id), "status": runtime_status},
-    )
+    with pytest.raises(HTTPException) as raised:
+        tasks.submit_tool_result(
+            store.state.task_id,
+            tasks.ToolResultRequest(**valid_payload()),
+        )
 
-    assert response.status_code == 200
-    assert response.json()["phase"] == expected_phase.value
-    assert saved_scheduler_statuses == [expected_scheduler_status]
-    assert store.saved[0].phase is expected_phase
+    assert raised.value.status_code == 409
+    assert store.saved_states == []
+    assert scheduler.mutations == []
+
+
+def test_state_dispatch_rejects_unknown_workflow_versions(tmp_path) -> None:
+    from app.graph.state import advance_state_for_workflow
+
+    state = waiting_state(tmp_path, workflow_version=4)
+
+    with pytest.raises(ValueError, match="Unsupported workflow version"):
+        advance_state_for_workflow(state)
