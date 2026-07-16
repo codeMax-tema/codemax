@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from app.graph.state import AgentState, create_initial_state
+from fastapi import HTTPException
 
 
 def test_legacy_checkpoint_loads_with_safe_autonomous_defaults(tmp_path) -> None:
@@ -102,10 +104,16 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
             return state
 
     monkeypatch.setattr(tasks, "_store", Store())
+    submitted_task_ids: list[str] = []
     monkeypatch.setattr(
         tasks,
         "_scheduler",
-        SimpleNamespace(submit=lambda _task_id: SimpleNamespace(status="running")),
+        SimpleNamespace(
+            submit=lambda task_id: (
+                submitted_task_ids.append(task_id)
+                or SimpleNamespace(status="running")
+            )
+        ),
     )
     monkeypatch.setattr(tasks, "load_settings", lambda: SimpleNamespace(max_repair_rounds=5))
     monkeypatch.setattr(
@@ -128,6 +136,7 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
     )
 
     assert response.state.workflow_version == 3
+    assert submitted_task_ids == []
 
 
 def test_workflow_v2_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) -> None:
@@ -181,3 +190,96 @@ def test_legacy_workflow_v1_dispatches_to_full_langgraph_runner(tmp_path, monkey
     assert legacy_state.workflow_version == 1
     assert advance_state_for_workflow(legacy_state) is resumed
     assert calls == [legacy_state]
+
+
+def test_v3_advance_is_rejected_without_mutating_state(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+
+    state = create_initial_state(
+        task_id="v3-advance-not-ready",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 advance not ready",
+        model_id="test-model",
+        workflow_version=3,
+    )
+    original_payload = state.model_dump(mode="json", by_alias=True)
+    saved_states: list[AgentState] = []
+
+    class Store:
+        def load(self, _task_id: str) -> AgentState:
+            return state
+
+        def save(self, saved_state: AgentState) -> AgentState:
+            saved_states.append(saved_state)
+            return saved_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(status=lambda _task_id: SimpleNamespace(status="running")),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        tasks.advance_task(
+            state.task_id,
+            tasks.AdvanceAgentTaskRequest(
+                reason="Continue V3 task",
+                userMessage="Please continue.",
+                requireApproval=True,
+            ),
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
+    assert state.model_dump(mode="json", by_alias=True) == original_payload
+    assert saved_states == []
+
+
+def test_v3_validation_result_requires_active_validation_request(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+    from app.graph.state import AgentPhase
+
+    state = create_initial_state(
+        task_id="v3-validation-not-ready",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 validation not ready",
+        model_id="test-model",
+        workflow_version=3,
+    ).model_copy(update={"phase": AgentPhase.VALIDATING})
+    original_payload = state.model_dump(mode="json", by_alias=True)
+    saved_states: list[AgentState] = []
+
+    class Store:
+        def load(self, _task_id: str) -> AgentState:
+            return state
+
+        def save(self, saved_state: AgentState) -> AgentState:
+            saved_states.append(saved_state)
+            return saved_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(status=lambda _task_id: SimpleNamespace(status="running")),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        tasks.submit_validation_result(
+            state.task_id,
+            tasks.ValidationResultRequest(exitCode=0),
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == (
+        "Workflow V3 validation result requires an active validation request."
+    )
+    assert state.model_dump(mode="json", by_alias=True) == original_payload
+    assert saved_states == []

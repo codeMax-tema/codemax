@@ -34,6 +34,11 @@ _proposal_service = ProposalService()
 _scheduler = TaskScheduler(max_concurrent_tasks=2)
 _tasks_lock = Lock()
 
+WORKFLOW_V3_NOT_READY_DETAIL = "Workflow V3 autonomous runner is not ready."
+WORKFLOW_V3_VALIDATION_NOT_READY_DETAIL = (
+    "Workflow V3 validation result requires an active validation request."
+)
+
 
 class AgentTaskStatus(StrEnum):
     ACCEPTED = "accepted"
@@ -143,14 +148,18 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
             ],
             workflow_version=3,
         )
-        scheduled = _scheduler.submit(request.task_id)
+        if state.workflow_version != 3:
+            scheduled = _scheduler.submit(request.task_id)
+            state = append_log(
+                state,
+                f"Scheduler admitted task as {scheduled.status}.",
+            )
         state = state.model_copy(
             update={
                 "proposals": proposal_states_for(request),
                 "updated_at": utc_now(),
             }
         )
-        state = append_log(state, f"Scheduler admitted task as {scheduled.status}.")
         state = _store.save(state)
 
     return CreateAgentTaskResponse(
@@ -172,6 +181,12 @@ def get_task_state(task_id: str) -> AgentState:
 def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
+        if state.workflow_version == 3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=WORKFLOW_V3_NOT_READY_DETAIL,
+            )
+
         scheduled = scheduled_task_for(task_id)
         if scheduled.status == "queued":
             state = append_log(state, "Task is queued until a scheduler slot is available.")
@@ -232,6 +247,18 @@ def submit_validation_result(
 ) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
+        if (
+            state.workflow_version == 3
+            and (
+                state.phase != AgentPhase.VALIDATING
+                or state.validation_request is None
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=WORKFLOW_V3_VALIDATION_NOT_READY_DETAIL,
+            )
+
         validation_result = ValidationResult(
             runId=request.run_id,
             command=request.command or validation_command_for(state),
