@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from app.api import models as models_api
+from app.model_audit import model_audit_scope
 from app.model_gateway import (
     ModelGateway,
     ModelGatewayError,
@@ -18,6 +19,22 @@ from app.providers import ModelChatResult, ModelMessage, ModelUsage
 from app.providers.config import ModelConfig, ModelProvider
 from app.providers.errors import ModelProviderError
 from app.providers.openai_compatible import ModelToolCall, OpenAICompatibleTransport
+
+
+@pytest.fixture(autouse=True)
+def task_bound_model_audit(request: pytest.FixtureRequest):
+    if request.node.name == "test_gateway_blocks_calls_without_task_audit_scope":
+        yield None
+        return
+    with model_audit_scope(
+        task_id="task-model-gateway-test",
+        model_id="configured-model",
+        phase="planning",
+        budget_limit=120_000,
+        budget_per_call=24_000,
+        consumed_tokens=0,
+    ) as scope:
+        yield scope
 
 
 class RecordingTransport:
@@ -64,6 +81,17 @@ def successful_transport_result(*, usage: ModelUsage | None = None) -> ModelChat
         usage=usage
         or ModelUsage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
     )
+
+
+def test_gateway_blocks_calls_without_task_audit_scope() -> None:
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(transport=transport, model="configured-model")
+
+    with pytest.raises(ModelGatewayError) as raised:
+        gateway.chat(messages=[ModelMessage(role="user", content="hello")])
+
+    assert raised.value.code == "model.auditContextRequired"
+    assert transport.calls == []
 
 
 def test_gateway_forwards_model_messages_and_structured_response_format() -> None:
@@ -355,55 +383,28 @@ def test_openai_compatible_transport_forwards_gateway_request_fields() -> None:
     assert result.usage == ModelUsage(3, 4, 7)
 
 
-def test_models_chat_api_routes_through_model_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-    config = SimpleNamespace(model_name="configured-model")
-    gateway_result = ModelGatewayResult(
-        id="provider-response-1",
-        request_id="gateway-request-1",
-        model="configured-model",
-        content='{"answer":"ok"}',
-        finish_reason="stop",
-        latency_ms=42.5,
-        usage=ModelUsage(5, 6, 11),
-    )
+def test_models_chat_api_is_disabled_without_task_audit_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
 
-    class FakeGateway:
-        def chat(self, **request: Any) -> ModelGatewayResult:
-            captured["request"] = request
-            return gateway_result
+    def forbidden_config_load() -> object:
+        nonlocal called
+        called = True
+        raise AssertionError("direct model route must not load provider configuration")
 
-    def fake_build_model_gateway(received_config: object) -> FakeGateway:
-        captured["config"] = received_config
-        return FakeGateway()
-
-    monkeypatch.setattr(models_api, "load_model_config", lambda: config)
-    monkeypatch.setattr(models_api, "build_model_gateway", fake_build_model_gateway)
+    monkeypatch.setattr(models_api, "load_model_config", forbidden_config_load)
     request = models_api.ChatCompletionRequest(
-        messages=[models_api.ChatMessage(role="user", content="hello")],
-        temperature=0.1,
-        maxTokens=32,
-        responseFormat={"type": "json_object"},
+        messages=[models_api.ChatMessage(role="user", content="hello")]
     )
 
-    response = models_api.create_chat_completion(request)
+    with pytest.raises(Exception) as raised:
+        models_api.create_chat_completion(request)
 
-    assert captured["config"] is config
-    assert captured["request"] == {
-        "messages": [ModelMessage(role="user", content="hello")],
-        "temperature": 0.1,
-        "max_tokens": 32,
-        "response_format": {"type": "json_object"},
-    }
-    assert response.id == "provider-response-1"
-    assert response.request_id == "gateway-request-1"
-    assert response.model == "configured-model"
-    assert response.latency_ms == 42.5
-    assert response.usage == models_api.UsageResponse(
-        promptTokens=5,
-        completionTokens=6,
-        totalTokens=11,
-    )
+    assert raised.value.status_code == 403
+    assert raised.value.detail["code"] == "model.taskAuditRequired"
+    assert called is False
+
 
 def formatted_exception(error: BaseException) -> str:
     return "".join(
@@ -474,41 +475,30 @@ def test_gateway_drops_sensitive_transport_exception_context() -> None:
     assert_secret_absent_from_exception(raised.value, secret)
 
 
-def test_api_mapping_drops_sensitive_transport_gateway_exception_chain(
+def test_direct_chat_route_does_not_observe_sensitive_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret = "api-trace-secret"
+    called = False
 
-    class SecretFailingCompletions:
-        def create(self, **request: Any) -> object:
-            raise RuntimeError(f"provider echoed {secret}")
+    def forbidden_config_load() -> object:
+        nonlocal called
+        called = True
+        raise AssertionError(secret)
 
-    sdk_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SecretFailingCompletions())
-    )
-    config = ModelConfig(
-        provider=ModelProvider.OPENAI_COMPATIBLE,
-        apiKey=secret,
-        modelName="test-model",
-        timeoutSeconds=1,
-    )
-    gateway = ModelGateway(
-        transport=OpenAICompatibleTransport(config, client=sdk_client),
-        model=config.model_name,
-        sensitive_values=(secret,),
-    )
-    monkeypatch.setattr(models_api, "load_model_config", lambda: config)
-    monkeypatch.setattr(models_api, "build_model_gateway", lambda received: gateway)
+    monkeypatch.setattr(models_api, "load_model_config", forbidden_config_load)
     request = models_api.ChatCompletionRequest(
-        messages=[models_api.ChatMessage(role="user", content="hello")]
+        messages=[models_api.ChatMessage(role="user", content=secret)]
     )
 
     with pytest.raises(Exception) as raised:
         models_api.create_chat_completion(request)
 
-    assert raised.value.status_code == 500
-    assert raised.value.detail["code"] == "model.unknownError"
+    assert raised.value.status_code == 403
+    assert raised.value.detail["code"] == "model.taskAuditRequired"
+    assert called is False
     assert_secret_absent_from_exception(raised.value, secret)
+
 
 class SecretBeforeInterceptor:
     def __init__(self, secret: str) -> None:
@@ -897,3 +887,184 @@ def test_gateway_and_transport_repr_hide_prompt_response_and_url_credentials() -
     ):
         assert secret not in combined_repr
     assert "example.invalid" in repr(transport)
+
+
+def test_successful_request_records_audit_and_redacts_transport_payload(
+    task_bound_model_audit: object,
+) -> None:
+    secret = "ordinary-password-value"
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(
+        transport=transport,
+        model="configured-model",
+        provider="openai-compatible",
+        request_id_factory=lambda: "request-linked-1",
+    )
+
+    result = gateway.chat(messages=[ModelMessage(role="user", content=f"password={secret}")])
+
+    assert secret not in transport.calls[0]["messages"][0].content
+    assert result.request_id == "request-linked-1"
+    scope = task_bound_model_audit
+    assert len(scope.records) == 1
+    audit = scope.records[0]
+    assert audit.request_id == "request-linked-1"
+    assert audit.task_id == "task-model-gateway-test"
+    assert audit.provider == "openai-compatible"
+    assert audit.status == "succeeded"
+    assert audit.total_tokens == 18
+    assert len(audit.request_digest) == 64
+    assert any(source.redacted for source in audit.sources)
+
+
+def test_private_material_and_encoded_tokens_block_before_transport(
+    task_bound_model_audit: object,
+) -> None:
+    import base64
+
+    private_material = "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"
+    encoded = base64.b64encode(private_material.encode()).decode()
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(transport=transport, model="configured-model")
+
+    with pytest.raises(ModelGatewayError) as raised:
+        gateway.chat(messages=[ModelMessage(role="user", content=encoded)])
+
+    assert raised.value.code == "privacy.modelRequestBlocked"
+    assert transport.calls == []
+    assert task_bound_model_audit.records[-1].status == "blocked"
+    assert "base64_encoded_secret" in task_bound_model_audit.records[-1].sources[0].findings
+
+
+def test_fragmented_percent_unicode_and_certificate_payloads_block_before_transport(
+    task_bound_model_audit: object,
+) -> None:
+    assignment = "password=encoded-sensitive-value"
+    percent_encoded = "".join(f"%{byte:02X}" for byte in assignment.encode())
+    unicode_encoded = "".join(f"\\u{ord(character):04x}" for character in assignment)
+    payloads = [
+        "g h p _ a b c d e f g h i j k l",
+        percent_encoded,
+        unicode_encoded,
+        "-----BEGIN CERTIFICATE-----\nfictional-binary-material\n-----END CERTIFICATE-----",
+    ]
+
+    for payload in payloads:
+        transport = RecordingTransport(successful_transport_result())
+        gateway = ModelGateway(transport=transport, model="configured-model")
+
+        with pytest.raises(ModelGatewayError) as raised:
+            gateway.chat(messages=[ModelMessage(role="user", content=payload)])
+
+        assert raised.value.code == "privacy.modelRequestBlocked"
+        assert transport.calls == []
+
+    assert len(task_bound_model_audit.records) == len(payloads)
+    assert all(record.status == "blocked" for record in task_bound_model_audit.records)
+
+
+def test_nested_tool_schema_secret_is_redacted_before_transport() -> None:
+    secret = "nested-schema-secret-value"
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(transport=transport, model="configured-model")
+
+    gateway.chat(
+        messages=[ModelMessage(role="user", content="use a tool")],
+        tools=[{
+            "type": "function",
+            "function": {
+                "name": "safe_tool",
+                "parameters": {"type": "object", "x_api_key": secret},
+            },
+        }],
+    )
+
+    serialized = repr(transport.calls[0])
+    assert secret not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_sensitive_provider_response_is_sanitized_before_state_boundary() -> None:
+    secret = "ghp_responseecho123456789"
+    transport = RecordingTransport(
+        ModelChatResult(
+            id="response-secret",
+            model="configured-model",
+            content=f"token={secret}",
+            finish_reason="stop",
+            usage=ModelUsage(2, 2, 4),
+        )
+    )
+    gateway = ModelGateway(transport=transport, model="configured-model")
+
+    result = gateway.chat(messages=[ModelMessage(role="user", content="hello")])
+
+    assert secret not in result.content
+    assert "[BLOCKED:" in result.content
+
+
+def test_retry_call_is_rescanned_and_audited_without_sensitive_plaintext(
+    task_bound_model_audit: object,
+) -> None:
+    sensitive_canary = "retry-sensitive-password-value"
+
+    class SequencedTransport:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def chat(self, **request: Any) -> ModelChatResult:
+            self.calls.append(request)
+            if len(self.calls) == 1:
+                raise RuntimeError("transient provider failure")
+            return successful_transport_result()
+
+    request_ids = iter(("request-retry-1", "request-retry-2"))
+    transport = SequencedTransport()
+    gateway = ModelGateway(
+        transport=transport,
+        model="configured-model",
+        request_id_factory=lambda: next(request_ids),
+    )
+    messages = [
+        ModelMessage(role="user", content=f"password={sensitive_canary}"),
+    ]
+
+    with pytest.raises(ModelGatewayError) as raised:
+        gateway.chat(messages=messages)
+    result = gateway.chat(messages=messages)
+
+    assert raised.value.code == "model.providerError"
+    assert result.request_id == "request-retry-2"
+    assert len(transport.calls) == 2
+    assert all(sensitive_canary not in repr(call) for call in transport.calls)
+    assert [record.request_id for record in task_bound_model_audit.records] == [
+        "request-retry-1",
+        "request-retry-2",
+    ]
+    assert [record.status for record in task_bound_model_audit.records] == [
+        "failed",
+        "succeeded",
+    ]
+
+
+def test_per_call_budget_blocks_transport_and_records_budget_audit() -> None:
+    transport = RecordingTransport(successful_transport_result())
+    gateway = ModelGateway(transport=transport, model="configured-model")
+    with model_audit_scope(
+        task_id="task-budget",
+        model_id="configured-model",
+        phase="planning",
+        budget_limit=100,
+        budget_per_call=10,
+        consumed_tokens=0,
+    ) as scope:
+        with pytest.raises(ModelGatewayError) as raised:
+            gateway.chat(
+                messages=[ModelMessage(role="user", content="hello")],
+                max_tokens=20,
+            )
+
+    assert raised.value.code == "budget.modelRequestBlocked"
+    assert transport.calls == []
+    assert scope.records[0].status == "blocked"
+    assert scope.records[0].budget_per_call == 10

@@ -3,11 +3,10 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.model_gateway import ModelGatewayError, build_model_gateway
+from app.model_gateway import ModelGatewayError
 from app.providers import (
     ModelConfigError,
     ModelConfigView,
-    ModelMessage,
     ProviderSpec,
     load_model_config,
     model_config_view,
@@ -66,37 +65,16 @@ def list_model_providers() -> tuple[ProviderSpec, ...]:
 
 @router.post("/chat", response_model=ChatCompletionResponse)
 def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
-    try:
-        config = load_model_config()
-        gateway = build_model_gateway(config)
-        result = gateway.chat(
-            messages=[
-                ModelMessage(role=message.role, content=message.content)
-                for message in request.messages
-            ],
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            response_format=request.response_format,
-        )
-    except ModelConfigError as error:
-        http_error = model_config_http_error(error)
-    except ModelGatewayError as error:
-        http_error = model_gateway_http_error(error)
-
-    if "http_error" in locals():
-        raise http_error from None
-    return ChatCompletionResponse(
-        id=result.id,
-        requestId=result.request_id,
-        model=result.model,
-        content=result.content,
-        finishReason=result.finish_reason,
-        latencyMs=result.latency_ms,
-        usage=UsageResponse(
-            promptTokens=result.usage.prompt_tokens,
-            completionTokens=result.usage.completion_tokens,
-            totalTokens=result.usage.total_tokens,
-        ),
+    del request
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "model.taskAuditRequired",
+            "message": (
+                "Direct model chat is disabled. Use a task-bound Agent request so every "
+                "model call is linked to the Privacy Ledger and token budget."
+            ),
+        },
     )
 
 

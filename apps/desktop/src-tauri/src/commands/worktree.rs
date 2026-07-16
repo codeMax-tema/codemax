@@ -246,6 +246,10 @@ fn worktree_git_error(error: GitError) -> CommandError {
                 actual
             ),
         ),
+        other => CommandError::new(
+            "worktree.gitStateChanged",
+            format!("Git state changed while processing the request: {other}"),
+        ),
     }
 }
 

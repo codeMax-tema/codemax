@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -12,6 +13,14 @@ function assert(condition, message) {
     throw new Error(message);
   }
 }
+
+const privacyGate = spawnSync(process.execPath, ['tests/privacy/verify-model-gateway.mjs'], {
+  cwd: root,
+  encoding: 'utf8',
+});
+if (privacyGate.stdout) process.stdout.write(privacyGate.stdout);
+if (privacyGate.stderr) process.stderr.write(privacyGate.stderr);
+assert(privacyGate.status === 0, 'REL-P0-006 privacy/model gateway gate must pass before release');
 
 const packageJson = readJson('package.json');
 

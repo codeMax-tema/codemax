@@ -754,6 +754,14 @@
         "modelId": {
           "type": ["string", "null"]
         },
+        "tokenBudget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tokenBudgetPerCall": {
+          "type": "integer",
+          "minimum": 1
+        },
         "validationCommand": {
           "type": ["string", "null"]
         }

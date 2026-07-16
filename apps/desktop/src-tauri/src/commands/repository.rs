@@ -144,6 +144,10 @@ fn repository_error(error: GitError) -> CommandError {
                 actual
             ),
         ),
+        other => CommandError::new(
+            "repository.gitStateChanged",
+            format!("Git state changed while processing the request: {other}"),
+        ),
     }
 }
 

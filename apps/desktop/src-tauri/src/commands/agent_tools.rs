@@ -256,7 +256,6 @@ fn request_audit_summary(request: &AgentToolCallRequest) -> String {
 fn result_audit_summary(result: &AgentToolCallResult) -> String {
     json!({
         "status": result.status,
-        "tool": result.tool_name,
         "errorCode": result.error.as_ref().map(|error| error.code.as_str()),
         "outputKeys": result.output.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
     })

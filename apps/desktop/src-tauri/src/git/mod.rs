@@ -5,7 +5,8 @@ use std::{
     process::Command,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -83,7 +84,7 @@ pub struct TaskDiffFile {
     pub patch: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskMergeStatus {
     Merged,
@@ -100,6 +101,67 @@ pub struct TaskMergeResult {
     pub commit_message: String,
     pub conflict_files: Vec<String>,
     pub error_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterruptedMergeOutcome {
+    NoTargetChange,
+    Merged { commit_sha: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeBaseline {
+    pub repository_root: String,
+    pub repository_common_dir: String,
+    pub worktree_path: String,
+    pub target_branch: String,
+    pub source_branch: String,
+    pub target_head: String,
+    pub source_head: String,
+    pub diff_digest: String,
+    pub diff_file_count: usize,
+    pub target_dirty: bool,
+    pub worktree_dirty: bool,
+}
+
+impl MergeBaseline {
+    pub fn changed_fields(&self, current: &Self) -> Vec<String> {
+        let mut fields = Vec::new();
+        if self.repository_root != current.repository_root {
+            fields.push("repository".to_string());
+        }
+        if self.repository_common_dir != current.repository_common_dir {
+            fields.push("repositoryIdentity".to_string());
+        }
+        if self.worktree_path != current.worktree_path {
+            fields.push("worktreePath".to_string());
+        }
+        if self.target_branch != current.target_branch {
+            fields.push("targetBranch".to_string());
+        }
+        if self.source_branch != current.source_branch {
+            fields.push("taskBranch".to_string());
+        }
+        if self.target_head != current.target_head {
+            fields.push("targetHead".to_string());
+        }
+        if self.source_head != current.source_head {
+            fields.push("taskHead".to_string());
+        }
+        if self.diff_digest != current.diff_digest
+            || self.diff_file_count != current.diff_file_count
+        {
+            fields.push("diff".to_string());
+        }
+        if self.target_dirty != current.target_dirty {
+            fields.push("targetWorktree".to_string());
+        }
+        if self.worktree_dirty != current.worktree_dirty {
+            fields.push("taskWorktree".to_string());
+        }
+        fields
+    }
 }
 
 #[derive(Debug, Error)]
@@ -134,6 +196,14 @@ pub enum GitError {
         expected: String,
         actual: String,
     },
+    #[error("task worktree belongs to a different Git repository: {worktree}")]
+    WorktreeRepositoryMismatch { worktree: PathBuf },
+    #[error("merge preview baseline changed: {changed_fields:?}")]
+    MergeBaselineChanged { changed_fields: Vec<String> },
+    #[error("task worktree changed while CodeMax was preparing the merge: {0}")]
+    WorktreeChangedDuringMerge(PathBuf),
+    #[error("merge result verification failed: {0}")]
+    MergeVerificationFailed(String),
 }
 
 pub type GitResult<T> = Result<T, GitError>;
@@ -405,11 +475,65 @@ pub fn task_diff(
     })
 }
 
+pub fn capture_merge_baseline(
+    task_id: &str,
+    repository_path: impl AsRef<Path>,
+    worktree_path: impl AsRef<Path>,
+    target_branch: &str,
+) -> GitResult<(MergeBaseline, TaskDiff)> {
+    let target_root = repository_root(repository_path.as_ref())?;
+    let worktree_root = repository_root(worktree_path.as_ref())?;
+    let target_branch = target_branch.trim();
+    let current_target_branch = current_branch_in_repository(&target_root)?;
+    if current_target_branch != target_branch {
+        return Err(GitError::TargetBranchChanged {
+            path: target_root,
+            expected: target_branch.to_string(),
+            actual: current_target_branch,
+        });
+    }
+
+    let repository_common_dir = git_common_dir(&target_root)?;
+    let worktree_common_dir = git_common_dir(&worktree_root)?;
+    if repository_common_dir != worktree_common_dir {
+        return Err(GitError::WorktreeRepositoryMismatch {
+            worktree: worktree_root,
+        });
+    }
+
+    let source_branch = current_branch_in_repository(&worktree_root)?;
+    let target_head = head_oid(&target_root)?;
+    let source_head = head_oid(&worktree_root)?;
+    let target_dirty = is_dirty(&target_root)?;
+    let worktree_dirty = is_dirty(&worktree_root)?;
+    let diff = task_diff(task_id, &worktree_root, target_branch)?;
+    let diff_digest = task_diff_digest(&diff);
+
+    Ok((
+        MergeBaseline {
+            repository_root: target_root.to_string_lossy().to_string(),
+            repository_common_dir: repository_common_dir.to_string_lossy().to_string(),
+            worktree_path: worktree_root.to_string_lossy().to_string(),
+            target_branch: target_branch.to_string(),
+            source_branch,
+            target_head,
+            source_head,
+            diff_digest,
+            diff_file_count: diff.files.len(),
+            target_dirty,
+            worktree_dirty,
+        },
+        diff,
+    ))
+}
+
 pub fn merge_task_branch(
+    task_id: &str,
     repository_path: impl AsRef<Path>,
     worktree_path: impl AsRef<Path>,
     target_branch: &str,
     commit_message: &str,
+    expected_baseline: &MergeBaseline,
 ) -> GitResult<TaskMergeResult> {
     let target_root = repository_root(repository_path.as_ref())?;
     let worktree_root = repository_root(worktree_path.as_ref())?;
@@ -420,21 +544,67 @@ pub fn merge_task_branch(
         return Err(GitError::EmptyCommitMessage);
     }
 
-    let current_target_branch = current_branch_in_repository(&target_root)?;
-    if current_target_branch != target_branch {
-        return Err(GitError::TargetBranchChanged {
-            path: target_root,
-            expected: target_branch.to_string(),
-            actual: current_target_branch,
-        });
+    let (current_baseline, _) =
+        capture_merge_baseline(task_id, &target_root, &worktree_root, target_branch)?;
+    let changed_fields = expected_baseline.changed_fields(&current_baseline);
+    if !changed_fields.is_empty() {
+        return Err(GitError::MergeBaselineChanged { changed_fields });
     }
-
-    if is_dirty(&target_root)? {
+    if current_baseline.target_dirty {
         return Err(GitError::DirtyTarget(target_root));
     }
 
-    let source_branch = current_branch_in_repository(&worktree_root)?;
+    let source_branch = current_baseline.source_branch.clone();
     commit_worktree_changes(&worktree_root, commit_message)?;
+    if is_dirty(&worktree_root)? {
+        return Err(GitError::WorktreeChangedDuringMerge(worktree_root));
+    }
+    let committed_diff = task_diff(task_id, &worktree_root, target_branch)?;
+    if task_diff_digest(&committed_diff) != expected_baseline.diff_digest
+        || committed_diff.files.len() != expected_baseline.diff_file_count
+    {
+        // A concurrent edit may have been safely committed to the task branch, but it was not part
+        // of the user's confirmed preview. The target remains untouched and requires a new preview.
+        return Err(GitError::WorktreeChangedDuringMerge(worktree_root));
+    }
+
+    // The source commit may legitimately change because the previewed task changes are committed.
+    // Recheck the target immediately before the merge so an external checkout, commit, or edit
+    // cannot silently reuse the earlier confirmation.
+    let current_target_branch = current_branch_in_repository(&target_root)?;
+    if current_target_branch != expected_baseline.target_branch {
+        return Err(GitError::TargetBranchChanged {
+            path: target_root,
+            expected: expected_baseline.target_branch.clone(),
+            actual: current_target_branch,
+        });
+    }
+    if head_oid(&target_root)? != expected_baseline.target_head {
+        return Err(GitError::MergeBaselineChanged {
+            changed_fields: vec!["targetHead".to_string()],
+        });
+    }
+    if is_dirty(&target_root)? {
+        return Err(GitError::DirtyTarget(target_root));
+    }
+    if current_branch_in_repository(&worktree_root)? != source_branch {
+        return Err(GitError::MergeBaselineChanged {
+            changed_fields: vec!["taskBranch".to_string()],
+        });
+    }
+
+    let source_head = head_oid(&worktree_root)?;
+    if is_ancestor(&target_root, &source_head, &expected_baseline.target_head)? {
+        return Ok(TaskMergeResult {
+            status: TaskMergeStatus::Merged,
+            target_branch: target_branch.to_string(),
+            source_branch,
+            commit_sha: expected_baseline.target_head.clone(),
+            commit_message: commit_message.to_string(),
+            conflict_files: Vec::new(),
+            error_reason: None,
+        });
+    }
 
     let merge_output = run_git(
         &target_root,
@@ -448,11 +618,18 @@ pub fn merge_task_branch(
     )?;
 
     if merge_output.status_success {
+        let commit_sha = head_oid(&target_root)?;
+        if is_dirty(&target_root)? || !is_ancestor(&target_root, &source_head, &commit_sha)? {
+            return Err(GitError::MergeVerificationFailed(
+                "Git returned success, but the target is dirty or does not contain the task commit."
+                    .to_string(),
+            ));
+        }
         return Ok(TaskMergeResult {
             status: TaskMergeStatus::Merged,
             target_branch: target_branch.to_string(),
             source_branch,
-            commit_sha: head_sha(&target_root)?,
+            commit_sha,
             commit_message: commit_message.to_string(),
             conflict_files: Vec::new(),
             error_reason: None,
@@ -460,6 +637,18 @@ pub fn merge_task_branch(
     }
 
     let conflict_files = merge_conflict_files(&target_root)?;
+    let merge_was_started = merge_in_progress(&target_root)?;
+    if merge_was_started {
+        abort_merge(&target_root)?;
+    }
+
+    if head_oid(&target_root)? != expected_baseline.target_head || is_dirty(&target_root)? {
+        return Err(GitError::MergeVerificationFailed(
+            "The failed merge could not be restored to its clean pre-merge target baseline."
+                .to_string(),
+        ));
+    }
+
     if conflict_files.is_empty() {
         return Err(GitError::CommandFailed {
             path: target_root,
@@ -468,7 +657,6 @@ pub fn merge_task_branch(
         });
     }
 
-    abort_merge(&target_root)?;
     let error_reason = git_output_summary(&merge_output)
         .filter(|message| !message.is_empty())
         .or_else(|| Some("Git reported merge conflicts.".to_string()));
@@ -482,6 +670,127 @@ pub fn merge_task_branch(
         conflict_files,
         error_reason,
     })
+}
+
+pub fn inspect_interrupted_merge_outcome(
+    baseline: &MergeBaseline,
+    commit_message: &str,
+) -> GitResult<InterruptedMergeOutcome> {
+    let target_root = repository_root(Path::new(&baseline.repository_root))?;
+    let expected_common_dir = PathBuf::from(&baseline.repository_common_dir)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&baseline.repository_common_dir));
+    if git_common_dir(&target_root)? != expected_common_dir {
+        return Err(GitError::MergeVerificationFailed(
+            "The interrupted merge no longer points at the same repository.".to_string(),
+        ));
+    }
+    let branch = current_branch_in_repository(&target_root)?;
+    if branch != baseline.target_branch {
+        return Err(GitError::TargetBranchChanged {
+            path: target_root,
+            expected: baseline.target_branch.clone(),
+            actual: branch,
+        });
+    }
+    if merge_in_progress(&target_root)? || is_dirty(&target_root)? {
+        return Err(GitError::MergeVerificationFailed(
+            "The interrupted merge left an active or dirty target state; automatic recovery would risk overwriting user changes.".to_string(),
+        ));
+    }
+
+    let current_head = head_oid(&target_root)?;
+    if current_head == baseline.target_head {
+        return Ok(InterruptedMergeOutcome::NoTargetChange);
+    }
+
+    let source_head = rev_parse_oid(&target_root, &baseline.source_branch)?;
+    let parents_output = run_git(&target_root, &["rev-list", "--parents", "-n", "1", "HEAD"])?;
+    if !parents_output.status_success {
+        return Err(GitError::CommandFailed {
+            path: target_root,
+            args: "rev-list --parents -n 1 HEAD".to_string(),
+            stderr: parents_output.stderr,
+        });
+    }
+    let commit_parts = parents_output.stdout.split_whitespace().collect::<Vec<_>>();
+    let message_output = run_git(&target_root, &["log", "-1", "--format=%B"])?;
+    if commit_parts.len() == 3
+        && commit_parts[0] == current_head
+        && commit_parts[1] == baseline.target_head
+        && commit_parts[2] == source_head
+        && message_output.status_success
+        && message_output.stdout.trim() == commit_message.trim()
+    {
+        return Ok(InterruptedMergeOutcome::Merged {
+            commit_sha: current_head,
+        });
+    }
+
+    Err(GitError::MergeVerificationFailed(
+        "The target changed after the interrupted attempt, but it is not the exact verified merge commit owned by that attempt.".to_string(),
+    ))
+}
+
+pub fn verify_persisted_merge_outcome(
+    baseline: &MergeBaseline,
+    status: &TaskMergeStatus,
+    commit_sha: &str,
+) -> GitResult<()> {
+    let target_root = repository_root(Path::new(&baseline.repository_root))?;
+    let expected_common_dir = PathBuf::from(&baseline.repository_common_dir)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&baseline.repository_common_dir));
+    if git_common_dir(&target_root)? != expected_common_dir {
+        return Err(GitError::MergeVerificationFailed(
+            "The persisted merge record no longer points at the same repository.".to_string(),
+        ));
+    }
+    let branch = current_branch_in_repository(&target_root)?;
+    if branch != baseline.target_branch {
+        return Err(GitError::TargetBranchChanged {
+            path: target_root,
+            expected: baseline.target_branch.clone(),
+            actual: branch,
+        });
+    }
+    if is_dirty(&target_root)? {
+        return Err(GitError::MergeVerificationFailed(
+            "The target repository is dirty, so an interrupted merge outcome cannot be reconciled automatically."
+                .to_string(),
+        ));
+    }
+
+    let current_head = head_oid(&target_root)?;
+    match status {
+        TaskMergeStatus::Merged => {
+            if commit_sha.is_empty() || current_head != commit_sha {
+                return Err(GitError::MergeVerificationFailed(
+                    "The target HEAD does not match the persisted successful merge commit."
+                        .to_string(),
+                ));
+            }
+            let source_head = rev_parse_oid(&target_root, &baseline.source_branch)?;
+            if !is_ancestor(&target_root, &source_head, &current_head)? {
+                return Err(GitError::MergeVerificationFailed(
+                    "The persisted target commit does not contain the current task branch commit."
+                        .to_string(),
+                ));
+            }
+        }
+        TaskMergeStatus::Conflicted => {
+            if !commit_sha.is_empty()
+                || current_head != baseline.target_head
+                || merge_in_progress(&target_root)?
+            {
+                return Err(GitError::MergeVerificationFailed(
+                    "The conflicted merge was not restored to its clean preview baseline."
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn remove_task_worktree(
@@ -717,17 +1026,82 @@ fn commit_worktree_changes(worktree_path: &Path, commit_message: &str) -> GitRes
     Ok(())
 }
 
-fn head_sha(repository_path: &Path) -> GitResult<String> {
-    let output = run_git(repository_path, &["rev-parse", "--short", "HEAD"])?;
+fn rev_parse_oid(repository_path: &Path, revision: &str) -> GitResult<String> {
+    let output = run_git(repository_path, &["rev-parse", revision])?;
     if !output.status_success {
         return Err(GitError::CommandFailed {
             path: repository_path.to_path_buf(),
-            args: "rev-parse --short HEAD".to_string(),
+            args: format!("rev-parse {revision}"),
+            stderr: output.stderr,
+        });
+    }
+    Ok(output.stdout.trim().to_string())
+}
+
+fn head_oid(repository_path: &Path) -> GitResult<String> {
+    let output = run_git(repository_path, &["rev-parse", "HEAD"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_path.to_path_buf(),
+            args: "rev-parse HEAD".to_string(),
             stderr: output.stderr,
         });
     }
 
     Ok(output.stdout.trim().to_string())
+}
+
+fn git_common_dir(repository_path: &Path) -> GitResult<PathBuf> {
+    let output = run_git(repository_path, &["rev-parse", "--git-common-dir"])?;
+    if !output.status_success {
+        return Err(GitError::CommandFailed {
+            path: repository_path.to_path_buf(),
+            args: "rev-parse --git-common-dir".to_string(),
+            stderr: output.stderr,
+        });
+    }
+
+    let raw = PathBuf::from(output.stdout.trim());
+    let path = if raw.is_absolute() {
+        raw
+    } else {
+        repository_path.join(raw)
+    };
+    Ok(path.canonicalize().unwrap_or(path))
+}
+
+fn task_diff_digest(diff: &TaskDiff) -> String {
+    let mut digest = Sha256::new();
+    digest.update(diff.base_ref.as_bytes());
+    digest.update([0]);
+    digest.update(diff.branch_name.as_bytes());
+    digest.update([0]);
+    digest.update(diff.patch.as_bytes());
+    for file in &diff.files {
+        digest.update([0xff]);
+        digest.update(file.path.as_bytes());
+        digest.update([0]);
+        digest.update(file.status.as_bytes());
+        digest.update(file.additions.to_le_bytes());
+        digest.update(file.deletions.to_le_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn is_ancestor(repository_path: &Path, ancestor: &str, descendant: &str) -> GitResult<bool> {
+    let output = run_git(
+        repository_path,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+    )?;
+    Ok(output.status_success)
+}
+
+fn merge_in_progress(repository_path: &Path) -> GitResult<bool> {
+    let output = run_git(
+        repository_path,
+        &["rev-parse", "--verify", "-q", "MERGE_HEAD"],
+    )?;
+    Ok(output.status_success)
 }
 
 fn merge_conflict_files(repository_path: &Path) -> GitResult<Vec<String>> {
@@ -835,9 +1209,10 @@ fn untracked_file_patch(worktree_path: &Path, relative_path: &str) -> GitResult<
     let display_path = normalize_diff_path(relative_path);
 
     if bytes.contains(&0) {
+        let content_digest = format!("{:x}", Sha256::digest(&bytes));
         return Ok(GeneratedPatch {
             patch: format!(
-                "diff --git a/{display_path} b/{display_path}\nnew file mode {mode}\nindex 0000000..0000000\nBinary files /dev/null and b/{display_path} differ\n"
+                "diff --git a/{display_path} b/{display_path}\nnew file mode {mode}\nindex 0000000..0000000\ncodemax-sha256 {content_digest}\nBinary files /dev/null and b/{display_path} differ\n"
             ),
             additions: 0,
         });
@@ -1355,11 +1730,20 @@ mod tests {
         let worktree_path = PathBuf::from(&worktree.worktree_path);
         fs::write(worktree_path.join("modified.txt"), "after").expect("modify worktree file");
 
+        let (baseline, _) = capture_merge_baseline(
+            "task-merge-success",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture merge baseline");
         let result = merge_task_branch(
+            "task-merge-success",
             &repository,
             &worktree_path,
             &target_branch,
             "feat: merge task worktree",
+            &baseline,
         )
         .expect("merge task branch");
 
@@ -1393,11 +1777,20 @@ mod tests {
         run_test_git(&repository, &["add", "modified.txt"]);
         run_test_git(&repository, &["commit", "-m", "target change"]);
 
+        let (baseline, _) = capture_merge_baseline(
+            "task-merge-conflict",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture conflict baseline");
         let result = merge_task_branch(
+            "task-merge-conflict",
             &repository,
             &worktree_path,
             &target_branch,
             "feat: merge conflicting task worktree",
+            &baseline,
         )
         .expect("conflict is returned as a merge result");
 
@@ -1418,5 +1811,169 @@ mod tests {
         fs::remove_dir_all(worktree_path).expect("clean dirty worktree");
         fs::remove_dir_all(worktree_root).expect("clean worktree root");
         fs::remove_dir_all(repository).expect("clean temp repository");
+    }
+
+    #[test]
+    fn merge_rejects_target_changes_after_preview_without_overwriting_user_file() {
+        let repository = committed_repository("git-merge-target-baseline-change");
+        let target_branch = current_branch(&repository).expect("read target branch");
+        let worktree_root = temp_path("merge-target-baseline-root");
+        let worktree = create_task_worktree(
+            &repository,
+            &worktree_root,
+            "task-merge-target-baseline-change",
+        )
+        .expect("create task worktree");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        fs::write(worktree_path.join("modified.txt"), "task change").expect("modify task worktree");
+        let (baseline, _) = capture_merge_baseline(
+            "task-merge-target-baseline-change",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture clean preview baseline");
+
+        fs::write(repository.join("user-local.txt"), "preserve me")
+            .expect("write target user change");
+        let error = merge_task_branch(
+            "task-merge-target-baseline-change",
+            &repository,
+            &worktree_path,
+            &target_branch,
+            "feat: must not overwrite target",
+            &baseline,
+        )
+        .expect_err("dirty target must invalidate preview");
+
+        assert!(matches!(
+            error,
+            GitError::MergeBaselineChanged { ref changed_fields }
+                if changed_fields.contains(&"targetWorktree".to_string())
+        ));
+        assert_eq!(
+            fs::read_to_string(repository.join("user-local.txt")).expect("read preserved file"),
+            "preserve me"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.join("modified.txt")).expect("read unchanged target"),
+            "before"
+        );
+
+        fs::remove_file(repository.join("user-local.txt")).expect("remove test user file");
+        fs::remove_dir_all(worktree_path).expect("clean task worktree");
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean repository");
+    }
+
+    #[test]
+    fn merge_rejects_task_diff_changes_after_preview_and_preserves_them() {
+        let repository = committed_repository("git-merge-task-baseline-change");
+        let target_branch = current_branch(&repository).expect("read target branch");
+        let worktree_root = temp_path("merge-task-baseline-root");
+        let worktree = create_task_worktree(
+            &repository,
+            &worktree_root,
+            "task-merge-task-baseline-change",
+        )
+        .expect("create task worktree");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        fs::write(worktree_path.join("modified.txt"), "previewed task change")
+            .expect("write previewed task change");
+        let (baseline, _) = capture_merge_baseline(
+            "task-merge-task-baseline-change",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture preview baseline");
+        fs::write(
+            worktree_path.join("modified.txt"),
+            "new unconfirmed task change",
+        )
+        .expect("change task diff after preview");
+
+        let error = merge_task_branch(
+            "task-merge-task-baseline-change",
+            &repository,
+            &worktree_path,
+            &target_branch,
+            "feat: reject stale task diff",
+            &baseline,
+        )
+        .expect_err("task diff change must invalidate preview");
+
+        assert!(matches!(
+            error,
+            GitError::MergeBaselineChanged { ref changed_fields }
+                if changed_fields.contains(&"diff".to_string())
+        ));
+        assert_eq!(
+            fs::read_to_string(worktree_path.join("modified.txt"))
+                .expect("read preserved task change"),
+            "new unconfirmed task change"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.join("modified.txt")).expect("read target file"),
+            "before"
+        );
+
+        fs::remove_dir_all(worktree_path).expect("clean task worktree");
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean repository");
+    }
+
+    #[test]
+    fn untracked_binary_content_changes_merge_diff_digest() {
+        let repository = committed_repository("git-merge-binary-digest");
+        let target_branch = current_branch(&repository).expect("read target branch");
+        let worktree_root = temp_path("merge-binary-digest-root");
+        let worktree =
+            create_task_worktree(&repository, &worktree_root, "task-merge-binary-digest")
+                .expect("create task worktree");
+        let worktree_path = PathBuf::from(&worktree.worktree_path);
+        let binary_path = worktree_path.join("asset.bin");
+        fs::write(&binary_path, [0, 1, 2, 3]).expect("write first binary content");
+        let (first, _) = capture_merge_baseline(
+            "task-merge-binary-digest",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture first binary digest");
+        fs::write(&binary_path, [0, 1, 2, 4]).expect("write changed binary content");
+        let (second, _) = capture_merge_baseline(
+            "task-merge-binary-digest",
+            &repository,
+            &worktree_path,
+            &target_branch,
+        )
+        .expect("capture second binary digest");
+
+        assert_ne!(first.diff_digest, second.diff_digest);
+        assert!(first.changed_fields(&second).contains(&"diff".to_string()));
+
+        fs::remove_dir_all(worktree_path).expect("clean task worktree");
+        fs::remove_dir_all(worktree_root).expect("clean worktree root");
+        fs::remove_dir_all(repository).expect("clean repository");
+    }
+
+    #[test]
+    fn capture_merge_baseline_rejects_worktree_from_another_repository() {
+        let repository = committed_repository("git-merge-repository-a");
+        let other_repository = committed_repository("git-merge-repository-b");
+        let target_branch = current_branch(&repository).expect("read target branch");
+
+        let error = capture_merge_baseline(
+            "task-cross-repository",
+            &repository,
+            &other_repository,
+            &target_branch,
+        )
+        .expect_err("cross-repository worktree must be rejected");
+        assert!(matches!(error, GitError::WorktreeRepositoryMismatch { .. }));
+
+        fs::remove_dir_all(other_repository).expect("clean other repository");
+        fs::remove_dir_all(repository).expect("clean repository");
     }
 }

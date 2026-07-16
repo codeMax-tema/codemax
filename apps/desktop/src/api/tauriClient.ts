@@ -707,6 +707,7 @@ export interface MergeTaskRequest {
   taskId: string;
   targetBranch?: string | null;
   commitMessage: string;
+  previewId: string;
   confirmed: boolean;
 }
 

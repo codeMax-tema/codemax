@@ -1,5 +1,6 @@
 import json
 import math
+from collections.abc import Callable
 from enum import StrEnum
 from threading import Lock
 from typing import Literal
@@ -31,11 +32,14 @@ from app.graph.state import (
     ToolResultStatus,
     ValidationCommandCandidate,
     ValidationResult,
+    ModelRequestAuditSourceState,
+    ModelRequestAuditState,
     advance_state_for_workflow,
     append_log,
     utc_now,
 )
 from app.memory import MemoryService
+from app.model_audit import ModelAuditScope, model_audit_scope
 from app.proposals import ProposalService
 from app.scheduler import TaskScheduler
 from app.tools.protocol import ToolResult
@@ -92,6 +96,8 @@ class CreateAgentTaskRequest(AgentModel):
         return model_id
 
     validation_command: str | None = Field(default=None, alias="validationCommand")
+    token_budget: int = Field(default=120_000, ge=1, alias="tokenBudget")
+    token_budget_per_call: int = Field(default=24_000, ge=1, alias="tokenBudgetPerCall")
 
 
 class CreateAgentTaskResponse(AgentModel):
@@ -242,6 +248,8 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 *validation_context_notes(validation_candidates),
             ],
             workflow_version=3,
+            token_budget=request.token_budget,
+            token_budget_per_call=request.token_budget_per_call,
         )
         state = state.model_copy(
             update={
@@ -285,7 +293,7 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
 
         expected_checkpoint_index = state.checkpoint_index
         state = apply_advance_request(state, request)
-        state = advance_state_for_workflow(state)
+        state = run_with_model_audit(state, advance_state_for_workflow)
         if state.workflow_version == 3:
             revalidate_v3_lease(task_id, expected_checkpoint_index)
         state = persist_state_and_sync_scheduler(state)
@@ -363,11 +371,82 @@ def submit_tool_result(task_id: str, request: ToolResultRequest) -> AdvanceAgent
             )
 
         expected_checkpoint_index = state.checkpoint_index
-        state = apply_runtime_tool_result(state, runtime_result)
+        state = run_with_model_audit(
+            state, lambda current: apply_runtime_tool_result(current, runtime_result)
+        )
         revalidate_v3_lease(task_id, expected_checkpoint_index)
         state = persist_state_and_sync_scheduler(state)
 
     return advance_response(state)
+
+
+def run_with_model_audit(
+    state: AgentState, operation: Callable[[AgentState], AgentState]
+) -> AgentState:
+    model_id = (state.model_id or "").strip()
+    if not model_id:
+        return append_log(
+            state.model_copy(update={"phase": AgentPhase.NEEDS_INTERVENTION}),
+            "A model request was blocked because no task model was configured.",
+            "error",
+        )
+    with model_audit_scope(
+        task_id=state.task_id,
+        model_id=model_id,
+        phase=state.phase.value,
+        budget_limit=state.token_budget,
+        budget_per_call=state.token_budget_per_call,
+        consumed_tokens=state.consumed_tokens,
+    ) as audit:
+        updated = operation(state)
+    return attach_model_audits(updated, audit)
+
+
+def attach_model_audits(state: AgentState, audit: ModelAuditScope) -> AgentState:
+    if not audit.records:
+        return state
+    records = [
+        ModelRequestAuditState(
+            requestId=record.request_id,
+            taskId=record.task_id,
+            provider=record.provider,
+            modelId=record.model_id,
+            phase=record.phase,
+            status=record.status,
+            requestDigest=record.request_digest,
+            inputTokensEstimate=record.input_tokens_estimate,
+            outputTokens=record.output_tokens,
+            totalTokens=record.total_tokens,
+            budgetLimit=record.budget_limit,
+            budgetPerCall=record.budget_per_call,
+            sources=[
+                ModelRequestAuditSourceState(
+                    dataKind=source.data_kind,
+                    sourceRef=source.source_ref,
+                    action=source.action,
+                    sensitivityLevel=source.sensitivity_level,
+                    findings=list(source.findings),
+                    redacted=source.redacted,
+                    blocked=source.blocked,
+                    sizeBytes=source.size_bytes,
+                    tokensEstimate=source.tokens_estimate,
+                )
+                for source in record.sources
+            ],
+            blockedReason=record.blocked_reason,
+        )
+        for record in audit.records
+    ]
+    succeeded_tokens = sum(record.total_tokens for record in audit.records if record.status == "succeeded")
+    return state.model_copy(
+        update={
+            "model_request_audits": [*state.model_request_audits, *records],
+            "consumed_tokens": max(
+                state.consumed_tokens, audit.consumed_tokens + succeeded_tokens
+            ),
+            "updated_at": utc_now(),
+        }
+    )
 
 
 class FileCommitResultRequest(AgentModel):
@@ -426,7 +505,7 @@ def submit_file_commit_result(
             state = append_log(
                 state, f"File commit {request.commit_id} completed through the Rust safety service."
             )
-            state = advance_state_for_workflow(state)
+            state = run_with_model_audit(state, advance_state_for_workflow)
         state = persist_state_and_sync_scheduler(state)
     return advance_response(state)
 
@@ -462,7 +541,7 @@ def submit_validation_result(
             }
         )
         state = append_log(state, "Validation result submitted to the Agent state machine.")
-        state = advance_state_for_workflow(state)
+        state = run_with_model_audit(state, advance_state_for_workflow)
         state = persist_state_and_sync_scheduler(state)
 
     return advance_response(state)
@@ -512,7 +591,7 @@ def resume_approval(
         )
         state = append_log(state, f"Approval {approval_id} resumed with decision: {decision}.")
         if decision == ApprovalStatus.APPROVED:
-            state = advance_state_for_workflow(state)
+            state = run_with_model_audit(state, advance_state_for_workflow)
         state = persist_state_and_sync_scheduler(state)
 
     return ResumeApprovalResponse(

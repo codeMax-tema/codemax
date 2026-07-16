@@ -248,6 +248,10 @@ fn diff_git_error(error: GitError) -> CommandError {
                 actual
             ),
         ),
+        other => CommandError::new(
+            "diff.gitStateChanged",
+            format!("Git state changed while processing the request: {other}"),
+        ),
     }
 }
 

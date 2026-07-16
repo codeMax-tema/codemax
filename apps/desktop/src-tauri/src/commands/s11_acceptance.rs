@@ -119,6 +119,7 @@ async fn s11_mvp_demo_repo_runs_from_worktree_to_local_merge() {
             task_id: TASK_ID.to_string(),
             target_branch: Some(target_branch.clone()),
             commit_message: "fix: enable demo feature".to_string(),
+            preview_id: prepared.preview_id.clone(),
             confirmed: true,
         },
     )

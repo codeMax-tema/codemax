@@ -641,6 +641,7 @@ export function TaskOverviewPage() {
         taskId,
         targetBranch: visibleMerge.targetBranch,
         commitMessage: mergeCommitMessage,
+        previewId: visibleMerge.previewId,
         confirmed: true,
       });
       if (selectedTaskIdRef.current !== taskId) {
@@ -664,6 +665,10 @@ export function TaskOverviewPage() {
         setMergeError(t('tasks.execution.mergeConflictSummary', locale));
       }
     } catch (error) {
+      // A failed command may mean the persisted baseline or review authorization changed.
+      // Never leave the old confirmation reusable; the user must reopen a fresh preview.
+      setMergeDialogOpen(false);
+      setPreparedMerge(null);
       setMergeError(normalizeDiffError(error));
     } finally {
       setIsMergeLoading(false);

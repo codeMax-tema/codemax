@@ -425,6 +425,10 @@ export interface PreparedTaskMerge {
   targetBranch: string;
   sourceBranch: string;
   worktreePath: string;
+  previewId: string;
+  baselineDigest: string;
+  targetHead: string;
+  sourceHead: string;
   targetDirty: boolean;
   worktreeDirty: boolean;
   validationStatus: DeliveryReportStatus;

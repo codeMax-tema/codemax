@@ -948,6 +948,11 @@ pub(crate) fn override_quality_gate_inner(
              SET override_reason = ?3
              WHERE task_id = ?1
                AND gate_type = ?2
+               AND rowid = (
+                   SELECT MAX(latest.rowid)
+                   FROM quality_gate_results latest
+                   WHERE latest.task_id = ?1 AND latest.gate_type = ?2
+               )
                AND status != 'passed'
                AND override_reason IS NULL",
             params![task_id, gate_type, reason],
@@ -1398,9 +1403,7 @@ fn load_delivery_review_snapshot(
     let approvals = ApprovalRepository::new(connection)
         .list_for_task(task_id)
         .map_err(storage_error)?;
-    let approvals_blocked = approvals
-        .iter()
-        .any(|approval| approval.decision.as_deref() != Some("approved"));
+    let approvals_blocked = approvals_blocked_for_task(connection, task_id)?;
     let merge_records = MergeRecordRepository::new(connection)
         .list_for_task(task_id)
         .map_err(storage_error)?;
@@ -1604,10 +1607,17 @@ fn load_quality_gate_rows(
 ) -> AppResult<Vec<QualityGateRow>> {
     let mut statement = connection
         .prepare(
-            "SELECT id, gate_type, status, message, evidence_path, override_reason
-             FROM quality_gate_results
-             WHERE task_id = ?1
-             ORDER BY created_at ASC, id ASC",
+            "SELECT gate.id, gate.gate_type, gate.status, gate.message,
+                    gate.evidence_path, gate.override_reason
+             FROM quality_gate_results gate
+             WHERE gate.task_id = ?1
+               AND gate.rowid = (
+                   SELECT MAX(latest.rowid)
+                   FROM quality_gate_results latest
+                   WHERE latest.task_id = gate.task_id
+                     AND latest.gate_type = gate.gate_type
+               )
+             ORDER BY gate.gate_type ASC",
         )
         .map_err(storage_error)?;
     let rows = statement
@@ -2353,6 +2363,40 @@ fn clamp_score(value: i64) -> u8 {
     value.clamp(0, 100) as u8
 }
 
+fn approvals_blocked_for_task(connection: &Connection, task_id: &str) -> AppResult<bool> {
+    let blocked = connection
+        .query_row(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM approvals approval
+                 WHERE approval.task_id = ?1
+                   AND approval.rowid = (
+                       SELECT MAX(latest.rowid)
+                       FROM approvals latest
+                       WHERE latest.task_id = approval.task_id
+                         AND latest.type = approval.type
+                         AND latest.content = approval.content
+                         AND COALESCE(latest.actor, '') = COALESCE(approval.actor, '')
+                         AND COALESCE(latest.action, '') = COALESCE(approval.action, '')
+                         AND COALESCE(latest.target, '') = COALESCE(approval.target, '')
+                         AND COALESCE(latest.arguments_digest, '') = COALESCE(approval.arguments_digest, '')
+                         AND COALESCE(latest.content_digest, '') = COALESCE(approval.content_digest, '')
+                         AND COALESCE(latest.scope, '') = COALESCE(approval.scope, '')
+                         AND COALESCE(latest.contract_digest, '') = COALESCE(approval.contract_digest, '')
+                   )
+                   AND (
+                       approval.decision IS NULL
+                       OR approval.decision != 'approved'
+                       OR approval.invalidated_at IS NOT NULL
+                   )
+             )",
+            params![task_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(storage_error)?;
+    Ok(blocked)
+}
+
 pub(crate) fn quality_gate_blockers_for_task(
     storage: &ManagedStorage,
     task_id: &str,
@@ -2361,9 +2405,18 @@ pub(crate) fn quality_gate_blockers_for_task(
     let mut statement = store
         .connection()
         .prepare(
-            "SELECT gate_type, status, message FROM quality_gate_results
-             WHERE task_id = ?1 AND status != 'passed' AND override_reason IS NULL
-             ORDER BY created_at ASC",
+            "SELECT gate.gate_type, gate.status, gate.message
+             FROM quality_gate_results gate
+             WHERE gate.task_id = ?1
+               AND gate.rowid = (
+                   SELECT MAX(latest.rowid)
+                   FROM quality_gate_results latest
+                   WHERE latest.task_id = gate.task_id
+                     AND latest.gate_type = gate.gate_type
+               )
+               AND gate.status != 'passed'
+               AND gate.override_reason IS NULL
+             ORDER BY gate.gate_type ASC",
         )
         .map_err(storage_error)?;
     let rows = statement
@@ -2420,11 +2473,7 @@ fn load_proof_inputs(
         .unwrap_or_default();
     let diff_path = latest_artifact.and_then(|artifact| artifact.diff_path.clone());
     let report_path = latest_artifact.and_then(|artifact| artifact.test_report_path.clone());
-    let approvals_blocked = ApprovalRepository::new(connection)
-        .list_for_task(task_id)
-        .map_err(storage_error)?
-        .into_iter()
-        .any(|approval| approval.decision.as_deref() != Some("approved"));
+    let approvals_blocked = approvals_blocked_for_task(connection, task_id)?;
 
     Ok((
         task.title,
@@ -3540,6 +3589,82 @@ mod tests {
     }
 
     #[test]
+    fn proof_pack_omits_model_request_sensitive_source_text_and_keeps_audit_linkage() {
+        let (storage, root) = proof_pack_storage();
+        seed_proof_task(&storage);
+        let sensitive_canary = "rel-p0-006-proof-pack-sensitive-canary";
+        let request_id = "request-s12-proof-model-audit";
+        let state = json!({
+            "modelRequestAudits": [{
+                "requestId": request_id,
+                "taskId": "task-s12-proof",
+                "provider": "openai-compatible",
+                "modelId": "test-model",
+                "phase": "planning",
+                "status": "succeeded",
+                "requestDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "inputTokensEstimate": 12,
+                "outputTokens": 5,
+                "totalTokens": 17,
+                "budgetLimit": 120000,
+                "budgetPerCall": 24000,
+                "blockedReason": sensitive_canary,
+                "sources": [{
+                    "dataKind": "prompt",
+                    "sourceRef": "messages[0].content",
+                    "action": "redacted",
+                    "sensitivityLevel": "high",
+                    "findings": ["secret_assignment"],
+                    "redacted": true,
+                    "blocked": false,
+                    "sizeBytes": 96,
+                    "tokensEstimate": 12
+                }]
+            }]
+        });
+        {
+            let store = storage.store.lock().expect("lock storage");
+            crate::privacy::sync_model_request_audits(store.connection(), "task-s12-proof", &state)
+                .expect("persist safe model audit metadata");
+        }
+
+        let result = generate_task_proof_pack_inner(
+            &storage,
+            GenerateTaskProofPackRequest {
+                task_id: "task-s12-proof".to_string(),
+            },
+        )
+        .expect("generate proof pack");
+
+        let mut proof_bytes = Vec::new();
+        for entry in fs::read_dir(&result.proof_dir).expect("read proof directory") {
+            let path = entry.expect("proof entry").path();
+            if path.is_file() {
+                proof_bytes.extend(fs::read(path).expect("read proof file"));
+            }
+        }
+        assert!(
+            !proof_bytes
+                .windows(sensitive_canary.len())
+                .any(|window| window == sensitive_canary.as_bytes()),
+            "sensitive source text must not be written to the Proof Pack"
+        );
+
+        let privacy_ledger =
+            fs::read_to_string(Path::new(&result.proof_dir).join("privacy-ledger.json"))
+                .expect("read privacy ledger proof");
+        let context_sources =
+            fs::read_to_string(Path::new(&result.proof_dir).join("context-sources.json"))
+                .expect("read token budget proof");
+        assert!(privacy_ledger.contains(request_id));
+        assert!(context_sources.contains(request_id));
+
+        if root.exists() {
+            fs::remove_dir_all(root).expect("clean proof test root");
+        }
+    }
+
+    #[test]
     fn delivery_review_blocks_ready_to_merge_until_proof_pack_exists() {
         let (storage, root) = proof_pack_storage();
         seed_proof_task(&storage);
@@ -3611,6 +3736,107 @@ mod tests {
         let unblocked = quality_gate_blockers_for_task(&storage, "task-s12-proof")
             .expect("read quality blockers after override");
         assert!(unblocked.is_empty());
+
+        if root.exists() {
+            fs::remove_dir_all(root).expect("clean proof test root");
+        }
+    }
+
+    #[test]
+    fn newer_passing_quality_gate_supersedes_older_failure() {
+        let (storage, root) = proof_pack_storage();
+        seed_proof_task(&storage);
+
+        record_quality_gate_result_inner(
+            &storage,
+            RecordQualityGateRequest {
+                task_id: "task-s12-proof".to_string(),
+                gate_type: "build".to_string(),
+                status: "failed".to_string(),
+                message: "first build failed".to_string(),
+                evidence_path: None,
+            },
+        )
+        .expect("record failed gate");
+        record_quality_gate_result_inner(
+            &storage,
+            RecordQualityGateRequest {
+                task_id: "task-s12-proof".to_string(),
+                gate_type: "build".to_string(),
+                status: "passed".to_string(),
+                message: "rerun passed".to_string(),
+                evidence_path: None,
+            },
+        )
+        .expect("record passing rerun");
+
+        assert!(quality_gate_blockers_for_task(&storage, "task-s12-proof")
+            .expect("load latest blockers")
+            .is_empty());
+        let latest = {
+            let store = storage.store.lock().expect("lock storage");
+            load_quality_gate_rows(store.connection(), "task-s12-proof").expect("load latest gates")
+        };
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].status, "passed");
+        let override_result = override_quality_gate_inner(
+            &storage,
+            OverrideQualityGateRequest {
+                task_id: "task-s12-proof".to_string(),
+                gate_type: "build".to_string(),
+                reason: "must not override historical failures".to_string(),
+            },
+        )
+        .expect("override checks latest gate only");
+        assert_eq!(override_result.overridden_count, 0);
+
+        if root.exists() {
+            fs::remove_dir_all(root).expect("clean proof test root");
+        }
+    }
+
+    #[test]
+    fn invalidated_approval_blocks_until_new_approval_for_same_binding_is_approved() {
+        let (storage, root) = proof_pack_storage();
+        seed_proof_task(&storage);
+        {
+            let store = storage.store.lock().expect("lock storage");
+            store
+                .connection()
+                .execute(
+                    "UPDATE approvals
+                     SET invalidated_at = '2026-07-16T00:00:00Z',
+                         invalidation_reason = 'merge baseline changed'
+                     WHERE id = 'approval-s12-proof'",
+                    [],
+                )
+                .expect("invalidate old approval");
+            assert!(
+                approvals_blocked_for_task(store.connection(), "task-s12-proof")
+                    .expect("read invalidated approval blocker")
+            );
+            let replacement = ApprovalRepository::new(store.connection())
+                .create(NewApproval {
+                    id: "approval-s12-proof-replacement",
+                    task_id: "task-s12-proof",
+                    approval_type: "delivery_review",
+                    risk_level: "low",
+                    content: "Delivery evidence has been reviewed.",
+                    reason: "Replacement approval for the new merge baseline.",
+                })
+                .expect("create replacement approval");
+            ApprovalRepository::new(store.connection())
+                .decide(
+                    &replacement.id,
+                    "approved",
+                    Some("Approved only for the refreshed baseline."),
+                )
+                .expect("approve replacement");
+            assert!(
+                !approvals_blocked_for_task(store.connection(), "task-s12-proof")
+                    .expect("read latest approval state")
+            );
+        }
 
         if root.exists() {
             fs::remove_dir_all(root).expect("clean proof test root");

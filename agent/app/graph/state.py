@@ -211,6 +211,35 @@ class ValidationCommandCandidate(AgentModel):
     priority: int = 0
 
 
+class ModelRequestAuditSourceState(AgentModel):
+    data_kind: str = Field(alias="dataKind")
+    source_ref: str = Field(alias="sourceRef")
+    action: str
+    sensitivity_level: str = Field(alias="sensitivityLevel")
+    findings: list[str] = Field(default_factory=list)
+    redacted: bool = False
+    blocked: bool = False
+    size_bytes: int = Field(default=0, ge=0, alias="sizeBytes")
+    tokens_estimate: int = Field(default=0, ge=0, alias="tokensEstimate")
+
+
+class ModelRequestAuditState(AgentModel):
+    request_id: str = Field(alias="requestId")
+    task_id: str = Field(alias="taskId")
+    provider: str
+    model_id: str = Field(alias="modelId")
+    phase: str
+    status: str
+    request_digest: str = Field(alias="requestDigest")
+    input_tokens_estimate: int = Field(ge=0, alias="inputTokensEstimate")
+    output_tokens: int = Field(ge=0, alias="outputTokens")
+    total_tokens: int = Field(ge=0, alias="totalTokens")
+    budget_limit: int = Field(ge=0, alias="budgetLimit")
+    budget_per_call: int = Field(ge=0, alias="budgetPerCall")
+    sources: list[ModelRequestAuditSourceState] = Field(default_factory=list)
+    blocked_reason: str = Field(default="", alias="blockedReason")
+
+
 class AgentState(AgentModel):
     task_id: str = Field(alias="taskId")
     repository_path: str = Field(alias="repositoryPath")
@@ -267,6 +296,8 @@ class AgentState(AgentModel):
     loop_fingerprint: str | None = Field(default=None, alias="loopFingerprint")
     max_duplicate_calls: int = Field(default=3, ge=1, le=20, alias="maxDuplicateCalls")
     token_budget: int | None = Field(default=None, ge=1, alias="tokenBudget")
+    token_budget_per_call: int | None = Field(default=None, ge=1, alias="tokenBudgetPerCall")
+    model_request_audits: list[ModelRequestAuditState] = Field(default_factory=list, alias="modelRequestAudits")
     consumed_tokens: int = Field(default=0, ge=0, alias="consumedTokens")
     completion: AgentCompletion | None = None
     checkpoint_index: int = Field(default=0, alias="checkpointIndex")
@@ -288,6 +319,7 @@ def create_initial_state(
     workflow_version: int | None = None,
     max_agent_rounds: int = 32,
     token_budget: int | None = None,
+    token_budget_per_call: int | None = None,
 ) -> AgentState:
     context = TaskContext(
         repositoryPath=repository_path,
@@ -314,6 +346,7 @@ def create_initial_state(
         maxRepairRounds=max_repair_rounds,
         maxAgentRounds=max_agent_rounds,
         tokenBudget=token_budget,
+        tokenBudgetPerCall=token_budget_per_call,
     )
     return append_log(state, "Agent task state created.")
 

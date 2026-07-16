@@ -12,7 +12,8 @@ use crate::{
     exec::{CommandExecutionResult, CommandRequest, CommandRunRegistry},
     privacy::{
         estimate_tokens, record_context_observation, record_token_budget_observation,
-        sanitize_for_model_context, ContextObservation, SanitizedContent, TokenBudgetObservation,
+        sanitize_for_model_context, sync_model_request_audits, ContextObservation,
+        SanitizedContent, TokenBudgetObservation,
     },
     safe_fs::SafeFileOperation,
     storage::{
@@ -39,6 +40,7 @@ const DEFAULT_AGENT_BUDGET_LIMIT: i64 = 120_000;
 struct ContractBudget {
     model_id: Option<String>,
     token_budget_total: i64,
+    token_budget_per_call: i64,
     overflow_policy: String,
 }
 
@@ -53,6 +55,10 @@ pub struct AgentTaskCreateRequest {
     pub description: String,
     pub model_id: Option<String>,
     pub validation_command: Option<String>,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
+    #[serde(default)]
+    pub token_budget_per_call: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -138,6 +144,8 @@ pub async fn create_agent_task(
         resolve_new_task_model_id(request.model_id.as_deref(), contract.model_id.as_deref())?;
     request.model_id = Some(model_id.clone());
     contract.model_id = Some(model_id);
+    request.token_budget = Some(contract.token_budget_total);
+    request.token_budget_per_call = Some(contract.token_budget_per_call);
     let sanitized_title = sanitize_for_model_context(&request.title, "agent.task.title");
     let sanitized_description =
         sanitize_for_model_context(&request.description, "agent.task.description");
@@ -621,6 +629,7 @@ fn sync_agent_state(storage: &ManagedStorage, task_id: &str, state: &Value) -> A
     let repair_file_edits = current_repair_file_edits(state);
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let connection = store.connection();
+    sync_model_request_audits(connection, task_id, state).map_err(storage_error)?;
     let previous_session = AgentSessionRepository::new(connection)
         .get_for_task(task_id)
         .map_err(storage_error)?;
@@ -899,11 +908,13 @@ fn load_contract_budget(storage: &ManagedStorage, task_id: &str) -> AppResult<Co
         .map(|contract| ContractBudget {
             model_id: contract.model_id,
             token_budget_total: contract.token_budget_total,
+            token_budget_per_call: contract.token_budget_per_call,
             overflow_policy: contract.budget_overflow_policy,
         })
         .unwrap_or(ContractBudget {
             model_id: None,
             token_budget_total: DEFAULT_AGENT_BUDGET_LIMIT,
+            token_budget_per_call: 24_000,
             overflow_policy: "pause_for_approval".to_string(),
         }))
 }
@@ -1532,6 +1543,82 @@ mod tests {
         assert_eq!(stage_events.len(), 1);
         assert_eq!(stage_events[0].stage, "editing");
         assert!(stage_events[0].message.contains("editing"));
+    }
+
+    #[test]
+    fn sync_agent_state_keeps_model_audit_canary_out_of_events_and_links_budget() {
+        let storage = test_storage("agent-model-audit-events");
+        let task_id = "task-model-audit-events";
+        let request_id = "request-model-audit-events";
+        let sensitive_canary = "rel-p0-006-event-sensitive-canary";
+        seed_task(&storage, task_id);
+        let state = json!({
+            "phase": "editing",
+            "checkpointIndex": 2,
+            "todos": [],
+            "modelRequestAudits": [{
+                "requestId": request_id,
+                "taskId": task_id,
+                "provider": "openai-compatible",
+                "modelId": "test-model",
+                "phase": "planning",
+                "status": "succeeded",
+                "requestDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "inputTokensEstimate": 9,
+                "outputTokens": 3,
+                "totalTokens": 12,
+                "budgetLimit": 120000,
+                "budgetPerCall": 24000,
+                "blockedReason": sensitive_canary,
+                "sources": [{
+                    "dataKind": "prompt",
+                    "sourceRef": "messages[0].content",
+                    "action": "redacted",
+                    "sensitivityLevel": "high",
+                    "findings": ["secret_assignment"],
+                    "redacted": true,
+                    "blocked": false,
+                    "sizeBytes": 72,
+                    "tokensEstimate": 9
+                }]
+            }]
+        });
+
+        sync_agent_state(&storage, task_id, &state).expect("sync succeeds");
+
+        let store = storage.store.lock().expect("storage lock");
+        let events = AgentEventRepository::new(store.connection())
+            .list_for_task(task_id)
+            .expect("list task events");
+        let serialized_events = events
+            .iter()
+            .map(|event| {
+                format!(
+                    "{}{}{}{}",
+                    event.event_type, event.stage, event.message, event.payload
+                )
+            })
+            .collect::<String>();
+        assert!(!serialized_events.contains(sensitive_canary));
+
+        let ledger_source: String = store
+            .connection()
+            .query_row(
+                "SELECT source_ref FROM privacy_ledger_entries WHERE task_id = ?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .expect("privacy ledger linkage");
+        let budget_run_id: String = store
+            .connection()
+            .query_row(
+                "SELECT run_id FROM token_budget_records WHERE task_id = ?1 AND call_type LIKE 'model_request_%'",
+                [task_id],
+                |row| row.get(0),
+            )
+            .expect("token budget linkage");
+        assert!(ledger_source.contains(request_id));
+        assert_eq!(budget_run_id, request_id);
     }
 
     #[test]
