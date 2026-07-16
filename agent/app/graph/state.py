@@ -319,15 +319,16 @@ def create_initial_state(
 
 
 def advance_state_for_workflow(state: AgentState) -> AgentState:
-    """Advance a task using the runner assigned to its persisted workflow version."""
-    if state.workflow_version >= 3:
+    """Advance only the explicitly supported persisted workflow versions."""
+    if state.workflow_version == 3:
         from app.autonomous import advance_autonomous_turn
 
         return advance_autonomous_turn(state)
+    if state.workflow_version in {1, 2}:
+        from app.graph import run_agent_graph
 
-    from app.graph import run_agent_graph
-
-    return run_agent_graph(state)
+        return run_agent_graph(state)
+    raise ValueError(f"Unsupported workflow version: {state.workflow_version}")
 
 
 def checkpoint_id(state: AgentState) -> str:

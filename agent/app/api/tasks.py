@@ -1,10 +1,22 @@
+import json
+import math
 from enum import StrEnum
 from threading import Lock
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    ValidationError,
+    field_validator,
+)
 
+from app.autonomous import apply_runtime_tool_result
+from app.autonomous.loop import _bounded_runtime_result
 from app.core.config import AgentSettings, load_settings
 from app.graph import (
     AgentPhase,
@@ -16,6 +28,7 @@ from app.graph import (
 from app.graph.state import (
     AgentProposalState,
     ApprovalStatus,
+    ToolResultStatus,
     ValidationCommandCandidate,
     ValidationResult,
     advance_state_for_workflow,
@@ -25,14 +38,24 @@ from app.graph.state import (
 from app.memory import MemoryService
 from app.proposals import ProposalService
 from app.scheduler import TaskScheduler
+from app.tools.protocol import ToolResult
 from app.validation import detect_validation_candidates
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 _store = CheckpointStore()
 _memory = MemoryService()
 _proposal_service = ProposalService()
-_scheduler = TaskScheduler(max_concurrent_tasks=2)
+MAX_CONCURRENT_TASKS = 2
+SUPPORTED_WORKFLOW_VERSIONS = frozenset({1, 2, 3})
+_TOOL_RESULT_MAX_IDENTIFIER_LENGTH = 256
+_TOOL_RESULT_MAX_ARTIFACT_REF_LENGTH = 4_096
+_TOOL_RESULT_MAX_STRING_BYTES = 16_000
+_TOOL_RESULT_MAX_DEPTH = 12
+_TOOL_RESULT_MAX_PAYLOAD_BYTES = 1_000_000
+
+_scheduler = TaskScheduler(max_concurrent_tasks=MAX_CONCURRENT_TASKS)
 _tasks_lock = Lock()
+_task_locks: dict[str, Lock] = {}
 
 WORKFLOW_V3_NOT_READY_DETAIL = "Workflow V3 autonomous runner is not ready."
 
@@ -67,6 +90,7 @@ class CreateAgentTaskRequest(AgentModel):
         if not model_id:
             raise ValueError("modelId is required for new Agent tasks")
         return model_id
+
     validation_command: str | None = Field(default=None, alias="validationCommand")
 
 
@@ -118,6 +142,77 @@ class ValidationResultRequest(AgentModel):
     cancelled: bool = False
 
 
+class ToolResultRequest(AgentModel):
+    """Validate Runtime callbacks before they can alter a durable V3 task."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    call_id: StrictStr = Field(
+        alias="callId", min_length=1, max_length=_TOOL_RESULT_MAX_IDENTIFIER_LENGTH
+    )
+    tool_name: StrictStr = Field(
+        alias="toolName", min_length=1, max_length=_TOOL_RESULT_MAX_IDENTIFIER_LENGTH
+    )
+    status: ToolResultStatus
+    output: dict[str, object] = Field(default_factory=dict)
+    error_code: StrictStr | None = Field(
+        default=None, alias="errorCode", max_length=_TOOL_RESULT_MAX_IDENTIFIER_LENGTH
+    )
+    error_message: StrictStr | None = Field(
+        default=None, alias="errorMessage", max_length=_TOOL_RESULT_MAX_STRING_BYTES
+    )
+    artifact_refs: list[StrictStr] = Field(
+        default_factory=list, alias="artifactRefs", max_length=16
+    )
+    truncated: StrictBool = False
+
+    @field_validator("call_id", "tool_name")
+    @classmethod
+    def require_non_blank_identifier(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("identifier is required")
+        return value
+
+    @field_validator("error_code", "error_message")
+    @classmethod
+    def limit_optional_text(cls, value: str | None) -> str | None:
+        if value is not None and len(value.encode("utf-8")) > _TOOL_RESULT_MAX_STRING_BYTES:
+            raise ValueError("text exceeds the Runtime callback limit")
+        return value
+
+    @field_validator("artifact_refs")
+    @classmethod
+    def validate_artifact_refs(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not value or len(value.encode("utf-8")) > _TOOL_RESULT_MAX_ARTIFACT_REF_LENGTH:
+                raise ValueError("artifact reference exceeds the Runtime callback limit")
+        return values
+
+    @field_validator("output")
+    @classmethod
+    def validate_json_output(cls, value: dict[str, object]) -> dict[str, object]:
+        _validate_tool_result_json(value, depth=1)
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise ValueError("output must be JSON serializable") from error
+        if len(encoded) > _TOOL_RESULT_MAX_PAYLOAD_BYTES:
+            raise ValueError("output exceeds the Runtime callback limit")
+        return value
+
+    def to_tool_result(self) -> ToolResult:
+        return ToolResult(
+            call_id=self.call_id,
+            tool_name=self.tool_name,
+            status=self.status.value,
+            output=self.output,
+            error_code=self.error_code,
+            error_message=self.error_message,
+            artifact_refs=tuple(self.artifact_refs),
+            truncated=self.truncated,
+        )
+
+
 @router.post("", response_model=CreateAgentTaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
     with _tasks_lock:
@@ -145,19 +240,13 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
             ],
             workflow_version=3,
         )
-        if state.workflow_version != 3:
-            scheduled = _scheduler.submit(request.task_id)
-            state = append_log(
-                state,
-                f"Scheduler admitted task as {scheduled.status}.",
-            )
         state = state.model_copy(
             update={
                 "proposals": proposal_states_for(request),
                 "updated_at": utc_now(),
             }
         )
-        state = _store.save(state)
+        state = persist_state_and_sync_scheduler(state)
 
     return CreateAgentTaskResponse(
         taskId=state.task_id,
@@ -171,33 +260,77 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
 
 @router.get("/{task_id}", response_model=AgentState)
 def get_task_state(task_id: str) -> AgentState:
-    return load_state_or_404(task_id)
+    state = load_state_or_404(task_id)
+    require_supported_workflow(state)
+    return state
 
 
 @router.post("/{task_id}/advance", response_model=AdvanceAgentTaskResponse)
 def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgentTaskResponse:
-    with _tasks_lock:
+    # The global lock only locates the per-task lease.  The V3 model call below
+    # therefore cannot serialize unrelated Agent tasks.
+    with task_lock_for(task_id):
         state = load_state_or_404(task_id)
-        if state.workflow_version == 3:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=WORKFLOW_V3_NOT_READY_DETAIL,
-            )
-
-        scheduled = scheduled_task_for(task_id)
+        require_supported_workflow(state)
+        state, scheduled = ensure_scheduler_after_checkpoint(state)
         if scheduled.status == "queued":
             state = append_log(state, "Task is queued until a scheduler slot is available.")
-            state = _store.save(state)
+            state = persist_state_and_sync_scheduler(state)
             return advance_response(state)
 
+        expected_checkpoint_index = state.checkpoint_index
         state = apply_advance_request(state, request)
         state = advance_state_for_workflow(state)
-        update_scheduler_from_state(state)
-        state = _store.save(state)
+        if state.workflow_version == 3:
+            revalidate_v3_lease(task_id, expected_checkpoint_index)
+        state = persist_state_and_sync_scheduler(state)
 
     return advance_response(state)
 
 
+@router.post("/{task_id}/tool-result", response_model=AdvanceAgentTaskResponse)
+async def submit_tool_result_http(task_id: str, request: Request) -> AdvanceAgentTaskResponse:
+    """Parse callbacks strictly so JSON NaN/Infinity become a normal 422 response."""
+    try:
+        payload = json.loads(
+            await request.body(),
+            parse_constant=_reject_non_finite_json_constant,
+        )
+        parsed = ToolResultRequest.model_validate(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, ValidationError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid Runtime tool-result payload.",
+        ) from error
+    return submit_tool_result(task_id, parsed)
+
+
+def submit_tool_result(task_id: str, request: ToolResultRequest) -> AdvanceAgentTaskResponse:
+    runtime_result = request.to_tool_result()
+    with task_lock_for(task_id):
+        state = load_state_or_404(task_id)
+        require_supported_workflow(state)
+        if state.workflow_version != 3:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Runtime tool results are supported only for workflow version 3.",
+            )
+
+        replay = classify_tool_result_delivery(state, runtime_result)
+        if replay == "identical":
+            return advance_response(state)
+        if replay == "conflict":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Runtime tool result conflicts with the persisted task state.",
+            )
+
+        expected_checkpoint_index = state.checkpoint_index
+        state = apply_runtime_tool_result(state, runtime_result)
+        revalidate_v3_lease(task_id, expected_checkpoint_index)
+        state = persist_state_and_sync_scheduler(state)
+
+    return advance_response(state)
 
 
 class FileCommitResultRequest(AgentModel):
@@ -207,20 +340,35 @@ class FileCommitResultRequest(AgentModel):
 
 
 @router.post("/{task_id}/file-commit-result", response_model=AdvanceAgentTaskResponse)
-def submit_file_commit_result(task_id: str, request: FileCommitResultRequest) -> AdvanceAgentTaskResponse:
-    with _tasks_lock:
+def submit_file_commit_result(
+    task_id: str, request: FileCommitResultRequest
+) -> AdvanceAgentTaskResponse:
+    with task_lock_for(task_id):
         state = load_state_or_404(task_id)
+        require_supported_workflow(state)
         if state.workflow_version == 3:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=WORKFLOW_V3_NOT_READY_DETAIL,
             )
 
-        if state.phase != AgentPhase.AWAITING_FILE_COMMIT or state.pending_file_commit_id != request.commit_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File commit result does not match the pending commit.")
+        if (
+            state.phase != AgentPhase.AWAITING_FILE_COMMIT
+            or state.pending_file_commit_id != request.commit_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="File commit result does not match the pending commit.",
+            )
         if not request.success:
             message = request.error or "Rust safety service rejected the file commit."
-            state = state.model_copy(update={"phase": AgentPhase.FAILED, "pending_file_commit_id": None, "updated_at": utc_now()})
+            state = state.model_copy(
+                update={
+                    "phase": AgentPhase.FAILED,
+                    "pending_file_commit_id": None,
+                    "updated_at": utc_now(),
+                }
+            )
             state = append_log(state, message, "error")
         else:
             edits = [
@@ -228,18 +376,21 @@ def submit_file_commit_result(task_id: str, request: FileCommitResultRequest) ->
                 for edit in (state.edit_plan.edits if state.edit_plan else [])
             ]
             is_repair = state.repair_round > 0
-            state = state.model_copy(update={
-                "phase": AgentPhase.EDITING,
-                "edit_plan_applied": True,
-                "pending_file_commit_id": None,
-                "file_edits": [*state.file_edits, *edits],
-                "repair_file_edits": edits if is_repair else [],
-                "updated_at": utc_now(),
-            })
-            state = append_log(state, f"File commit {request.commit_id} completed through the Rust safety service.")
+            state = state.model_copy(
+                update={
+                    "phase": AgentPhase.EDITING,
+                    "edit_plan_applied": True,
+                    "pending_file_commit_id": None,
+                    "file_edits": [*state.file_edits, *edits],
+                    "repair_file_edits": edits if is_repair else [],
+                    "updated_at": utc_now(),
+                }
+            )
+            state = append_log(
+                state, f"File commit {request.commit_id} completed through the Rust safety service."
+            )
             state = advance_state_for_workflow(state)
-        update_scheduler_from_state(state)
-        state = _store.save(state)
+        state = persist_state_and_sync_scheduler(state)
     return advance_response(state)
 
 
@@ -248,8 +399,9 @@ def submit_validation_result(
     task_id: str,
     request: ValidationResultRequest,
 ) -> AdvanceAgentTaskResponse:
-    with _tasks_lock:
+    with task_lock_for(task_id):
         state = load_state_or_404(task_id)
+        require_supported_workflow(state)
         if state.workflow_version == 3:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -274,8 +426,7 @@ def submit_validation_result(
         )
         state = append_log(state, "Validation result submitted to the Agent state machine.")
         state = advance_state_for_workflow(state)
-        update_scheduler_from_state(state)
-        state = _store.save(state)
+        state = persist_state_and_sync_scheduler(state)
 
     return advance_response(state)
 
@@ -289,8 +440,9 @@ def resume_approval(
     approval_id: str,
     request: ResumeApprovalRequest,
 ) -> ResumeApprovalResponse:
-    with _tasks_lock:
+    with task_lock_for(task_id):
         state = load_state_or_404(task_id)
+        require_supported_workflow(state)
         if state.workflow_version == 3:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -324,8 +476,7 @@ def resume_approval(
         state = append_log(state, f"Approval {approval_id} resumed with decision: {decision}.")
         if decision == ApprovalStatus.APPROVED:
             state = advance_state_for_workflow(state)
-        update_scheduler_from_state(state)
-        state = _store.save(state)
+        state = persist_state_and_sync_scheduler(state)
 
     return ResumeApprovalResponse(
         taskId=state.task_id,
@@ -364,6 +515,114 @@ def advance_response(state: AgentState) -> AdvanceAgentTaskResponse:
         checkpointId=checkpoint_id(state),
         state=state,
     )
+
+
+def _reject_non_finite_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _validate_tool_result_json(value: object, *, depth: int) -> None:
+    if depth > _TOOL_RESULT_MAX_DEPTH:
+        raise ValueError("output exceeds the maximum nesting depth")
+    if value is None or isinstance(value, bool) or isinstance(value, int):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("output contains a non-finite number")
+        return
+    if isinstance(value, str):
+        if len(value.encode("utf-8")) > _TOOL_RESULT_MAX_STRING_BYTES:
+            raise ValueError("output string exceeds the Runtime callback limit")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_tool_result_json(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("output contains a non-string object key")
+            if len(key.encode("utf-8")) > _TOOL_RESULT_MAX_IDENTIFIER_LENGTH:
+                raise ValueError("output key exceeds the Runtime callback limit")
+            _validate_tool_result_json(item, depth=depth + 1)
+        return
+    raise ValueError("output must contain JSON values only")
+
+
+def task_lock_for(task_id: str) -> Lock:
+    with _tasks_lock:
+        return _task_locks.setdefault(task_id, Lock())
+
+
+def require_supported_workflow(state: AgentState) -> None:
+    if state.workflow_version not in SUPPORTED_WORKFLOW_VERSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Unsupported workflow version: {state.workflow_version}.",
+        )
+
+
+def classify_tool_result_delivery(
+    state: AgentState, result: ToolResult
+) -> Literal["accept", "identical", "conflict"]:
+    try:
+        _, payload_fingerprint = _bounded_runtime_result(result)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid Runtime tool result: {error}.",
+        ) from error
+
+    for consumed in state.consumed_tool_results:
+        if consumed.call_id == result.call_id:
+            return (
+                "identical" if consumed.payload_fingerprint == payload_fingerprint else "conflict"
+            )
+    if result.call_id in state.executed_tool_call_ids:
+        return "conflict"
+
+    pending = state.pending_tool_request
+    if (
+        state.phase != AgentPhase.WAITING_RUNTIME
+        or pending is None
+        or pending.call_id != result.call_id
+        or pending.tool_name != result.tool_name
+    ):
+        return "conflict"
+    return "accept"
+
+
+def revalidate_v3_lease(task_id: str, expected_checkpoint_index: int) -> None:
+    latest = load_state_or_404(task_id)
+    if latest.checkpoint_index != expected_checkpoint_index:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task changed while its V3 model turn was in progress.",
+        )
+
+
+def scheduler_status(task_id: str):
+    try:
+        return _scheduler.status(task_id)
+    except KeyError:
+        return None
+
+
+def ensure_scheduler_after_checkpoint(state: AgentState):
+    scheduled = scheduler_status(state.task_id)
+    if scheduled is not None:
+        return state, scheduled
+    saved = persist_state_and_sync_scheduler(state)
+    scheduled = scheduler_status(saved.task_id)
+    if scheduled is None:
+        raise RuntimeError(f"Scheduler did not admit persisted task: {saved.task_id}")
+    return saved, scheduled
+
+
+def persist_state_and_sync_scheduler(state: AgentState) -> AgentState:
+    saved = _store.save(state)
+    update_scheduler_from_state(saved)
+    return saved
 
 
 def approval_decision_to_status(decision: ApprovalDecision) -> ApprovalStatus:

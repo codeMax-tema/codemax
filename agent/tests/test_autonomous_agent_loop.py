@@ -102,16 +102,28 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
         def save(self, state: AgentState) -> AgentState:
             return state
 
-    monkeypatch.setattr(tasks, "_store", Store())
+    saved_then_scheduled: list[str] = []
+
+    class OrderedStore(Store):
+        def save(self, state: AgentState) -> AgentState:
+            saved_then_scheduled.append("save")
+            return super().save(state)
+
+    monkeypatch.setattr(tasks, "_store", OrderedStore())
     submitted_task_ids: list[str] = []
+
+    def scheduler_status(task_id: str):
+        raise KeyError(task_id)
+
+    def submit(task_id: str):
+        saved_then_scheduled.append("submit")
+        submitted_task_ids.append(task_id)
+        return SimpleNamespace(status="running")
+
     monkeypatch.setattr(
         tasks,
         "_scheduler",
-        SimpleNamespace(
-            submit=lambda task_id: (
-                submitted_task_ids.append(task_id) or SimpleNamespace(status="running")
-            )
-        ),
+        SimpleNamespace(status=scheduler_status, submit=submit),
     )
     monkeypatch.setattr(tasks, "load_settings", lambda: SimpleNamespace(max_repair_rounds=5))
     monkeypatch.setattr(
@@ -134,7 +146,8 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
     )
 
     assert response.state.workflow_version == 3
-    assert submitted_task_ids == []
+    assert submitted_task_ids == ["new-v3-programming-task"]
+    assert saved_then_scheduled == ["save", "submit"]
 
 
 def test_workflow_v2_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) -> None:
@@ -190,51 +203,64 @@ def test_legacy_workflow_v1_dispatches_to_full_langgraph_runner(tmp_path, monkey
     assert calls == [legacy_state]
 
 
-def test_v3_advance_is_rejected_without_mutating_state(tmp_path, monkeypatch) -> None:
+def test_v3_advance_persists_only_after_the_model_turn(tmp_path, monkeypatch) -> None:
     from types import SimpleNamespace
 
     from app.api import tasks
+    from app.graph.state import AgentPhase
 
     state = create_initial_state(
-        task_id="v3-advance-not-ready",
+        task_id="v3-advance-ready",
         repository_path=str(tmp_path),
         worktree_path=str(tmp_path),
-        title="V3 advance not ready",
+        title="V3 advance ready",
         model_id="test-model",
         workflow_version=3,
     )
-    original_payload = state.model_dump(mode="json", by_alias=True)
     saved_states: list[AgentState] = []
+    turns: list[AgentState] = []
 
     class Store:
         def load(self, _task_id: str) -> AgentState:
             return state
 
         def save(self, saved_state: AgentState) -> AgentState:
-            saved_states.append(saved_state)
-            return saved_state
+            saved = saved_state.model_copy(
+                update={"checkpoint_index": saved_state.checkpoint_index + 1}
+            )
+            saved_states.append(saved)
+            return saved
 
     monkeypatch.setattr(tasks, "_store", Store())
     monkeypatch.setattr(
         tasks,
         "_scheduler",
-        SimpleNamespace(status=lambda _task_id: SimpleNamespace(status="running")),
+        SimpleNamespace(
+            status=lambda _task_id: SimpleNamespace(status="running"),
+            submit=lambda _task_id: SimpleNamespace(status="running"),
+            finish=lambda _task_id, **_kwargs: SimpleNamespace(status="completed"),
+        ),
     )
 
-    with pytest.raises(HTTPException) as error:
-        tasks.advance_task(
-            state.task_id,
-            tasks.AdvanceAgentTaskRequest(
-                reason="Continue V3 task",
-                userMessage="Please continue.",
-                requireApproval=True,
-            ),
-        )
+    def advance(received: AgentState) -> AgentState:
+        turns.append(received)
+        return received.model_copy(update={"phase": AgentPhase.WAITING_RUNTIME})
 
-    assert error.value.status_code == 503
-    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
-    assert state.model_dump(mode="json", by_alias=True) == original_payload
-    assert saved_states == []
+    monkeypatch.setattr(tasks, "advance_state_for_workflow", advance)
+
+    response = tasks.advance_task(
+        state.task_id,
+        tasks.AdvanceAgentTaskRequest(
+            reason="Continue V3 task",
+            userMessage="Please continue.",
+            requireApproval=True,
+        ),
+    )
+
+    assert len(turns) == 1
+    assert len(saved_states) == 1
+    assert response.state.phase == AgentPhase.WAITING_RUNTIME
+    assert response.state.context.user_messages == ["Please continue."]
 
 
 def test_v3_validation_result_without_request_is_rejected_as_not_ready(
@@ -974,9 +1000,7 @@ def test_consumed_runtime_results_replay_strictly_after_failure_and_completion(t
             ModelToolCall(
                 id="call-complete-2",
                 name="complete_task",
-                arguments=(
-                    '{"summary":"Search failed","changedFiles":[],"remainingRisks":[]}'
-                ),
+                arguments=('{"summary":"Search failed","changedFiles":[],"remainingRisks":[]}'),
             )
         ),
     )
@@ -1202,19 +1226,202 @@ def test_runtime_result_invalid_or_too_deep_payload_needs_intervention_without_t
     assert recovered.agent_messages == waiting.agent_messages
 
 
-def test_workflow_v4_dispatches_to_the_autonomous_runner(tmp_path, monkeypatch) -> None:
+def test_workflow_v4_is_rejected_fail_closed(tmp_path, monkeypatch) -> None:
     import app.autonomous as autonomous
     from app.graph.state import advance_state_for_workflow
 
     state = v3_state(tmp_path).model_copy(update={"workflow_version": 4})
-    resumed = state.model_copy(update={"checkpoint_index": 1})
     calls: list[AgentState] = []
 
     def advance(received: AgentState) -> AgentState:
         calls.append(received)
-        return resumed
+        return received
 
     monkeypatch.setattr(autonomous, "advance_autonomous_turn", advance)
 
-    assert advance_state_for_workflow(state) is resumed
-    assert calls == [state]
+    with pytest.raises(ValueError, match="Unsupported workflow version: 4"):
+        advance_state_for_workflow(state)
+    assert calls == []
+
+
+def test_v3_advance_releases_global_tasks_lock_and_serializes_each_task(
+    tmp_path, monkeypatch
+) -> None:
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from app.api import tasks
+
+    state = create_initial_state(
+        task_id="v3-serialized-advance",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 serialized advance",
+        model_id="test-model",
+        workflow_version=3,
+    )
+
+    class Store:
+        def __init__(self) -> None:
+            self.state = state
+
+        def load(self, task_id: str) -> AgentState | None:
+            return self.state if task_id == self.state.task_id else None
+
+        def save(self, next_state: AgentState) -> AgentState:
+            self.state = next_state.model_copy(
+                update={"checkpoint_index": next_state.checkpoint_index + 1}
+            )
+            return self.state
+
+    store = Store()
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(
+            status=lambda _task_id: SimpleNamespace(status="running"),
+            submit=lambda _task_id: SimpleNamespace(status="running"),
+            finish=lambda _task_id, **_kwargs: SimpleNamespace(status="completed"),
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    observed_global_lock: list[bool] = []
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
+
+    def slow_model_turn(received: AgentState) -> AgentState:
+        nonlocal active, max_active
+        acquired_global_lock = tasks._tasks_lock.acquire(blocking=False)
+        observed_global_lock.append(acquired_global_lock)
+        if acquired_global_lock:
+            tasks._tasks_lock.release()
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+        started.set()
+        assert release.wait(timeout=5)
+        with active_lock:
+            active -= 1
+        return received
+
+    monkeypatch.setattr(tasks, "advance_state_for_workflow", slow_model_turn)
+    request = tasks.AdvanceAgentTaskRequest(reason="start")
+    first = threading.Thread(target=tasks.advance_task, args=(state.task_id, request))
+    second = threading.Thread(target=tasks.advance_task, args=(state.task_id, request))
+
+    first.start()
+    assert started.wait(timeout=5)
+    second.start()
+    time.sleep(0.1)
+    assert max_active == 1
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert observed_global_lock == [True, True]
+    assert max_active == 1
+
+
+def test_new_v3_tasks_use_explicit_scheduler_concurrency_quota(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+    from app.scheduler import TaskScheduler
+
+    class Store:
+        def __init__(self) -> None:
+            self.states: dict[str, AgentState] = {}
+
+        def exists(self, task_id: str) -> bool:
+            return task_id in self.states
+
+        def save(self, state: AgentState) -> AgentState:
+            saved = state.model_copy(update={"checkpoint_index": state.checkpoint_index + 1})
+            self.states[saved.task_id] = saved
+            return saved
+
+    store = Store()
+    scheduler = TaskScheduler(max_concurrent_tasks=1)
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+    monkeypatch.setattr(tasks, "load_settings", lambda: SimpleNamespace(max_repair_rounds=5))
+    monkeypatch.setattr(
+        tasks, "resolve_validation_command", lambda _request, _settings: ("python --version", [])
+    )
+    monkeypatch.setattr(tasks, "memory_context_notes", lambda _request: [])
+    monkeypatch.setattr(tasks, "validation_context_notes", lambda _candidates: [])
+    monkeypatch.setattr(tasks, "proposal_states_for", lambda _request: [])
+
+    for task_id in ("quota-v3-1", "quota-v3-2"):
+        tasks.create_task(
+            tasks.CreateAgentTaskRequest(
+                taskId=task_id,
+                repositoryPath=str(tmp_path),
+                worktreePath=str(tmp_path),
+                title=task_id,
+                modelId="test-model",
+            )
+        )
+
+    snapshot = scheduler.snapshot()
+    assert snapshot.max_concurrent_tasks == 1
+    assert snapshot.running_task_ids == ["quota-v3-1"]
+    assert snapshot.queued_task_ids == ["quota-v3-2"]
+
+
+def test_v3_advance_revalidates_its_checkpoint_lease_before_persisting(
+    tmp_path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+
+    state = create_initial_state(
+        task_id="v3-stale-lease",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 stale lease",
+        model_id="test-model",
+        workflow_version=3,
+    )
+    saved_states: list[AgentState] = []
+    scheduler_mutations: list[str] = []
+
+    class Store:
+        def __init__(self) -> None:
+            self.loads = 0
+
+        def load(self, _task_id: str) -> AgentState:
+            self.loads += 1
+            if self.loads == 1:
+                return state
+            return state.model_copy(update={"checkpoint_index": state.checkpoint_index + 1})
+
+        def save(self, next_state: AgentState) -> AgentState:
+            saved_states.append(next_state)
+            return next_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(
+            status=lambda _task_id: SimpleNamespace(status="running"),
+            submit=lambda _task_id: scheduler_mutations.append("submit"),
+            finish=lambda _task_id, **_kwargs: scheduler_mutations.append("finish"),
+        ),
+    )
+    monkeypatch.setattr(tasks, "advance_state_for_workflow", lambda received: received)
+
+    with pytest.raises(HTTPException) as raised:
+        tasks.advance_task(state.task_id, tasks.AdvanceAgentTaskRequest(reason="start"))
+
+    assert raised.value.status_code == 409
+    assert saved_states == []
+    assert scheduler_mutations == []
