@@ -254,6 +254,7 @@ class AgentState(AgentModel):
         ge=0,
         alias="consecutiveDuplicateCalls",
     )
+    loop_fingerprint: str | None = Field(default=None, alias="loopFingerprint")
     max_duplicate_calls: int = Field(default=3, ge=1, le=20, alias="maxDuplicateCalls")
     token_budget: int | None = Field(default=None, ge=1, alias="tokenBudget")
     consumed_tokens: int = Field(default=0, ge=0, alias="consumedTokens")

@@ -548,7 +548,7 @@ def test_advance_autonomous_turn_creates_runtime_request_from_scripted_search(tm
     assert request_messages[0].role == "user"
     assert tools is not None
     assert {tool["function"]["name"] for tool in tools} >= {"search_text", "read_file"}
-    assert tool_choice == "required"
+    assert tool_choice == "auto"
 
 
 def test_runtime_tool_result_is_backfilled_before_next_model_read_request(tmp_path) -> None:
@@ -606,6 +606,10 @@ def test_runtime_tool_result_is_backfilled_before_next_model_read_request(tmp_pa
             ModelToolCall(id="call-invalid", name="read_file", arguments='{"path":42}'),
             "tool.invalidArguments",
         ),
+        (
+            ModelToolCall(id="", name="read_file", arguments='{"path":"README.md"}'),
+            "tool.invalidCallId",
+        ),
     ],
 )
 def test_invalid_model_tool_call_becomes_protocol_tool_message(
@@ -614,17 +618,20 @@ def test_invalid_model_tool_call_becomes_protocol_tool_message(
     error_code: str,
 ) -> None:
     from app.autonomous import advance_autonomous_turn
+    from app.graph.state import AgentPhase
 
     advanced = advance_autonomous_turn(
         v3_state(tmp_path),
         gateway=ScriptedGateway(scripted_tool_result(tool_call)),
     )
 
+    assert advanced.phase is AgentPhase.NEEDS_INTERVENTION
     assert advanced.pending_tool_request is None
     assert advanced.last_tool_result is not None
     assert advanced.last_tool_result.error_code == error_code
     assert [message.role for message in advanced.agent_messages] == ["user", "assistant", "tool"]
-    assert advanced.agent_messages[-1].tool_call_id == tool_call.id
+    expected_call_id = tool_call.id or f"model-round-{advanced.agent_round}"
+    assert advanced.agent_messages[-1].tool_call_id == expected_call_id
     assert error_code in advanced.agent_messages[-1].content
 
 
@@ -698,6 +705,203 @@ def test_repeated_no_progress_tool_call_requires_intervention(tmp_path) -> None:
     assert resolved.pending_tool_request is None
     assert resolved.consecutive_duplicate_calls == 1
     assert len(gateway.requests) == 2
+
+
+def test_duplicate_model_call_id_requires_intervention(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn
+    from app.graph.state import AgentMessage, AgentPhase, AgentToolCall
+
+    state = v3_state(tmp_path).model_copy(
+        update={
+            "agent_messages": [
+                AgentMessage(role="user", content="Inspect the state."),
+                AgentMessage(
+                    role="assistant",
+                    toolCalls=[
+                        AgentToolCall(
+                            id="call-reused",
+                            name="search_text",
+                            arguments={"query": "AgentState"},
+                        )
+                    ],
+                ),
+            ]
+        }
+    )
+
+    advanced = advance_autonomous_turn(
+        state,
+        gateway=ScriptedGateway(
+            scripted_tool_result(
+                ModelToolCall(
+                    id="call-reused",
+                    name="search_text",
+                    arguments='{"query":"AgentState"}',
+                )
+            )
+        ),
+    )
+
+    assert advanced.phase is AgentPhase.NEEDS_INTERVENTION
+    assert advanced.pending_tool_request is None
+    assert advanced.last_tool_result is not None
+    assert advanced.last_tool_result.error_code == "tool.duplicateCallId"
+
+
+def test_loop_fingerprint_resets_when_runtime_result_status_changes(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState","path":"agent/app"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-2",
+                name="search_text",
+                arguments='{"path":"agent/app","query":"AgentState"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-3",
+                name="search_text",
+                arguments='{"query":"AgentState","path":"agent/app"}',
+            )
+        ),
+    )
+    waiting = advance_autonomous_turn(
+        v3_state(tmp_path, max_agent_rounds=4).model_copy(update={"max_duplicate_calls": 2}),
+        gateway=gateway,
+    )
+
+    after_success = apply_runtime_tool_result(
+        waiting,
+        ToolResult(
+            call_id="call-search-1",
+            tool_name="search_text",
+            status="succeeded",
+            output={"matches": []},
+        ),
+        gateway=gateway,
+    )
+    assert after_success.phase is AgentPhase.WAITING_RUNTIME
+    assert after_success.consecutive_duplicate_calls == 1
+
+    after_failure = apply_runtime_tool_result(
+        after_success,
+        ToolResult(
+            call_id="call-search-2",
+            tool_name="search_text",
+            status="failed",
+            output={},
+            error_code="runtime.failed",
+        ),
+        gateway=gateway,
+    )
+
+    assert after_failure.phase is AgentPhase.WAITING_RUNTIME
+    assert after_failure.pending_tool_request is not None
+    assert after_failure.pending_tool_request.call_id == "call-search-3"
+    assert after_failure.consecutive_duplicate_calls == 1
+
+
+def test_runtime_result_requires_waiting_runtime_and_unconsumed_pending_call(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    waiting = advance_autonomous_turn(
+        v3_state(tmp_path),
+        gateway=ScriptedGateway(
+            scripted_tool_result(
+                ModelToolCall(
+                    id="call-search-1",
+                    name="search_text",
+                    arguments='{"query":"AgentState"}',
+                )
+            )
+        ),
+    )
+    result = ToolResult(
+        call_id="call-search-1",
+        tool_name="search_text",
+        status="succeeded",
+        output={},
+    )
+
+    wrong_phase = apply_runtime_tool_result(
+        waiting.model_copy(update={"phase": AgentPhase.CREATED}),
+        result,
+    )
+    consumed = apply_runtime_tool_result(
+        waiting.model_copy(update={"executed_tool_call_ids": ["call-search-1"]}),
+        result,
+    )
+
+    assert wrong_phase.phase is AgentPhase.NEEDS_INTERVENTION
+    assert consumed.phase is AgentPhase.NEEDS_INTERVENTION
+    assert len(wrong_phase.agent_messages) == len(waiting.agent_messages)
+    assert len(consumed.agent_messages) == len(waiting.agent_messages)
+
+
+def test_waiting_approval_duplicate_runtime_result_is_idempotent(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-approval-1",
+                name="request_approval",
+                arguments=(
+                    '{"approvalType":"high_risk_operation",'
+                    '"content":"Inspect diff","reason":"Need confirmation"}'
+                ),
+            )
+        )
+    )
+    waiting = advance_autonomous_turn(v3_state(tmp_path), gateway=gateway)
+    result = ToolResult(
+        call_id="call-approval-1",
+        tool_name="request_approval",
+        status="waiting_approval",
+        output={"approvalId": "approval-1"},
+    )
+
+    awaiting_approval = apply_runtime_tool_result(waiting, result, gateway=gateway)
+    replayed = apply_runtime_tool_result(awaiting_approval, result, gateway=gateway)
+
+    assert awaiting_approval.phase is AgentPhase.WAITING_APPROVAL
+    assert replayed is awaiting_approval
+    assert [message.role for message in replayed.agent_messages].count("tool") == 1
+    assert replayed.executed_tool_call_ids == ["call-approval-1"]
+
+
+def test_workflow_versions_after_v3_use_the_autonomous_loop(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn
+    from app.graph.state import AgentPhase
+
+    advanced = advance_autonomous_turn(
+        v3_state(tmp_path).model_copy(update={"workflow_version": 4}),
+        gateway=ScriptedGateway(
+            scripted_tool_result(
+                ModelToolCall(
+                    id="call-search-v4",
+                    name="search_text",
+                    arguments='{"query":"AgentState"}',
+                )
+            )
+        ),
+    )
+
+    assert advanced.phase is AgentPhase.WAITING_RUNTIME
+    assert advanced.pending_tool_request is not None
+    assert advanced.pending_tool_request.call_id == "call-search-v4"
 
 
 @pytest.mark.parametrize(
