@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from app.graph.state import AgentPhase, AgentState, AgentToolRequest, create_initial_state
 from app.main import create_app
+from app.scheduler import TaskScheduler
 from fastapi.testclient import TestClient
 
 
@@ -219,3 +221,45 @@ def test_tool_result_api_remains_closed_for_legacy_workflows(tmp_path: Path, mon
 
         assert response.status_code == 503
         assert store.saved == []
+
+@pytest.mark.parametrize(
+    ("runtime_status", "call_id", "expected_phase", "expected_scheduler_status"),
+    [
+        ("succeeded", "call-complete-1", AgentPhase.COMPLETED, "completed"),
+        ("cancelled", "call-complete-1", AgentPhase.CANCELLED, "cancelled"),
+        ("succeeded", "call-other", AgentPhase.NEEDS_INTERVENTION, "failed"),
+    ],
+)
+def test_tool_result_api_syncs_terminal_runtime_state_to_scheduler_before_save(
+    tmp_path: Path,
+    monkeypatch,
+    runtime_status: str,
+    call_id: str,
+    expected_phase: AgentPhase,
+    expected_scheduler_status: str,
+) -> None:
+    from app.api import tasks
+
+    state = _waiting_for_complete_task(tmp_path)
+    scheduler = TaskScheduler(max_concurrent_tasks=1)
+    store = InMemoryStore(state)
+    saved_scheduler_statuses: list[str] = []
+    original_save = store.save
+
+    def save(saved_state: AgentState) -> AgentState:
+        saved_scheduler_statuses.append(scheduler.status(saved_state.task_id).status)
+        return original_save(saved_state)
+
+    monkeypatch.setattr(store, "save", save)
+    monkeypatch.setattr(tasks, "_store", store)
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+
+    response = TestClient(create_app()).post(
+        f"/api/v1/tasks/{state.task_id}/tool-result",
+        json={**_completed_result(call_id=call_id), "status": runtime_status},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["phase"] == expected_phase.value
+    assert saved_scheduler_statuses == [expected_scheduler_status]
+    assert store.saved[0].phase is expected_phase

@@ -193,11 +193,11 @@ def get_task_state(task_id: str) -> AgentState:
 def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
-        if state.workflow_version == 3:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=WORKFLOW_V3_NOT_READY_DETAIL,
-            )
+        if state.workflow_version >= 3:
+            state = apply_advance_request(state, request)
+            state = advance_state_for_workflow(state)
+            state = _store.save(state)
+            return advance_response(state)
 
         scheduled = scheduled_task_for(task_id)
         if scheduled.status == "queued":
@@ -249,6 +249,7 @@ def submit_tool_result(task_id: str, request: ToolResultRequest) -> AdvanceAgent
                 truncated=request.truncated,
             ),
         )
+        update_scheduler_from_state(state)
         state = _store.save(state)
 
     return advance_response(state)
@@ -514,6 +515,24 @@ def scheduled_task_for(task_id: str):
 
 
 def update_scheduler_from_state(state: AgentState) -> None:
+    if state.workflow_version >= 3:
+        if state.phase not in {
+            AgentPhase.COMPLETED,
+            AgentPhase.CANCELLED,
+            AgentPhase.NEEDS_INTERVENTION,
+            AgentPhase.FAILED,
+        }:
+            return
+
+        scheduled_task_for(state.task_id)
+        if state.phase == AgentPhase.COMPLETED:
+            _scheduler.finish(state.task_id, success=True)
+        elif state.phase == AgentPhase.CANCELLED:
+            _scheduler.cancel(state.task_id, "Runtime tool execution was cancelled.")
+        else:
+            _scheduler.finish(state.task_id, success=False)
+        return
+
     scheduled_task_for(state.task_id)
     if state.phase == AgentPhase.COMPLETED:
         _scheduler.finish(state.task_id, success=True)

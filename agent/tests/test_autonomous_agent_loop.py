@@ -6,6 +6,7 @@ from app.model_gateway import ModelGatewayResult
 from app.providers import ModelMessage, ModelToolCall, ModelUsage
 from app.tools.protocol import ToolResult
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 
 def test_legacy_checkpoint_loads_with_safe_autonomous_defaults(tmp_path) -> None:
@@ -190,21 +191,22 @@ def test_legacy_workflow_v1_dispatches_to_full_langgraph_runner(tmp_path, monkey
     assert calls == [legacy_state]
 
 
-def test_v3_advance_is_rejected_without_mutating_state(tmp_path, monkeypatch) -> None:
-    from types import SimpleNamespace
-
+def test_v3_advance_api_starts_runtime_loop_without_legacy_scheduler(tmp_path, monkeypatch) -> None:
     from app.api import tasks
+    from app.graph.state import AgentPhase, AgentToolRequest
+    from app.main import create_app
 
     state = create_initial_state(
-        task_id="v3-advance-not-ready",
+        task_id="v3-advance-round-trip",
         repository_path=str(tmp_path),
         worktree_path=str(tmp_path),
-        title="V3 advance not ready",
+        title="Start V3 runtime loop",
         model_id="test-model",
         workflow_version=3,
     )
-    original_payload = state.model_dump(mode="json", by_alias=True)
     saved_states: list[AgentState] = []
+    advance_inputs: list[AgentState] = []
+    scheduler_calls: list[str] = []
 
     class Store:
         def load(self, _task_id: str) -> AgentState:
@@ -214,27 +216,57 @@ def test_v3_advance_is_rejected_without_mutating_state(tmp_path, monkeypatch) ->
             saved_states.append(saved_state)
             return saved_state
 
-    monkeypatch.setattr(tasks, "_store", Store())
-    monkeypatch.setattr(
-        tasks,
-        "_scheduler",
-        SimpleNamespace(status=lambda _task_id: SimpleNamespace(status="running")),
-    )
+    class Scheduler:
+        def status(self, task_id: str):
+            scheduler_calls.append(f"status:{task_id}")
+            raise AssertionError("V3 advance must not use the legacy scheduler")
 
-    with pytest.raises(HTTPException) as error:
-        tasks.advance_task(
-            state.task_id,
-            tasks.AdvanceAgentTaskRequest(
-                reason="Continue V3 task",
-                userMessage="Please continue.",
-                requireApproval=True,
-            ),
+        def submit(self, task_id: str):
+            scheduler_calls.append(f"submit:{task_id}")
+            raise AssertionError("V3 advance must not use the legacy scheduler")
+
+    def advance_state(received: AgentState) -> AgentState:
+        advance_inputs.append(received)
+        return received.model_copy(
+            update={
+                "phase": AgentPhase.WAITING_RUNTIME,
+                "pending_tool_request": AgentToolRequest(
+                    callId="call-search-1",
+                    toolName="search_text",
+                    arguments={"query": "AgentState"},
+                ),
+            }
         )
 
-    assert error.value.status_code == 503
-    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
-    assert state.model_dump(mode="json", by_alias=True) == original_payload
-    assert saved_states == []
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(tasks, "_scheduler", Scheduler())
+    monkeypatch.setattr(tasks, "advance_state_for_workflow", advance_state)
+
+    response = TestClient(create_app()).post(
+        f"/api/v1/tasks/{state.task_id}/advance",
+        json={
+            "reason": "Continue V3 task",
+            "userMessage": "Please continue.",
+            "requireApproval": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["phase"] == "waiting_runtime"
+    pending_tool_request = body["state"]["pendingToolRequest"]
+    assert pending_tool_request["callId"] == "call-search-1"
+    assert pending_tool_request["toolName"] == "search_text"
+    assert pending_tool_request["arguments"] == {"query": "AgentState"}
+    assert pending_tool_request["status"] == "requested"
+    assert len(advance_inputs) == 1
+    assert advance_inputs[0].context.user_messages[-1] == "Please continue."
+    assert advance_inputs[0].requires_approval is True
+    assert scheduler_calls == []
+    assert len(saved_states) == 1
+    assert saved_states[0].phase is AgentPhase.WAITING_RUNTIME
+
 
 
 def test_v3_validation_result_without_request_is_rejected_as_not_ready(
