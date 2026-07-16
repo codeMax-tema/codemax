@@ -31,7 +31,7 @@ const TASK_ID: &str = "task-s11-e2e";
 
 #[cfg(windows)]
 fn validation_command() -> String {
-    "powershell -NoProfile -File validate.ps1".to_string()
+    "powershell -NoProfile -ExecutionPolicy Bypass -File validate.ps1".to_string()
 }
 
 #[cfg(not(windows))]

@@ -14,7 +14,7 @@ use crate::{
         estimate_tokens, record_context_observation, record_token_budget_observation,
         sanitize_for_model_context, ContextObservation, SanitizedContent, TokenBudgetObservation,
     },
-    safe_fs::{self, SafeFileOperation},
+    safe_fs::SafeFileOperation,
     storage::{
         AgentEventRepository, AgentSessionRepository, CommandRunRepository, ManagedStorage,
         NewAgentEvent, NewAgentSession, NewTodo, RunContractRepository, StorageError,
@@ -22,7 +22,13 @@ use crate::{
     },
 };
 
-use super::{exec::run_task_command, models::load_agent_runtime_env};
+use super::{
+    exec::run_task_command,
+    files::{
+        execute_transaction, ExecuteSafeFileOperationsRequest, ExecuteSafeFileOperationsResponse,
+    },
+    models::load_agent_runtime_env,
+};
 
 const VALIDATION_LOG_TAIL_BYTES: usize = 64 * 1024;
 const DEFAULT_VALIDATION_TIMEOUT_MS: u64 = 120_000;
@@ -404,16 +410,6 @@ async fn complete_pending_file_commit(
                 "Pending file commit has no edit plan.",
             )
         })?;
-    let workspace_path = {
-        let store = storage.store.lock().map_err(|_| storage_lock_error())?;
-        TaskRepository::new(store.connection())
-            .get_required(task_id)
-            .map_err(storage_error)?
-            .worktree_path
-            .ok_or_else(|| {
-                CommandError::new("agent.worktreeUnavailable", "Task worktree is unavailable.")
-            })?
-    };
     record_file_commit_event(
         storage,
         task_id,
@@ -422,25 +418,56 @@ async fn complete_pending_file_commit(
         "pending",
         edits,
         None,
+        None,
     )?;
-    let result = execute_file_commit_plan(&workspace_path, edits);
+    let result = execute_file_commit_transaction(storage, task_id, commit_id, edits);
     let (success, error) = match result {
-        Ok(()) => (true, None),
-        Err(error) => (false, Some(error.message.clone())),
+        Ok(transaction) => {
+            record_file_commit_event(
+                storage,
+                task_id,
+                commit_id,
+                "file_commit_completed",
+                "editing",
+                edits,
+                None,
+                Some(&transaction),
+            )?;
+            (true, None)
+        }
+        Err(error)
+            if matches!(
+                error.code.as_str(),
+                "approval.required" | "approval.pending" | "approval.reviseRequested"
+            ) =>
+        {
+            record_file_commit_event(
+                storage,
+                task_id,
+                commit_id,
+                "file_commit_awaiting_approval",
+                "awaitingApproval",
+                edits,
+                Some(&error.message),
+                None,
+            )?;
+            return Ok(response);
+        }
+        Err(error) => {
+            let message = error.message.clone();
+            record_file_commit_event(
+                storage,
+                task_id,
+                commit_id,
+                "file_commit_failed",
+                "failed",
+                edits,
+                Some(&message),
+                None,
+            )?;
+            (false, Some(message))
+        }
     };
-    record_file_commit_event(
-        storage,
-        task_id,
-        commit_id,
-        if success {
-            "file_commit_completed"
-        } else {
-            "file_commit_failed"
-        },
-        if success { "editing" } else { "failed" },
-        edits,
-        error.as_deref(),
-    )?;
     let path = format!(
         "/api/v1/tasks/{}/file-commit-result",
         encode_path_segment(task_id)
@@ -455,84 +482,69 @@ async fn complete_pending_file_commit(
         .map_err(agent_error)
 }
 
-fn execute_file_commit_plan(workspace: &str, edits: &[Value]) -> AppResult<()> {
-    let mut applied: Vec<(SafeFileOperation, Option<String>)> = Vec::new();
-    for edit in edits {
-        let operation = edit
-            .get("operation")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                CommandError::new("agent.fileCommitInvalid", "Edit operation is missing.")
-            })?;
-        let path = edit
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| CommandError::new("agent.fileCommitInvalid", "Edit path is missing."))?
-            .to_string();
-        let previous = if matches!(operation, "update" | "delete") {
-            Some(safe_fs::read_utf8(workspace, &path).map_err(|error| {
-                CommandError::new("agent.fileCommitPreflightFailed", error.to_string())
-            })?)
-        } else {
-            None
-        };
-        let safe_operation = match operation {
-            "create" => SafeFileOperation::Create {
-                path,
-                content: edit
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        CommandError::new("agent.fileCommitInvalid", "Create content is missing.")
-                    })?
-                    .to_string(),
-            },
-            "update" => SafeFileOperation::Update {
-                path,
-                content: edit
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        CommandError::new("agent.fileCommitInvalid", "Update content is missing.")
-                    })?
-                    .to_string(),
-            },
-            "delete" => SafeFileOperation::Delete { path },
-            _ => {
-                return Err(CommandError::new(
-                    "agent.fileCommitInvalid",
-                    "Unsupported edit operation.",
-                ))
-            }
-        };
-        if let Err(error) = safe_fs::execute_operations(workspace, &[safe_operation.clone()]) {
-            rollback_file_commit(workspace, applied);
-            return Err(CommandError::new(
-                "agent.fileCommitFailed",
-                error.to_string(),
-            ));
-        }
-        applied.push((safe_operation, previous));
-    }
-    Ok(())
+fn execute_file_commit_transaction(
+    storage: &ManagedStorage,
+    task_id: &str,
+    commit_id: &str,
+    edits: &[Value],
+) -> AppResult<ExecuteSafeFileOperationsResponse> {
+    execute_transaction(
+        storage,
+        ExecuteSafeFileOperationsRequest {
+            task_id: task_id.to_string(),
+            request_id: commit_id.to_string(),
+            operations: file_commit_operations_from_edits(edits)?,
+            approval_id: None,
+            diff_artifact_id: None,
+            validation_round_id: None,
+            proof_pack_id: None,
+        },
+    )
 }
 
-fn rollback_file_commit(workspace: &str, applied: Vec<(SafeFileOperation, Option<String>)>) {
-    for (operation, previous) in applied.into_iter().rev() {
-        let rollback = match operation {
-            SafeFileOperation::Create { path, .. } => SafeFileOperation::Delete { path },
-            SafeFileOperation::Update { path, .. } => SafeFileOperation::Update {
-                path,
-                content: previous.unwrap_or_default(),
-            },
-            SafeFileOperation::Delete { path } => SafeFileOperation::Create {
-                path,
-                content: previous.unwrap_or_default(),
-            },
-            _ => continue,
-        };
-        let _ = safe_fs::execute_operations(workspace, &[rollback]);
+fn file_commit_operations_from_edits(edits: &[Value]) -> AppResult<Vec<SafeFileOperation>> {
+    edits.iter().map(file_commit_operation_from_edit).collect()
+}
+
+fn file_commit_operation_from_edit(edit: &Value) -> AppResult<SafeFileOperation> {
+    let operation = edit
+        .get("operation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CommandError::new("agent.fileCommitInvalid", "Edit operation is missing.")
+        })?;
+    let path = edit
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CommandError::new("agent.fileCommitInvalid", "Edit path is missing."))?
+        .to_string();
+    match operation {
+        "create" => Ok(SafeFileOperation::Create {
+            path,
+            content: edit_content(edit, "Create")?,
+        }),
+        "update" => Ok(SafeFileOperation::Update {
+            path,
+            content: edit_content(edit, "Update")?,
+        }),
+        "delete" => Ok(SafeFileOperation::Delete { path }),
+        _ => Err(CommandError::new(
+            "agent.fileCommitInvalid",
+            "Unsupported edit operation.",
+        )),
     }
+}
+
+fn edit_content(edit: &Value, label: &str) -> AppResult<String> {
+    edit.get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CommandError::new(
+                "agent.fileCommitInvalid",
+                format!("{label} content is missing."),
+            )
+        })
 }
 
 fn record_file_commit_event(
@@ -543,12 +555,16 @@ fn record_file_commit_event(
     stage: &str,
     edits: &[Value],
     error: Option<&str>,
+    transaction: Option<&ExecuteSafeFileOperationsResponse>,
 ) -> AppResult<()> {
     let payload = serde_json::to_string(&json!({
         "commitId": commit_id,
         "operationCount": edits.len(),
         "operations": edits.iter().map(|edit| json!({"operation": edit.get("operation"), "path": edit.get("path")})).collect::<Vec<_>>(),
-        "errorCategory": error.map(|_| "safe_file_operation_failed")
+        "transactionId": transaction.map(|transaction| transaction.transaction_id.as_str()),
+        "transactionStatus": transaction.map(|transaction| transaction.status.as_str()),
+        "transactionResultCount": transaction.map(|transaction| transaction.results.len()),
+        "errorCategory": error.map(|_| if event_type == "file_commit_awaiting_approval" { "approval_required" } else { "safe_file_operation_failed" })
     })).map_err(json_error)?;
     let store = storage.store.lock().map_err(|_| storage_lock_error())?;
     let events = AgentEventRepository::new(store.connection());
@@ -807,7 +823,7 @@ fn task_status_from_agent_phase(phase: &str) -> &'static str {
         "editing" => "editing",
         "validating" => "validating",
         "analyzing_error" | "repairing" => "repairing",
-        "waiting_approval" => "awaitingApproval",
+        "waiting_approval" | "awaiting_file_commit" => "awaitingApproval",
         "needs_intervention" => "needsIntervention",
         "completed" => "readyToMerge",
         "failed" => "failed",
@@ -1322,9 +1338,14 @@ fn storage_error(error: StorageError) -> CommandError {
 mod tests {
     use super::*;
     use crate::storage::{
-        AgentEventRepository, ManagedStorage, NewTask, SqliteStore, StorageRoots, TaskRepository,
+        AgentEventRepository, ApprovalRepository, ManagedStorage, NewTask, SqliteStore,
+        StorageRoots, TaskRepository,
     };
-    use std::{fs, path::PathBuf, sync::Mutex};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -1371,8 +1392,114 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_file_commit_maps_to_awaiting_approval_status() {
+        assert_eq!(
+            task_status_from_agent_phase("awaiting_file_commit"),
+            "awaitingApproval"
+        );
+    }
+
+    #[test]
     fn encode_path_segment_escapes_slashes_and_spaces() {
         assert_eq!(encode_path_segment("task 1/a"), "task%201%2Fa");
+    }
+
+    #[test]
+    fn agent_file_commit_uses_recoverable_transaction() {
+        let task_id = "task-agent-file-commit";
+        let (storage, workspace) = test_storage_with_workspace("agent-file-commit", task_id);
+        let edits = vec![json!({
+            "operation": "create",
+            "path": "created.txt",
+            "content": "committed by transaction",
+            "summary": "Create a file"
+        })];
+
+        let first = execute_file_commit_transaction(&storage, task_id, "commit-1", &edits)
+            .expect("agent commit uses file transaction");
+        let second = execute_file_commit_transaction(&storage, task_id, "commit-1", &edits)
+            .expect("agent commit is idempotent");
+
+        assert_eq!(first.transaction_id, second.transaction_id);
+        assert_eq!(first.status, "committed");
+        assert_eq!(
+            fs::read_to_string(workspace.join("created.txt")).unwrap(),
+            "committed by transaction"
+        );
+        let store = storage.store.lock().unwrap();
+        let row: (String, String) = store
+            .connection()
+            .query_row(
+                "SELECT request_id, status FROM file_edit_transactions WHERE task_id = ?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("commit-1".to_string(), "committed".to_string()));
+    }
+
+    #[test]
+    fn agent_file_commit_update_requires_and_consumes_file_authorization() {
+        let task_id = "task-agent-file-approval";
+        let (storage, workspace) = test_storage_with_workspace("agent-file-approval", task_id);
+        fs::write(workspace.join("value.txt"), "before").unwrap();
+        let edits = vec![json!({
+            "operation": "update",
+            "path": "value.txt",
+            "content": "after",
+            "summary": "Update a file"
+        })];
+
+        let approval_error =
+            execute_file_commit_transaction(&storage, task_id, "commit-update", &edits)
+                .expect_err("existing file update needs approval");
+
+        assert_eq!(approval_error.code, "approval.required");
+        assert_eq!(
+            fs::read_to_string(workspace.join("value.txt")).unwrap(),
+            "before"
+        );
+        {
+            let store = storage.store.lock().unwrap();
+            let transaction_count: i64 = store
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM file_edit_transactions WHERE task_id = ?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(transaction_count, 0);
+            let approval = ApprovalRepository::new(store.connection())
+                .list_pending()
+                .unwrap()
+                .into_iter()
+                .find(|approval| approval.task_id == task_id)
+                .expect("file approval created");
+            assert_eq!(approval.action.as_deref(), Some("file.mutate"));
+            ApprovalRepository::new(store.connection())
+                .decide(&approval.id, "approved", None)
+                .unwrap();
+        }
+
+        let committed = execute_file_commit_transaction(&storage, task_id, "commit-update", &edits)
+            .expect("approved update commits");
+
+        assert_eq!(committed.status, "committed");
+        assert_eq!(
+            fs::read_to_string(workspace.join("value.txt")).unwrap(),
+            "after"
+        );
+        let store = storage.store.lock().unwrap();
+        let consumed_by: String = store
+            .connection()
+            .query_row(
+                "SELECT consumed_by_call_id FROM approvals WHERE task_id = ?1 AND action = 'file.mutate'",
+                [task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(consumed_by, "commit-update");
     }
 
     #[test]
@@ -1564,6 +1691,15 @@ mod tests {
     }
 
     fn seed_task(storage: &ManagedStorage, task_id: &str) {
+        seed_task_with_worktree(
+            storage,
+            task_id,
+            Path::new("D:/codemax/.worktrees/task-stage-events"),
+        );
+    }
+
+    fn seed_task_with_worktree(storage: &ManagedStorage, task_id: &str, workspace: &Path) {
+        let workspace_text = workspace.to_string_lossy();
         let store = storage.store.lock().expect("storage lock");
         TaskRepository::new(store.connection())
             .create(NewTask {
@@ -1572,17 +1708,25 @@ mod tests {
                 description: "Fixture task for Agent stage sync tests.",
                 task_type: "custom",
                 status: "queued",
-                repository_path: "D:/codemax",
-                worktree_path: Some("D:/codemax/.worktrees/task-stage-events"),
+                repository_path: workspace_text.as_ref(),
+                worktree_path: Some(workspace_text.as_ref()),
                 branch_name: Some("codemax/task-stage-events"),
                 target_branch: "main",
                 workspace_kind: "git_worktree",
-                source_path: "D:/codemax",
+                source_path: workspace_text.as_ref(),
                 original_write_authorized: false,
                 workspace_estimated_bytes: 0,
                 model_id: None,
             })
             .expect("create fixture task");
+    }
+
+    fn test_storage_with_workspace(label: &str, task_id: &str) -> (ManagedStorage, PathBuf) {
+        let storage = test_storage(label);
+        let workspace = temp_path(&format!("{label}-workspace"));
+        fs::create_dir_all(&workspace).expect("create workspace");
+        seed_task_with_worktree(&storage, task_id, &workspace);
+        (storage, workspace)
     }
 
     fn temp_path(label: &str) -> PathBuf {

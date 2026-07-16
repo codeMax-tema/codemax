@@ -55,7 +55,7 @@ pub async fn execute_safe_file_operations(
     execute_transaction(&storage, request)
 }
 
-fn execute_transaction(
+pub(crate) fn execute_transaction(
     storage: &ManagedStorage,
     request: ExecuteSafeFileOperationsRequest,
 ) -> AppResult<ExecuteSafeFileOperationsResponse> {
