@@ -827,18 +827,22 @@
         "callId": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256
+          "maxLength": 256,
+          "pattern": "\\S"
         },
         "toolName": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256
+          "maxLength": 256,
+          "pattern": "\\S"
         },
         "status": {
           "enum": ["succeeded", "failed", "rejected", "cancelled", "waiting_approval"]
         },
         "output": {
           "type": "object",
+          "default": {},
+          "maxProperties": 256,
           "additionalProperties": {
             "$ref": "#/$defs/JsonValue"
           }
@@ -853,6 +857,7 @@
         },
         "artifactRefs": {
           "type": "array",
+          "default": [],
           "maxItems": 16,
           "items": {
             "type": "string",
@@ -861,30 +866,241 @@
           }
         },
         "truncated": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": false
         }
       },
-      "required": ["callId", "toolName", "status", "output", "artifactRefs", "truncated"],
+      "required": ["callId", "toolName", "status"],
       "additionalProperties": false
     },
-    "JsonValue": {
+    "JsonValueDepth2": {
       "anyOf": [
         {
           "type": ["string", "number", "integer", "boolean", "null"]
         },
         {
           "type": "array",
+          "maxItems": 256,
           "items": {
-            "$ref": "#/$defs/JsonValue"
+            "$ref": "#/$defs/JsonValueDepth3"
           }
         },
         {
           "type": "object",
+          "maxProperties": 256,
           "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
+            "$ref": "#/$defs/JsonValueDepth3"
           }
         }
       ]
+    },
+    "JsonValueDepth3": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth4"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth4"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth4": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth5"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth5"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth5": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth6"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth6"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth6": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth7"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth7"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth7": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth8"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth8"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth8": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth9"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth9"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth9": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth10"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth10"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth10": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth11"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth11"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth11": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/JsonValueDepth12"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValueDepth12"
+          }
+        }
+      ]
+    },
+    "JsonValueDepth12": {
+      "anyOf": [
+        {
+          "type": ["string", "number", "integer", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "maxItems": 0
+        },
+        {
+          "type": "object",
+          "maxProperties": 0,
+          "additionalProperties": false
+        }
+      ]
+    },
+    "JsonValue": {
+      "$ref": "#/$defs/JsonValueDepth2"
     },
     "ValidationResultRequest": {
       "type": "object",
