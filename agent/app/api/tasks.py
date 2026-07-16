@@ -210,6 +210,12 @@ class FileCommitResultRequest(AgentModel):
 def submit_file_commit_result(task_id: str, request: FileCommitResultRequest) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
+        if state.workflow_version == 3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=WORKFLOW_V3_NOT_READY_DETAIL,
+            )
+
         if state.phase != AgentPhase.AWAITING_FILE_COMMIT or state.pending_file_commit_id != request.commit_id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File commit result does not match the pending commit.")
         if not request.success:
