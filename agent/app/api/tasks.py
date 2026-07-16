@@ -213,6 +213,9 @@ class ToolResultRequest(AgentModel):
         )
 
 
+_TOOL_RESULT_OPENAPI_SCHEMA = ToolResultRequest.model_json_schema(by_alias=True)
+
+
 @router.post("", response_model=CreateAgentTaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
     with _tasks_lock:
@@ -246,7 +249,7 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 "updated_at": utc_now(),
             }
         )
-        state = persist_state_and_sync_scheduler(state)
+        state = _store.save(state)
 
     return CreateAgentTaskResponse(
         taskId=state.task_id,
@@ -272,8 +275,10 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
     with task_lock_for(task_id):
         state = load_state_or_404(task_id)
         require_supported_workflow(state)
-        state, scheduled = ensure_scheduler_after_checkpoint(state)
-        if scheduled.status == "queued":
+        scheduled = scheduler_status(state.task_id)
+        if state.workflow_version in {1, 2}:
+            state, scheduled = ensure_scheduler_after_checkpoint(state)
+        if scheduled is not None and scheduled.status == "queued":
             state = append_log(state, "Task is queued until a scheduler slot is available.")
             state = persist_state_and_sync_scheduler(state)
             return advance_response(state)
@@ -288,12 +293,21 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
     return advance_response(state)
 
 
-@router.post("/{task_id}/tool-result", response_model=AdvanceAgentTaskResponse)
+@router.post(
+    "/{task_id}/tool-result",
+    response_model=AdvanceAgentTaskResponse,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": _TOOL_RESULT_OPENAPI_SCHEMA}},
+        }
+    },
+)
 async def submit_tool_result_http(task_id: str, request: Request) -> AdvanceAgentTaskResponse:
     """Parse callbacks strictly so JSON NaN/Infinity become a normal 422 response."""
     try:
         payload = json.loads(
-            await request.body(),
+            await read_bounded_tool_result_body(request),
             parse_constant=_reject_non_finite_json_constant,
         )
         parsed = ToolResultRequest.model_validate(payload)
@@ -303,6 +317,29 @@ async def submit_tool_result_http(task_id: str, request: Request) -> AdvanceAgen
             detail="Invalid Runtime tool-result payload.",
         ) from error
     return submit_tool_result(task_id, parsed)
+
+
+async def read_bounded_tool_result_body(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > _TOOL_RESULT_MAX_PAYLOAD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Runtime tool-result payload is too large.",
+                )
+        except ValueError:
+            pass
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > _TOOL_RESULT_MAX_PAYLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Runtime tool-result payload is too large.",
+            )
+    return bytes(body)
 
 
 def submit_tool_result(task_id: str, request: ToolResultRequest) -> AdvanceAgentTaskResponse:
@@ -725,6 +762,23 @@ def scheduled_task_for(task_id: str):
 
 
 def update_scheduler_from_state(state: AgentState) -> None:
+    if state.workflow_version == 3:
+        scheduled = scheduler_status(state.task_id)
+        if state.phase == AgentPhase.COMPLETED:
+            if scheduled is not None:
+                _scheduler.finish(state.task_id, success=True)
+            return
+        if state.phase == AgentPhase.CANCELLED:
+            if scheduled is not None:
+                _scheduler.cancel(state.task_id, "Runtime tool execution was cancelled.")
+            return
+        if state.phase in {AgentPhase.FAILED, AgentPhase.NEEDS_INTERVENTION}:
+            if scheduled is not None:
+                _scheduler.finish(state.task_id, success=False)
+            return
+        scheduled_task_for(state.task_id)
+        return
+
     scheduled_task_for(state.task_id)
     if state.phase == AgentPhase.COMPLETED:
         _scheduler.finish(state.task_id, success=True)

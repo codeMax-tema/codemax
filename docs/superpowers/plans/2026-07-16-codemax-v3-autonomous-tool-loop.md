@@ -724,3 +724,80 @@ git commit -m "test(agent): verify v3 loop and legacy recovery"
 - **Scope boundary:** No task claims to close Windows handle-pinned reads, merge approval binding, mandatory privacy interception, signing, installer lifecycle or clean-Windows E2E; those remain separate P0/P1 plans.
 - **TDD:** Every implementation task begins with a named failing test, a failing command, minimal implementation, passing command and commit.
 - **Consistency:** `workflowVersion=3`, `pendingToolRequest`, `AgentToolCallRequest`, `AgentToolCallResult`, `dispatch_agent_tool_call`, `advance_autonomous_turn`, `apply_runtime_tool_result`, and `drive_v3_agent_cycle` are used consistently throughout the plan.
+
+## Task 3A: Harden V3 callback, persistence and concurrency boundaries
+
+**Files:**
+- Modify: `agent/app/api/tasks.py`
+- Modify: `agent/app/graph/state.py`
+- Modify: `agent/app/graph/checkpoint.py` only if a compare-and-save helper is required
+- Modify: `agent/tests/test_tool_runtime_protocol.py`
+- Modify: `agent/tests/test_autonomous_agent_loop.py`
+
+- [ ] **Step 1: Add failing safety-boundary API tests**
+
+```python
+def test_unknown_workflow_version_fails_closed_without_state_mutation(client, store) -> None: ...
+def test_mismatched_tool_result_returns_409_without_saving_or_scheduler_update(client, store) -> None: ...
+def test_tool_result_save_failure_does_not_transition_scheduler(client, failing_store, scheduler) -> None: ...
+def test_non_finite_or_non_json_tool_result_is_rejected_with_422(client) -> None: ...
+def test_slow_v3_model_turn_does_not_hold_global_task_lock(client, blocking_gateway) -> None: ...
+```
+
+- [ ] **Step 2: Confirm the new tests fail**
+
+```powershell
+Set-Location D:\codemax\.worktrees\codex-v3-autonomous-tool-loop\agent
+D:\codemax\agent\.venv\Scripts\python.exe -m pytest tests/test_tool_runtime_protocol.py tests/test_autonomous_agent_loop.py -q
+```
+
+Expected: failures demonstrate the prior mixed version routing, `200 accepted` conflict path, scheduler-before-save ordering, loose JSON request values, or global-lock model call.
+
+- [ ] **Step 3: Implement fail-closed version classification and strict ToolResult validation**
+
+Introduce one shared classifier used by every callback:
+
+```python
+def workflow_kind(workflow_version: int) -> Literal["legacy", "v3"]:
+    if workflow_version in (1, 2):
+        return "legacy"
+    if workflow_version == 3:
+        return "v3"
+    raise HTTPException(status_code=409, detail="Unsupported workflow version.")
+```
+
+Use recursive `JsonValue` validation and reject NaN, Infinity, non-string artifact refs, empty call IDs and overlong identifiers at the FastAPI request boundary with `422`.
+
+- [ ] **Step 4: Implement safe callback ordering and conflict semantics**
+
+For `tool-result`:
+
+```text
+load + classify task
+→ reject non-V3 / no pending / call mismatch with 409 and no mutation
+→ exact consumed replay returns current state
+→ apply result
+→ save checkpoint successfully
+→ update scheduler from saved state
+→ return response
+```
+
+A checkpoint save error must leave scheduler unchanged. Do not return `accepted` for conflicts.
+
+- [ ] **Step 5: Move V3 model network work outside the global lock**
+
+Within the existing synchronous API architecture, split V3 advance into: lock-protected snapshot/lease acquisition; lock-free `advance_autonomous_turn`; lock-protected compare-and-save. A stale checkpoint or lost lease returns `409` with no scheduler mutation. V1/V2 retain their existing serial path.
+
+- [ ] **Step 6: Add V3 scheduler slot ownership**
+
+Acquire the scheduler slot only after a V3 task successfully reaches a model turn or pending Runtime request. Release it only after the terminal checkpoint is saved. Add a concurrency test that verifies V3 cannot exceed the configured concurrent task limit.
+
+- [ ] **Step 7: Run verification and commit**
+
+```powershell
+D:\codemax\agent\.venv\Scripts\python.exe -m pytest tests/test_tool_runtime_protocol.py tests/test_autonomous_agent_loop.py -q
+D:\codemax\agent\.venv\Scripts\python.exe -m pytest tests -q
+git diff --check
+git add agent/app/api/tasks.py agent/app/graph/state.py agent/app/graph/checkpoint.py agent/tests/test_tool_runtime_protocol.py agent/tests/test_autonomous_agent_loop.py
+git commit -m "fix(agent): harden v3 callback boundaries"
+```

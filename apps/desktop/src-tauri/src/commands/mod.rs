@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_tools;
 pub mod app;
 pub mod approvals;
 pub mod delivery;
