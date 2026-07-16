@@ -87,3 +87,69 @@ def test_workflow_v3_state_round_trips_tool_history_and_budget(tmp_path) -> None
     assert round_trip.max_agent_rounds == 24
     assert round_trip.token_budget == 50_000
     assert round_trip.consumed_tokens == 420
+
+
+def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+
+    class Store:
+        def exists(self, _task_id: str) -> bool:
+            return False
+
+        def save(self, state: AgentState) -> AgentState:
+            return state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(submit=lambda _task_id: SimpleNamespace(status="running")),
+    )
+    monkeypatch.setattr(tasks, "load_settings", lambda: SimpleNamespace(max_repair_rounds=5))
+    monkeypatch.setattr(
+        tasks,
+        "resolve_validation_command",
+        lambda _request, _settings: ("python --version", []),
+    )
+    monkeypatch.setattr(tasks, "memory_context_notes", lambda _request: [])
+    monkeypatch.setattr(tasks, "validation_context_notes", lambda _candidates: [])
+    monkeypatch.setattr(tasks, "proposal_states_for", lambda _request: [])
+
+    response = tasks.create_task(
+        tasks.CreateAgentTaskRequest(
+            taskId="new-v3-programming-task",
+            repositoryPath=str(tmp_path),
+            worktreePath=str(tmp_path),
+            title="New programming task",
+            modelId="test-model",
+        )
+    )
+
+    assert response.state.workflow_version == 3
+
+
+def test_workflow_v2_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) -> None:
+    import app.graph as graph
+    from app.graph.state import advance_state_for_workflow
+
+    state = create_initial_state(
+        task_id="v2-recovery",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="Resume V2 task",
+        model_id="test-model",
+        workflow_version=2,
+    )
+    resumed = state.model_copy(update={"checkpoint_index": 1})
+    calls: list[AgentState] = []
+
+    def run_full_graph(received: AgentState) -> AgentState:
+        calls.append(received)
+        return resumed
+
+    monkeypatch.setattr(graph, "run_agent_graph", run_full_graph)
+
+    assert advance_state_for_workflow(state) is resumed
+    assert calls == [state]
