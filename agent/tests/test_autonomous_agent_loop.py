@@ -409,3 +409,63 @@ def test_v3_approval_resume_is_rejected_without_side_effects(tmp_path, monkeypat
     assert state.model_dump(mode="json", by_alias=True) == original_payload
     assert saved_states == []
     assert scheduler_status_calls == []
+
+
+def test_v3_file_commit_result_is_rejected_without_side_effects(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+    from app.graph.state import AgentPhase
+
+    pending_commit_id = "commit-v3-not-ready"
+    state = create_initial_state(
+        task_id="v3-file-commit-not-ready",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 file commit not ready",
+        model_id="test-model",
+        workflow_version=3,
+    ).model_copy(
+        update={
+            "phase": AgentPhase.AWAITING_FILE_COMMIT,
+            "pending_file_commit_id": pending_commit_id,
+        }
+    )
+    original_payload = state.model_dump(mode="json", by_alias=True)
+    saved_states: list[AgentState] = []
+    scheduler_status_calls: list[str] = []
+
+    class Store:
+        def load(self, _task_id: str) -> AgentState:
+            return state
+
+        def save(self, saved_state: AgentState) -> AgentState:
+            saved_states.append(saved_state)
+            return saved_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(
+            status=lambda task_id: (
+                scheduler_status_calls.append(task_id)
+                or SimpleNamespace(status="running")
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        tasks.submit_file_commit_result(
+            state.task_id,
+            tasks.FileCommitResultRequest(
+                commitId=pending_commit_id,
+                success=True,
+            ),
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
+    assert state.model_dump(mode="json", by_alias=True) == original_payload
+    assert saved_states == []
+    assert scheduler_status_calls == []
