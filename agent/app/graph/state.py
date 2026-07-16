@@ -302,6 +302,17 @@ def create_initial_state(
     return append_log(state, "Agent task state created.")
 
 
+def advance_state_for_workflow(state: AgentState) -> AgentState:
+    """Advance a task using the runner assigned to its persisted workflow version."""
+    if state.workflow_version == 3:
+        # Task 2 owns the V3 autonomous loop.  Until then, keep V3 checkpoints intact.
+        return state
+
+    from app.graph import run_agent_graph
+
+    return run_agent_graph(state)
+
+
 def checkpoint_id(state: AgentState) -> str:
     return f"{state.task_id}:checkpoint:{state.checkpoint_index}"
 

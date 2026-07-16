@@ -12,13 +12,13 @@ from app.graph import (
     CheckpointStore,
     checkpoint_id,
     create_initial_state,
-    run_agent_graph,
 )
 from app.graph.state import (
     AgentProposalState,
     ApprovalStatus,
     ValidationCommandCandidate,
     ValidationResult,
+    advance_state_for_workflow,
     append_log,
     utc_now,
 )
@@ -141,6 +141,7 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 *memory_context_notes(request),
                 *validation_context_notes(validation_candidates),
             ],
+            workflow_version=3,
         )
         scheduled = _scheduler.submit(request.task_id)
         state = state.model_copy(
@@ -178,7 +179,7 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
             return advance_response(state)
 
         state = apply_advance_request(state, request)
-        state = run_agent_graph(state)
+        state = advance_state_for_workflow(state)
         update_scheduler_from_state(state)
         state = _store.save(state)
 
@@ -218,7 +219,7 @@ def submit_file_commit_result(task_id: str, request: FileCommitResultRequest) ->
                 "updated_at": utc_now(),
             })
             state = append_log(state, f"File commit {request.commit_id} completed through the Rust safety service.")
-            state = run_agent_graph(state)
+            state = advance_state_for_workflow(state)
         update_scheduler_from_state(state)
         state = _store.save(state)
     return advance_response(state)
@@ -248,7 +249,7 @@ def submit_validation_result(
             }
         )
         state = append_log(state, "Validation result submitted to the Agent state machine.")
-        state = run_agent_graph(state)
+        state = advance_state_for_workflow(state)
         update_scheduler_from_state(state)
         state = _store.save(state)
 
@@ -292,7 +293,7 @@ def resume_approval(
         )
         state = append_log(state, f"Approval {approval_id} resumed with decision: {decision}.")
         if decision == ApprovalStatus.APPROVED:
-            state = run_agent_graph(state)
+            state = advance_state_for_workflow(state)
         update_scheduler_from_state(state)
         state = _store.save(state)
 
