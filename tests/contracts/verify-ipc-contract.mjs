@@ -34,6 +34,7 @@ function assertSameSet(label, left, right) {
 const rustSource = read('apps/desktop/src-tauri/src/lib.rs');
 const clientSource = read('apps/desktop/src/api/tauriClient.ts');
 const schema = JSON.parse(read('contracts/ipc.schema.json'));
+const agentApiSchema = JSON.parse(read('contracts/agent-api.schema.json'));
 
 const rustCommands = sortedUnique(
   [...rustSource.matchAll(/commands::[A-Za-z0-9_]+::([A-Za-z0-9_]+)/g)].map(
@@ -172,6 +173,49 @@ for (const field of ['workspaceKind', 'sourcePath', 'originalWriteAuthorized', '
   assert(taskSummary.properties[field], `TaskSummary must include ${field}`);
   assert(taskSummary.required.includes(field), `TaskSummary must require ${field}`);
 }
+
+const toolResultEndpoint = agentApiSchema.properties.endpoints.properties.submitAgentToolResult;
+assert(toolResultEndpoint, 'Agent API schema must include submitAgentToolResult');
+assert(toolResultEndpoint.properties.method.const === 'POST', 'submitAgentToolResult must use POST');
+assert(
+  toolResultEndpoint.properties.path.const === '/api/v1/tasks/{taskId}/tool-result',
+  'submitAgentToolResult must target the tool-result route',
+);
+assert(
+  toolResultEndpoint.properties.request.$ref === '#/$defs/AgentToolResultRequest',
+  'submitAgentToolResult must reference AgentToolResultRequest',
+);
+assert(
+  toolResultEndpoint.properties.response.$ref === '#/$defs/AdvanceAgentTaskResponse',
+  'submitAgentToolResult must return AdvanceAgentTaskResponse',
+);
+
+const agentToolResultRequest = agentApiSchema.$defs.AgentToolResultRequest;
+assert(agentToolResultRequest, 'Agent API schema must define AgentToolResultRequest');
+assert(
+  agentToolResultRequest.type === 'object',
+  'AgentToolResultRequest must be an object schema',
+);
+assert(
+  agentToolResultRequest.additionalProperties === false,
+  'AgentToolResultRequest must reject unknown properties',
+);
+for (const field of ['callId', 'toolName', 'status', 'output', 'artifactRefs', 'truncated']) {
+  assert(
+    agentToolResultRequest.properties[field],
+    `AgentToolResultRequest must include ${field}`,
+  );
+  assert(
+    agentToolResultRequest.required.includes(field),
+    `AgentToolResultRequest must require ${field}`,
+  );
+}
+
+const toolResultResponse = agentApiSchema.$defs.AdvanceAgentTaskResponse;
+assert(
+  toolResultResponse.additionalProperties === false,
+  'submitAgentToolResult response must reject unknown properties',
+);
 
 console.log(
   `IPC contract verified: ${rustCommands.length} commands and ${strictSharedDefinitions.length} strict shared definitions.`,
