@@ -38,7 +38,7 @@ def advance_autonomous_turn(
     gateway: AutonomousGateway | None = None,
 ) -> AgentState:
     """Run one V3 model decision without executing any Runtime tool."""
-    if state.workflow_version != 3 or state.phase in _paused_or_terminal_phases():
+    if state.workflow_version < 3 or state.phase in _paused_or_terminal_phases():
         return state
     if state.pending_tool_request is not None:
         return state.model_copy(update={"phase": AgentPhase.WAITING_RUNTIME})
@@ -54,7 +54,7 @@ def advance_autonomous_turn(
         result = selected_gateway.chat(
             _model_messages(current.agent_messages),
             tools=registry.openai_tools(),
-            tool_choice="required",
+            tool_choice="auto",
         )
     except ModelGatewayError as error:
         return _needs_intervention(
@@ -72,11 +72,26 @@ def apply_runtime_tool_result(
     gateway: AutonomousGateway | None = None,
 ) -> AgentState:
     """Record an authoritative Runtime result and select the next V3 action."""
+    if state.phase is AgentPhase.WAITING_APPROVAL:
+        if _is_idempotent_approval_replay(state, result):
+            return state
+        return _needs_intervention(
+            state,
+            "Runtime returned a non-idempotent result while approval is pending.",
+        )
+    if state.phase is not AgentPhase.WAITING_RUNTIME:
+        return _needs_intervention(
+            state,
+            "Runtime tool results are accepted only while waiting for Runtime.",
+        )
+
     pending = state.pending_tool_request
     if pending is None:
         return _needs_intervention(
             state, "Runtime returned a tool result without a pending request."
         )
+    if pending.call_id in state.executed_tool_call_ids:
+        return _needs_intervention(state, "Runtime replayed an already consumed tool call.")
     if result.call_id != pending.call_id or result.tool_name != pending.tool_name:
         return _needs_intervention(state, "Runtime tool result does not match the pending request.")
 
@@ -89,6 +104,11 @@ def apply_runtime_tool_result(
         errorMessage=result.error_message,
         artifactRefs=list(result.artifact_refs),
         truncated=result.truncated,
+    )
+    loop_fingerprint = _loop_fingerprint(
+        pending.tool_name,
+        pending.arguments,
+        runtime_result.status,
     )
     current = state.model_copy(
         update={
@@ -107,6 +127,12 @@ def apply_runtime_tool_result(
             ),
             "pending_tool_request": None,
             "phase": AgentPhase.CREATED,
+            "loop_fingerprint": loop_fingerprint,
+            "consecutive_duplicate_calls": (
+                state.consecutive_duplicate_calls
+                if state.loop_fingerprint == loop_fingerprint
+                else 0
+            ),
         }
     )
 
@@ -271,7 +297,7 @@ def _protocol_error(
         errorCode=code,
         errorMessage=message,
     )
-    return state.model_copy(
+    protocol_state = state.model_copy(
         update={
             "last_tool_result": protocol_result,
             "agent_messages": [
@@ -284,6 +310,7 @@ def _protocol_error(
             ],
         }
     )
+    return _needs_intervention(protocol_state, "Model returned an invalid Runtime tool call.")
 
 
 def _ensure_user_message(state: AgentState) -> AgentState:
@@ -339,20 +366,32 @@ def _tool_result_content(result: AgentToolResult) -> str:
 
 
 def _duplicate_count(state: AgentState, call: ToolCall) -> int:
-    fingerprint = _fingerprint(call.name, call.arguments)
-    for message in reversed(state.agent_messages):
-        if message.role != "assistant" or not message.tool_calls:
-            continue
-        previous = message.tool_calls[0]
-        if _fingerprint(previous.name, previous.arguments) == fingerprint:
-            return state.consecutive_duplicate_calls + 1
-        break
+    status = state.last_tool_result.status if state.last_tool_result is not None else None
+    fingerprint = _loop_fingerprint(call.name, call.arguments, status)
+    if fingerprint == state.loop_fingerprint:
+        return state.consecutive_duplicate_calls + 1
     return 0
 
 
-def _fingerprint(name: str, arguments: dict[str, object]) -> str:
-    return (
-        f"{name}:{json.dumps(arguments, ensure_ascii=False, separators=(',', ':'), sort_keys=True)}"
+def _loop_fingerprint(
+    tool_name: str,
+    arguments: dict[str, object],
+    runtime_result_status: ToolResultStatus | None,
+) -> str:
+    canonical_arguments = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return json.dumps(
+        (
+            tool_name,
+            canonical_arguments,
+            runtime_result_status.value if runtime_result_status is not None else None,
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 
@@ -362,6 +401,25 @@ def _model_call_ids(messages: Iterable[AgentMessage]) -> set[str]:
 
 def _append_once(values: list[str], value: str) -> list[str]:
     return values if value in values else [*values, value]
+
+
+def _is_idempotent_approval_replay(state: AgentState, result: ToolResult) -> bool:
+    pending = state.pending_tool_request
+    last = state.last_tool_result
+    return (
+        pending is not None
+        and pending.status is ToolRequestStatus.WAITING_APPROVAL
+        and last is not None
+        and result.call_id == pending.call_id == last.call_id
+        and result.tool_name == pending.tool_name == last.tool_name
+        and result.status == last.status
+        and result.output == last.output
+        and result.error_code == last.error_code
+        and result.error_message == last.error_message
+        and tuple(result.artifact_refs) == tuple(last.artifact_refs)
+        and result.truncated == last.truncated
+        and result.call_id in state.executed_tool_call_ids
+    )
 
 
 def _completion_from_result(
