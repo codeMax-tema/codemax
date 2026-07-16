@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 from collections.abc import Iterable
 from typing import Protocol
 
@@ -12,11 +14,13 @@ from app.graph.state import (
     AgentToolCall,
     AgentToolRequest,
     AgentToolResult,
+    ConsumedToolResult,
     ToolRequestStatus,
     ToolResultStatus,
     append_log,
 )
 from app.model_gateway import ModelGatewayError, ModelGatewayResult, build_model_gateway
+from app.privacy import redact_model_context
 from app.providers import ModelMessage, ModelToolCall
 from app.tools import ToolProtocolError, builtin_tool_registry
 from app.tools.protocol import ToolCall, ToolResult
@@ -72,12 +76,18 @@ def apply_runtime_tool_result(
     gateway: AutonomousGateway | None = None,
 ) -> AgentState:
     """Record an authoritative Runtime result and select the next V3 action."""
-    if state.phase is AgentPhase.WAITING_APPROVAL:
-        if _is_idempotent_approval_replay(state, result):
-            return state
+    try:
+        runtime_result, payload_fingerprint = _bounded_runtime_result(result)
+    except _RuntimeResultBoundaryError as error:
+        return _needs_intervention(state, f"Runtime returned an unsafe tool result ({error}).")
+
+    replay = _consumed_result_replay(state, runtime_result.call_id, payload_fingerprint)
+    if replay is True:
+        return state
+    if replay is False:
         return _needs_intervention(
             state,
-            "Runtime returned a non-idempotent result while approval is pending.",
+            "Runtime replayed an already consumed tool call with a different payload.",
         )
     if state.phase is not AgentPhase.WAITING_RUNTIME:
         return _needs_intervention(
@@ -92,19 +102,8 @@ def apply_runtime_tool_result(
         )
     if pending.call_id in state.executed_tool_call_ids:
         return _needs_intervention(state, "Runtime replayed an already consumed tool call.")
-    if result.call_id != pending.call_id or result.tool_name != pending.tool_name:
+    if runtime_result.call_id != pending.call_id or runtime_result.tool_name != pending.tool_name:
         return _needs_intervention(state, "Runtime tool result does not match the pending request.")
-
-    runtime_result = AgentToolResult(
-        callId=result.call_id,
-        toolName=result.tool_name,
-        status=result.status,
-        output=result.output,
-        errorCode=result.error_code,
-        errorMessage=result.error_message,
-        artifactRefs=list(result.artifact_refs),
-        truncated=result.truncated,
-    )
     loop_fingerprint = _loop_fingerprint(
         pending.tool_name,
         pending.arguments,
@@ -125,6 +124,13 @@ def apply_runtime_tool_result(
                 state.executed_tool_call_ids,
                 runtime_result.call_id,
             ),
+            "consumed_tool_results": [
+                *state.consumed_tool_results,
+                ConsumedToolResult(
+                    **runtime_result.model_dump(mode="python", by_alias=True),
+                    payloadFingerprint=payload_fingerprint,
+                ),
+            ],
             "pending_tool_request": None,
             "phase": AgentPhase.CREATED,
             "loop_fingerprint": loop_fingerprint,
@@ -403,23 +409,174 @@ def _append_once(values: list[str], value: str) -> list[str]:
     return values if value in values else [*values, value]
 
 
-def _is_idempotent_approval_replay(state: AgentState, result: ToolResult) -> bool:
-    pending = state.pending_tool_request
-    last = state.last_tool_result
-    return (
-        pending is not None
-        and pending.status is ToolRequestStatus.WAITING_APPROVAL
-        and last is not None
-        and result.call_id == pending.call_id == last.call_id
-        and result.tool_name == pending.tool_name == last.tool_name
-        and result.status == last.status
-        and result.output == last.output
-        and result.error_code == last.error_code
-        and result.error_message == last.error_message
-        and tuple(result.artifact_refs) == tuple(last.artifact_refs)
-        and result.truncated == last.truncated
-        and result.call_id in state.executed_tool_call_ids
+_RUNTIME_RESULT_MAX_DEPTH = 12
+_RUNTIME_RESULT_MAX_INPUT_BYTES = 1_000_000
+_RUNTIME_RESULT_MAX_CONTEXT_BYTES = 16_000
+_RUNTIME_RESULT_PREVIEW_BYTES = 4_000
+
+
+class _RuntimeResultBoundaryError(ValueError):
+    pass
+
+
+def _bounded_runtime_result(result: ToolResult) -> tuple[AgentToolResult, str]:
+    if not isinstance(result.call_id, str) or not result.call_id.strip():
+        raise _RuntimeResultBoundaryError("invalid call id")
+    if not isinstance(result.tool_name, str) or not result.tool_name.strip():
+        raise _RuntimeResultBoundaryError("invalid tool name")
+    try:
+        status = ToolResultStatus(result.status)
+    except (TypeError, ValueError) as error:
+        raise _RuntimeResultBoundaryError("invalid status") from error
+    if not isinstance(result.output, dict):
+        raise _RuntimeResultBoundaryError("output must be a JSON object")
+    output = _json_value(result.output, depth=1)
+    if not isinstance(result.error_code, (str, type(None))):
+        raise _RuntimeResultBoundaryError("invalid error code")
+    if not isinstance(result.error_message, (str, type(None))):
+        raise _RuntimeResultBoundaryError("invalid error message")
+    if not isinstance(result.artifact_refs, (list, tuple)) or any(
+        not isinstance(item, str) for item in result.artifact_refs
+    ):
+        raise _RuntimeResultBoundaryError("invalid artifact references")
+    if not isinstance(result.truncated, bool):
+        raise _RuntimeResultBoundaryError("invalid truncated flag")
+
+    raw_payload = {
+        "callId": result.call_id,
+        "toolName": result.tool_name,
+        "status": status.value,
+        "output": output,
+        "errorCode": result.error_code,
+        "errorMessage": result.error_message,
+        "artifactRefs": list(result.artifact_refs),
+        "truncated": result.truncated,
+    }
+    raw_serialized = _canonical_json(raw_payload)
+    if len(raw_serialized.encode("utf-8")) > _RUNTIME_RESULT_MAX_INPUT_BYTES:
+        raise _RuntimeResultBoundaryError("payload exceeds the Runtime input limit")
+
+    needs_truncation = (
+        result.truncated
+        or len(raw_serialized.encode("utf-8")) > _RUNTIME_RESULT_MAX_CONTEXT_BYTES
     )
+    safe_output = _truncated_output(output) if needs_truncation else output
+    safe_result = AgentToolResult(
+        callId=result.call_id,
+        toolName=result.tool_name,
+        status=status,
+        output=_redact_json_value(safe_output),
+        errorCode=(
+            _redact_optional_text(
+                _bounded_text(result.error_code, _RUNTIME_RESULT_PREVIEW_BYTES)
+            )
+            if result.error_code is not None
+            else None
+        ),
+        errorMessage=(
+            _redact_optional_text(
+                _bounded_text(result.error_message, _RUNTIME_RESULT_PREVIEW_BYTES)
+            )
+            if result.error_message is not None
+            else None
+        ),
+        artifactRefs=[
+            redact_model_context(_bounded_text(item, _RUNTIME_RESULT_PREVIEW_BYTES))
+            for item in result.artifact_refs[:16]
+        ],
+        truncated=needs_truncation,
+    )
+    if len(_tool_result_content(safe_result).encode("utf-8")) > _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        safe_result = safe_result.model_copy(
+            update={
+                "output": _truncated_output(safe_result.output),
+                "artifact_refs": _truncate_artifacts(safe_result.artifact_refs),
+                "truncated": True,
+            }
+        )
+    return safe_result, hashlib.sha256(raw_serialized.encode("utf-8")).hexdigest()
+
+
+def _json_value(value: object, *, depth: int) -> object:
+    if depth > _RUNTIME_RESULT_MAX_DEPTH:
+        raise _RuntimeResultBoundaryError("payload exceeds the maximum nesting depth")
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise _RuntimeResultBoundaryError("payload contains a non-finite number")
+        return value
+    if isinstance(value, list):
+        return [_json_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise _RuntimeResultBoundaryError("payload contains a non-string object key")
+        return {key: _json_value(item, depth=depth + 1) for key, item in value.items()}
+    raise _RuntimeResultBoundaryError("payload is not JSON serializable")
+
+
+def _redact_json_value(value: object) -> object:
+    if isinstance(value, str):
+        return redact_model_context(value)
+    if isinstance(value, list):
+        return [_redact_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_json_value(item) for key, item in value.items()}
+    return value
+
+
+def _redact_optional_text(value: str | None) -> str | None:
+    return redact_model_context(value) if value is not None else None
+
+
+def _truncated_output(output: dict[str, object]) -> dict[str, object]:
+    summary = output.get("summary")
+    if not isinstance(summary, str):
+        summary = _canonical_json(output)
+    return {
+        "summary": _truncate_text(summary, _RUNTIME_RESULT_PREVIEW_BYTES),
+        "truncated": True,
+    }
+
+
+def _truncate_artifacts(artifacts: list[str]) -> list[str]:
+    return artifacts[:16]
+
+
+def _bounded_text(value: str, byte_limit: int) -> str:
+    return value if len(value.encode("utf-8")) <= byte_limit else _truncate_text(value, byte_limit)
+
+
+def _truncate_text(value: str, byte_limit: int) -> str:
+    encoded = value.encode("utf-8")
+    preview = encoded[:byte_limit].decode("utf-8", errors="ignore")
+    return f"{preview}\n...[Runtime output truncated]..."
+
+
+def _canonical_json(value: object) -> str:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise _RuntimeResultBoundaryError("payload is not JSON serializable") from error
+
+
+def _consumed_result_replay(
+    state: AgentState,
+    call_id: str,
+    payload_fingerprint: str,
+) -> bool | None:
+    for consumed in state.consumed_tool_results:
+        if consumed.call_id == call_id:
+            return consumed.payload_fingerprint == payload_fingerprint
+    if call_id in state.executed_tool_call_ids:
+        return False
+    return None
 
 
 def _completion_from_result(

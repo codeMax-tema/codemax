@@ -164,6 +164,12 @@ class AgentToolResult(AgentModel):
     created_at: str = Field(default_factory=utc_now, alias="createdAt")
 
 
+class ConsumedToolResult(AgentToolResult):
+    """A safe Runtime result summary plus a digest of its original payload."""
+
+    payload_fingerprint: str = Field(alias="payloadFingerprint")
+
+
 class AgentCompletion(AgentModel):
     summary: str
     validation_summary: str = Field(default="", alias="validationSummary")
@@ -247,6 +253,10 @@ class AgentState(AgentModel):
         default_factory=list,
         alias="executedToolCallIds",
     )
+    consumed_tool_results: list[ConsumedToolResult] = Field(
+        default_factory=list,
+        alias="consumedToolResults",
+    )
     agent_round: int = Field(default=0, ge=0, alias="agentRound")
     max_agent_rounds: int = Field(default=32, ge=1, le=256, alias="maxAgentRounds")
     consecutive_duplicate_calls: int = Field(
@@ -310,9 +320,10 @@ def create_initial_state(
 
 def advance_state_for_workflow(state: AgentState) -> AgentState:
     """Advance a task using the runner assigned to its persisted workflow version."""
-    if state.workflow_version == 3:
-        # Task 2 owns the V3 autonomous loop.  Until then, keep V3 checkpoints intact.
-        return state
+    if state.workflow_version >= 3:
+        from app.autonomous import advance_autonomous_turn
+
+        return advance_autonomous_turn(state)
 
     from app.graph import run_agent_graph
 
