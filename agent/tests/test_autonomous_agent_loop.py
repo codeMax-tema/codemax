@@ -1061,6 +1061,88 @@ def test_runtime_result_redacts_sensitive_checkpoint_context_and_replays_raw_pay
     assert secret not in completed.agent_messages[-1].content
 
 
+def test_runtime_result_redacts_sensitive_json_field_names_before_checkpoint_and_model_context(
+    tmp_path,
+) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+
+    opaque_value = "opaque-value-that-does-not-match-a-token-pattern"
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-read-2",
+                name="read_file",
+                arguments='{"path":"agent/app/graph/state.py"}',
+            )
+        ),
+    )
+    waiting = advance_autonomous_turn(v3_state(tmp_path), gateway=gateway)
+
+    advanced = apply_runtime_tool_result(
+        waiting,
+        ToolResult(
+            call_id="call-search-1",
+            tool_name="search_text",
+            status="succeeded",
+            output={
+                "giteeToken": opaque_value,
+                "nested": {
+                    "credential": {"value": opaque_value},
+                    "AuthorizationHeader": opaque_value,
+                },
+                "items": [{"api_secret": opaque_value}],
+            },
+        ),
+        gateway=gateway,
+    )
+
+    checkpoint = advanced.model_dump_json(by_alias=True)
+    model_tool_message = gateway.requests[-1][0][-1].content
+
+    assert opaque_value not in checkpoint
+    assert opaque_value not in advanced.agent_messages[-1].content
+    assert opaque_value not in model_tool_message
+    assert advanced.last_tool_result is not None
+    assert advanced.last_tool_result.output == {
+        "giteeToken": "[REDACTED]",
+        "nested": {
+            "credential": "[REDACTED]",
+            "AuthorizationHeader": "[REDACTED]",
+        },
+        "items": [{"api_secret": "[REDACTED]"}],
+    }
+
+
+def test_runtime_result_truncates_sixteen_near_four_kib_artifact_refs_to_tool_message_budget(
+    tmp_path,
+) -> None:
+    from app.autonomous import apply_runtime_tool_result
+
+    artifact_refs = tuple(f"artifact-{index}-{'x' * 4_000}" for index in range(16))
+
+    completed = apply_runtime_tool_result(
+        _waiting_for_complete_task(tmp_path),
+        ToolResult(
+            call_id="call-complete-1",
+            tool_name="complete_task",
+            status="succeeded",
+            output={"summary": "Finished", "changedFiles": [], "remainingRisks": []},
+            artifact_refs=artifact_refs,
+        ),
+    )
+
+    assert completed.last_tool_result is not None
+    assert completed.last_tool_result.truncated is True
+    assert len(completed.agent_messages[-1].content.encode("utf-8")) <= 16_000
+
+
 def test_runtime_result_truncates_large_output_when_runtime_marks_it_truncated(tmp_path) -> None:
     from app.autonomous import apply_runtime_tool_result
 

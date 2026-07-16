@@ -486,14 +486,9 @@ def _bounded_runtime_result(result: ToolResult) -> tuple[AgentToolResult, str]:
         ],
         truncated=needs_truncation,
     )
-    if len(_tool_result_content(safe_result).encode("utf-8")) > _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
-        safe_result = safe_result.model_copy(
-            update={
-                "output": _truncated_output(safe_result.output),
-                "artifact_refs": _truncate_artifacts(safe_result.artifact_refs),
-                "truncated": True,
-            }
-        )
+    safe_result = _fit_runtime_result_to_context(safe_result)
+    if _tool_result_content_bytes(safe_result) > _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        raise _RuntimeResultBoundaryError("tool message exceeds the Runtime context limit")
     return safe_result, hashlib.sha256(raw_serialized.encode("utf-8")).hexdigest()
 
 
@@ -521,8 +516,21 @@ def _redact_json_value(value: object) -> object:
     if isinstance(value, list):
         return [_redact_json_value(item) for item in value]
     if isinstance(value, dict):
-        return {key: _redact_json_value(item) for key, item in value.items()}
+        return {
+            key: "[REDACTED]"
+            if _is_sensitive_json_field_name(key)
+            else _redact_json_value(item)
+            for key, item in value.items()
+        }
     return value
+
+
+def _is_sensitive_json_field_name(key: str) -> bool:
+    normalized = key.casefold()
+    return any(
+        marker in normalized
+        for marker in ("token", "secret", "password", "credential", "authorization")
+    )
 
 
 def _redact_optional_text(value: str | None) -> str | None:
@@ -539,8 +547,94 @@ def _truncated_output(output: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _truncate_artifacts(artifacts: list[str]) -> list[str]:
-    return artifacts[:16]
+def _fit_runtime_result_to_context(result: AgentToolResult) -> AgentToolResult:
+    if _tool_result_content_bytes(result) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        return result
+
+    compact = result.model_copy(
+        update={
+            "output": _truncated_output(result.output),
+            "truncated": True,
+        }
+    )
+    compact = compact.model_copy(
+        update={"artifact_refs": _fit_artifacts_to_context(compact)}
+    )
+    if _tool_result_content_bytes(compact) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        return compact
+
+    compact = _fit_optional_text_to_context(compact, "error_message")
+    compact = _fit_optional_text_to_context(compact, "error_code")
+    if _tool_result_content_bytes(compact) > _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        raise _RuntimeResultBoundaryError("tool message exceeds the Runtime context limit")
+    return compact
+
+
+def _fit_artifacts_to_context(result: AgentToolResult) -> list[str]:
+    fitted: list[str] = []
+    for artifact in result.artifact_refs:
+        candidate = result.model_copy(update={"artifact_refs": [*fitted, artifact]})
+        if _tool_result_content_bytes(candidate) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+            fitted.append(artifact)
+            continue
+
+        truncated = _truncate_artifact_to_context(result, fitted, artifact)
+        if truncated is not None:
+            fitted.append(truncated)
+        break
+    return fitted
+
+
+def _truncate_artifact_to_context(
+    result: AgentToolResult,
+    fitted: list[str],
+    artifact: str,
+) -> str | None:
+    suffix = "\n...[Runtime artifact truncated]..."
+    encoded = artifact.encode("utf-8")
+    lower, upper = 0, len(encoded)
+    best: str | None = None
+    while lower <= upper:
+        midpoint = (lower + upper) // 2
+        preview = encoded[:midpoint].decode("utf-8", errors="ignore")
+        candidate_artifact = f"{preview}{suffix}"
+        candidate = result.model_copy(
+            update={"artifact_refs": [*fitted, candidate_artifact]}
+        )
+        if _tool_result_content_bytes(candidate) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+            best = candidate_artifact
+            lower = midpoint + 1
+        else:
+            upper = midpoint - 1
+    return best
+
+
+def _fit_optional_text_to_context(
+    result: AgentToolResult,
+    field: str,
+) -> AgentToolResult:
+    value = result.error_message if field == "error_message" else result.error_code
+    if value is None or _tool_result_content_bytes(result) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+        return result
+
+    suffix = "\n...[Runtime output truncated]..."
+    encoded = value.encode("utf-8")
+    lower, upper = 0, len(encoded)
+    best: str | None = None
+    while lower <= upper:
+        midpoint = (lower + upper) // 2
+        preview = encoded[:midpoint].decode("utf-8", errors="ignore")
+        candidate = result.model_copy(update={field: f"{preview}{suffix}"})
+        if _tool_result_content_bytes(candidate) <= _RUNTIME_RESULT_MAX_CONTEXT_BYTES:
+            best = f"{preview}{suffix}"
+            lower = midpoint + 1
+        else:
+            upper = midpoint - 1
+    return result.model_copy(update={field: best})
+
+
+def _tool_result_content_bytes(result: AgentToolResult) -> int:
+    return len(_tool_result_content(result).encode("utf-8"))
 
 
 def _bounded_text(value: str, byte_limit: int) -> str:
