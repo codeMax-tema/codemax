@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -46,6 +47,9 @@ const CRASH_RECOVERY_MIGRATION: &str =
 const APPROVAL_AUTHORIZATION_MIGRATION_VERSION: &str = "0012_approval_authorization";
 const APPROVAL_AUTHORIZATION_MIGRATION: &str =
     include_str!("../../../../../database/migrations/0012_approval_authorization.sql");
+const AGENT_TOOL_CALLS_MIGRATION_VERSION: &str = "0013_agent_tool_calls";
+const AGENT_TOOL_CALLS_MIGRATION: &str =
+    include_str!("../../../../../database/migrations/0013_agent_tool_calls.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -138,6 +142,10 @@ impl SqliteStore {
         self.apply_migration(
             APPROVAL_AUTHORIZATION_MIGRATION_VERSION,
             APPROVAL_AUTHORIZATION_MIGRATION,
+        )?;
+        self.apply_migration(
+            AGENT_TOOL_CALLS_MIGRATION_VERSION,
+            AGENT_TOOL_CALLS_MIGRATION,
         )?;
 
         StoragePolicyRepository::new(&self.connection).ensure_default_policy()?;
@@ -3684,6 +3692,7 @@ mod tests {
             "delivery_scores",
             "agent_sessions",
             "agent_events",
+            "agent_tool_calls",
             "file_edit_transactions",
             "validation_rounds",
             "merge_records",
@@ -4567,5 +4576,287 @@ mod tests {
             .count();
         assert_eq!(winners, 1);
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn agent_tool_call_is_idempotent_per_task_and_call_id() {
+        let store = migrated_store();
+        let repo = AgentToolCallRepository::new(store.connection());
+
+        let first = repo
+            .begin(NewAgentToolCall::requested(
+                "task-1",
+                "call-1",
+                "search_text",
+                "{\"query\":\"redacted\"}",
+            ))
+            .expect("first request");
+        let duplicate = repo
+            .begin(NewAgentToolCall::requested(
+                "task-1",
+                "call-1",
+                "search_text",
+                "{\"query\":\"redacted\"}",
+            ))
+            .expect("idempotent request");
+
+        assert_eq!(first.id, duplicate.id);
+        assert_eq!(duplicate.status, "requested");
+    }
+
+    #[test]
+    fn agent_tool_call_rejects_reused_call_id_with_different_request_digest() {
+        let store = migrated_store();
+        let repo = AgentToolCallRepository::new(store.connection());
+
+        repo.begin(NewAgentToolCall::requested(
+            "task-1",
+            "call-1",
+            "search_text",
+            "{\"query\":\"redacted\"}",
+        ))
+        .expect("first request");
+
+        let error = repo
+            .begin(NewAgentToolCall::requested(
+                "task-1",
+                "call-1",
+                "search_text",
+                "{\"query\":\"different-redacted\"}",
+            ))
+            .expect_err("different request digest must be rejected");
+
+        assert!(matches!(
+            error,
+            StorageError::NotFound(message)
+                if message == "agent tool call task-1/call-1 idempotency conflict"
+        ));
+    }
+
+    #[test]
+    fn agent_tool_call_completes_with_sanitized_audit_summaries() {
+        let store = migrated_store();
+        let repo = AgentToolCallRepository::new(store.connection());
+        repo.begin(NewAgentToolCall::requested(
+            "task-1",
+            "call-1",
+            "search_text",
+            "{\"query\":\"redacted\"}",
+        ))
+        .expect("begin request");
+
+        let completed = repo
+            .complete(
+                "task-1",
+                "call-1",
+                CompleteAgentToolCall {
+                    status: "succeeded",
+                    result_summary: Some("{\"matchCount\":1}"),
+                    duration_ms: Some(12),
+                    transaction_id: None,
+                    command_run_id: None,
+                    artifact_refs_json: "[\"artifact-1\"]",
+                },
+            )
+            .expect("complete request");
+
+        let loaded = repo
+            .get_required("task-1", "call-1")
+            .expect("load audit call");
+        assert_eq!(completed, loaded);
+        assert_eq!(loaded.status, "succeeded");
+        assert_eq!(loaded.result_summary.as_deref(), Some("{\"matchCount\":1}"));
+        assert_eq!(loaded.artifact_refs_json, "[\"artifact-1\"]");
+        assert!(loaded.completed_at.is_some());
+    }
+}
+
+fn map_agent_tool_call_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentToolCallRecord> {
+    Ok(AgentToolCallRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        call_id: row.get(2)?,
+        tool_name: row.get(3)?,
+        request_digest: row.get(4)?,
+        request_summary: row.get(5)?,
+        result_summary: row.get(6)?,
+        status: row.get(7)?,
+        duration_ms: row.get(8)?,
+        transaction_id: row.get(9)?,
+        command_run_id: row.get(10)?,
+        context_sources_json: row.get(11)?,
+        artifact_refs_json: row.get(12)?,
+        created_at: row.get(13)?,
+        completed_at: row.get(14)?,
+    })
+}
+
+fn agent_tool_call_request_digest(tool_name: &str, request_summary: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(tool_name.as_bytes());
+    hasher.update([0]);
+    hasher.update(request_summary.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentToolCallRecord {
+    pub id: String,
+    pub task_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub request_digest: String,
+    pub request_summary: String,
+    pub result_summary: Option<String>,
+    pub status: String,
+    pub duration_ms: Option<i64>,
+    pub transaction_id: Option<String>,
+    pub command_run_id: Option<String>,
+    pub context_sources_json: String,
+    pub artifact_refs_json: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAgentToolCall {
+    pub task_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub request_digest: String,
+    pub request_summary: String,
+    pub context_sources_json: String,
+}
+
+impl NewAgentToolCall {
+    /// The caller must supply a summary that has already been sanitized.
+    pub fn requested(task_id: &str, call_id: &str, tool_name: &str, request_summary: &str) -> Self {
+        Self::with_digest(
+            task_id,
+            call_id,
+            tool_name,
+            &agent_tool_call_request_digest(tool_name, request_summary),
+            request_summary,
+        )
+    }
+
+    pub fn with_digest(
+        task_id: &str,
+        call_id: &str,
+        tool_name: &str,
+        request_digest: &str,
+        request_summary: &str,
+    ) -> Self {
+        Self {
+            task_id: task_id.to_string(),
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            request_digest: request_digest.to_string(),
+            request_summary: request_summary.to_string(),
+            context_sources_json: "[]".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CompleteAgentToolCall<'a> {
+    pub status: &'a str,
+    pub result_summary: Option<&'a str>,
+    pub duration_ms: Option<i64>,
+    pub transaction_id: Option<&'a str>,
+    pub command_run_id: Option<&'a str>,
+    pub artifact_refs_json: &'a str,
+}
+
+pub struct AgentToolCallRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+impl<'conn> AgentToolCallRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn begin(&self, call: NewAgentToolCall) -> StorageResult<AgentToolCallRecord> {
+        self.connection.execute(
+            "INSERT INTO agent_tool_calls (
+                id, task_id, call_id, tool_name, request_digest, request_summary, status,
+                context_sources_json, artifact_refs_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'requested', ?7, '[]', ?8)
+             ON CONFLICT(task_id, call_id) DO NOTHING",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                call.task_id,
+                call.call_id,
+                call.tool_name,
+                call.request_digest,
+                call.request_summary,
+                call.context_sources_json,
+                now_text(),
+            ],
+        )?;
+
+        let record = self.get_required(&call.task_id, &call.call_id)?;
+        if record.request_digest != call.request_digest {
+            return Err(StorageError::NotFound(format!(
+                "agent tool call {}/{} idempotency conflict",
+                call.task_id, call.call_id
+            )));
+        }
+
+        Ok(record)
+    }
+
+    pub fn complete(
+        &self,
+        task_id: &str,
+        call_id: &str,
+        completion: CompleteAgentToolCall<'_>,
+    ) -> StorageResult<AgentToolCallRecord> {
+        let updated = self.connection.execute(
+            "UPDATE agent_tool_calls
+             SET status = ?3,
+                 result_summary = ?4,
+                 duration_ms = ?5,
+                 transaction_id = ?6,
+                 command_run_id = ?7,
+                 artifact_refs_json = ?8,
+                 completed_at = ?9
+             WHERE task_id = ?1 AND call_id = ?2",
+            params![
+                task_id,
+                call_id,
+                completion.status,
+                completion.result_summary,
+                completion.duration_ms,
+                completion.transaction_id,
+                completion.command_run_id,
+                completion.artifact_refs_json,
+                now_text(),
+            ],
+        )?;
+
+        if updated == 0 {
+            return Err(StorageError::NotFound(format!(
+                "agent tool call {task_id}/{call_id}"
+            )));
+        }
+
+        self.get_required(task_id, call_id)
+    }
+
+    pub fn get_required(&self, task_id: &str, call_id: &str) -> StorageResult<AgentToolCallRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, task_id, call_id, tool_name, request_digest, request_summary,
+                    result_summary, status, duration_ms, transaction_id, command_run_id,
+                    context_sources_json, artifact_refs_json, created_at, completed_at
+                 FROM agent_tool_calls
+                 WHERE task_id = ?1 AND call_id = ?2",
+                params![task_id, call_id],
+                map_agent_tool_call_record,
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("agent tool call {task_id}/{call_id}")))
     }
 }
