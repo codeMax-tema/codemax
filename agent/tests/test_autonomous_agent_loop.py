@@ -146,8 +146,8 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
     )
 
     assert response.state.workflow_version == 3
-    assert submitted_task_ids == ["new-v3-programming-task"]
-    assert saved_then_scheduled == ["save", "submit"]
+    assert submitted_task_ids == []
+    assert saved_then_scheduled == ["save"]
 
 
 def test_workflow_v2_dispatches_to_full_langgraph_runner(tmp_path, monkeypatch) -> None:
@@ -908,7 +908,7 @@ def test_waiting_approval_duplicate_runtime_result_is_idempotent(tmp_path) -> No
     assert replayed.executed_tool_call_ids == ["call-approval-1"]
 
 
-def test_workflow_versions_after_v3_use_the_autonomous_loop(tmp_path) -> None:
+def test_unknown_workflow_version_does_not_enter_the_autonomous_loop(tmp_path) -> None:
     from app.autonomous import advance_autonomous_turn
     from app.graph.state import AgentPhase
 
@@ -925,9 +925,8 @@ def test_workflow_versions_after_v3_use_the_autonomous_loop(tmp_path) -> None:
         ),
     )
 
-    assert advanced.phase is AgentPhase.WAITING_RUNTIME
-    assert advanced.pending_tool_request is not None
-    assert advanced.pending_tool_request.call_id == "call-search-v4"
+    assert advanced.phase is AgentPhase.NEEDS_INTERVENTION
+    assert advanced.pending_tool_request is None
 
 
 @pytest.mark.parametrize(
@@ -1328,7 +1327,9 @@ def test_v3_advance_releases_global_tasks_lock_and_serializes_each_task(
     assert max_active == 1
 
 
-def test_new_v3_tasks_use_explicit_scheduler_concurrency_quota(tmp_path, monkeypatch) -> None:
+def test_new_v3_tasks_do_not_consume_scheduler_slots_before_their_first_turn(
+    tmp_path, monkeypatch
+) -> None:
     from types import SimpleNamespace
 
     from app.api import tasks
@@ -1371,8 +1372,8 @@ def test_new_v3_tasks_use_explicit_scheduler_concurrency_quota(tmp_path, monkeyp
 
     snapshot = scheduler.snapshot()
     assert snapshot.max_concurrent_tasks == 1
-    assert snapshot.running_task_ids == ["quota-v3-1"]
-    assert snapshot.queued_task_ids == ["quota-v3-2"]
+    assert snapshot.running_task_ids == []
+    assert snapshot.queued_task_ids == []
 
 
 def test_v3_advance_revalidates_its_checkpoint_lease_before_persisting(

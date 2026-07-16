@@ -46,6 +46,10 @@ class SchedulerSpy:
         self.mutations.append(("finish", task_id, success))
         return SimpleNamespace(status="completed" if success else "failed")
 
+    def cancel(self, task_id: str, message: str = ""):
+        self.mutations.append(("cancel", task_id, message))
+        return SimpleNamespace(status="cancelled")
+
 
 def waiting_state(tmp_path, *, workflow_version: int = 3) -> AgentState:
     state = create_initial_state(
@@ -257,3 +261,23 @@ def test_state_dispatch_rejects_unknown_workflow_versions(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported workflow version"):
         advance_state_for_workflow(state)
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_mutation"),
+    [
+        (AgentPhase.CANCELLED, ("cancel", "runtime-task", "Runtime tool execution was cancelled.")),
+        (AgentPhase.NEEDS_INTERVENTION, ("finish", "runtime-task", False)),
+    ],
+)
+def test_v3_terminal_runtime_states_release_the_scheduler_slot(
+    tmp_path, monkeypatch, phase: AgentPhase, expected_mutation: tuple[object, ...]
+) -> None:
+    from app.api import tasks
+
+    scheduler = SchedulerSpy("runtime-task")
+    monkeypatch.setattr(tasks, "_scheduler", scheduler)
+
+    tasks.update_scheduler_from_state(waiting_state(tmp_path).model_copy(update={"phase": phase}))
+
+    assert scheduler.mutations == [expected_mutation]

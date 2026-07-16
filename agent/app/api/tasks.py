@@ -246,7 +246,7 @@ def create_task(request: CreateAgentTaskRequest) -> CreateAgentTaskResponse:
                 "updated_at": utc_now(),
             }
         )
-        state = persist_state_and_sync_scheduler(state)
+        state = _store.save(state)
 
     return CreateAgentTaskResponse(
         taskId=state.task_id,
@@ -272,8 +272,10 @@ def advance_task(task_id: str, request: AdvanceAgentTaskRequest) -> AdvanceAgent
     with task_lock_for(task_id):
         state = load_state_or_404(task_id)
         require_supported_workflow(state)
-        state, scheduled = ensure_scheduler_after_checkpoint(state)
-        if scheduled.status == "queued":
+        scheduled = scheduler_status(state.task_id)
+        if state.workflow_version in {1, 2}:
+            state, scheduled = ensure_scheduler_after_checkpoint(state)
+        if scheduled is not None and scheduled.status == "queued":
             state = append_log(state, "Task is queued until a scheduler slot is available.")
             state = persist_state_and_sync_scheduler(state)
             return advance_response(state)
@@ -725,6 +727,23 @@ def scheduled_task_for(task_id: str):
 
 
 def update_scheduler_from_state(state: AgentState) -> None:
+    if state.workflow_version == 3:
+        scheduled = scheduler_status(state.task_id)
+        if state.phase == AgentPhase.COMPLETED:
+            if scheduled is not None:
+                _scheduler.finish(state.task_id, success=True)
+            return
+        if state.phase == AgentPhase.CANCELLED:
+            if scheduled is not None:
+                _scheduler.cancel(state.task_id, "Runtime tool execution was cancelled.")
+            return
+        if state.phase in {AgentPhase.FAILED, AgentPhase.NEEDS_INTERVENTION}:
+            if scheduled is not None:
+                _scheduler.finish(state.task_id, success=False)
+            return
+        scheduled_task_for(state.task_id)
+        return
+
     scheduled_task_for(state.task_id)
     if state.phase == AgentPhase.COMPLETED:
         _scheduler.finish(state.task_id, success=True)

@@ -42,7 +42,9 @@ def advance_autonomous_turn(
     gateway: AutonomousGateway | None = None,
 ) -> AgentState:
     """Run one V3 model decision without executing any Runtime tool."""
-    if state.workflow_version < 3 or state.phase in _paused_or_terminal_phases():
+    if state.workflow_version != 3:
+        return _needs_intervention(state, "Unsupported workflow version for the autonomous runner.")
+    if state.phase in _paused_or_terminal_phases():
         return state
     if state.pending_tool_request is not None:
         return state.model_copy(update={"phase": AgentPhase.WAITING_RUNTIME})
