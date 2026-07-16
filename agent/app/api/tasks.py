@@ -35,9 +35,6 @@ _scheduler = TaskScheduler(max_concurrent_tasks=2)
 _tasks_lock = Lock()
 
 WORKFLOW_V3_NOT_READY_DETAIL = "Workflow V3 autonomous runner is not ready."
-WORKFLOW_V3_VALIDATION_NOT_READY_DETAIL = (
-    "Workflow V3 validation result requires an active validation request."
-)
 
 
 class AgentTaskStatus(StrEnum):
@@ -247,16 +244,10 @@ def submit_validation_result(
 ) -> AdvanceAgentTaskResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
-        if (
-            state.workflow_version == 3
-            and (
-                state.phase != AgentPhase.VALIDATING
-                or state.validation_request is None
-            )
-        ):
+        if state.workflow_version == 3:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=WORKFLOW_V3_VALIDATION_NOT_READY_DETAIL,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=WORKFLOW_V3_NOT_READY_DETAIL,
             )
 
         validation_result = ValidationResult(
@@ -294,6 +285,12 @@ def resume_approval(
 ) -> ResumeApprovalResponse:
     with _tasks_lock:
         state = load_state_or_404(task_id)
+        if state.workflow_version == 3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=WORKFLOW_V3_NOT_READY_DETAIL,
+            )
+
         if state.approval is None or state.approval.id != approval_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

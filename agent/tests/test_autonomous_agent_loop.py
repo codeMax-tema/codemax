@@ -239,7 +239,9 @@ def test_v3_advance_is_rejected_without_mutating_state(tmp_path, monkeypatch) ->
     assert saved_states == []
 
 
-def test_v3_validation_result_requires_active_validation_request(tmp_path, monkeypatch) -> None:
+def test_v3_validation_result_without_request_is_rejected_as_not_ready(
+    tmp_path, monkeypatch
+) -> None:
     from types import SimpleNamespace
 
     from app.api import tasks
@@ -277,9 +279,133 @@ def test_v3_validation_result_requires_active_validation_request(tmp_path, monke
             tasks.ValidationResultRequest(exitCode=0),
         )
 
-    assert error.value.status_code == 409
-    assert error.value.detail == (
-        "Workflow V3 validation result requires an active validation request."
-    )
+    assert error.value.status_code == 503
+    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
     assert state.model_dump(mode="json", by_alias=True) == original_payload
     assert saved_states == []
+
+
+def test_v3_validation_result_with_active_request_is_rejected_without_side_effects(
+    tmp_path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+    from app.graph.state import AgentPhase, ValidationRequest
+
+    validation_request = ValidationRequest(
+        command="python --version",
+        cwd=str(tmp_path),
+        reason="Validate V3 task",
+    )
+    state = create_initial_state(
+        task_id="v3-validation-requested-not-ready",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 validation request not ready",
+        model_id="test-model",
+        workflow_version=3,
+    ).model_copy(
+        update={
+            "phase": AgentPhase.VALIDATING,
+            "validation_request": validation_request,
+        }
+    )
+    original_payload = state.model_dump(mode="json", by_alias=True)
+    saved_states: list[AgentState] = []
+    scheduler_status_calls: list[str] = []
+
+    class Store:
+        def load(self, _task_id: str) -> AgentState:
+            return state
+
+        def save(self, saved_state: AgentState) -> AgentState:
+            saved_states.append(saved_state)
+            return saved_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(
+            status=lambda task_id: (
+                scheduler_status_calls.append(task_id)
+                or SimpleNamespace(status="running")
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        tasks.submit_validation_result(
+            state.task_id,
+            tasks.ValidationResultRequest(exitCode=0),
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
+    assert state.model_dump(mode="json", by_alias=True) == original_payload
+    assert saved_states == []
+    assert scheduler_status_calls == []
+
+
+def test_v3_approval_resume_is_rejected_without_side_effects(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api import tasks
+    from app.graph.state import AgentApproval, AgentPhase
+
+    approval = AgentApproval(
+        id="approval-v3-not-ready",
+        content="Approve V3 task",
+        reason="V3 approval resume regression coverage",
+    )
+    state = create_initial_state(
+        task_id="v3-approval-not-ready",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="V3 approval not ready",
+        model_id="test-model",
+        workflow_version=3,
+    ).model_copy(
+        update={
+            "phase": AgentPhase.WAITING_APPROVAL,
+            "requires_approval": True,
+            "approval": approval,
+        }
+    )
+    original_payload = state.model_dump(mode="json", by_alias=True)
+    saved_states: list[AgentState] = []
+    scheduler_status_calls: list[str] = []
+
+    class Store:
+        def load(self, _task_id: str) -> AgentState:
+            return state
+
+        def save(self, saved_state: AgentState) -> AgentState:
+            saved_states.append(saved_state)
+            return saved_state
+
+    monkeypatch.setattr(tasks, "_store", Store())
+    monkeypatch.setattr(
+        tasks,
+        "_scheduler",
+        SimpleNamespace(
+            status=lambda task_id: (
+                scheduler_status_calls.append(task_id)
+                or SimpleNamespace(status="running")
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        tasks.resume_approval(
+            state.task_id,
+            approval.id,
+            tasks.ResumeApprovalRequest(decision=tasks.ApprovalDecision.APPROVED),
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Workflow V3 autonomous runner is not ready."
+    assert state.model_dump(mode="json", by_alias=True) == original_payload
+    assert saved_states == []
+    assert scheduler_status_calls == []
