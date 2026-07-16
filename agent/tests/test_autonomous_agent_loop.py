@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 from app.graph.state import AgentState, create_initial_state
+from app.model_gateway import ModelGatewayResult
+from app.providers import ModelMessage, ModelToolCall, ModelUsage
+from app.tools.protocol import ToolResult
 from fastapi import HTTPException
 
 
@@ -73,18 +76,14 @@ def test_workflow_v3_state_round_trips_tool_history_and_budget(tmp_path) -> None
     )
 
     restored = AgentState.model_validate(payload)
-    round_trip = AgentState.model_validate(
-        restored.model_dump(mode="json", by_alias=True)
-    )
+    round_trip = AgentState.model_validate(restored.model_dump(mode="json", by_alias=True))
 
     assert round_trip.workflow_version == 3
     assert round_trip.pending_tool_request is not None
     assert round_trip.pending_tool_request.call_id == "call-search-1"
     assert round_trip.agent_messages[1].tool_calls[0].name == "search_text"
     assert round_trip.last_tool_result is not None
-    assert round_trip.last_tool_result.output == {
-        "paths": ["agent/app/graph/state.py"]
-    }
+    assert round_trip.last_tool_result.output == {"paths": ["agent/app/graph/state.py"]}
     assert round_trip.agent_round == 2
     assert round_trip.max_agent_rounds == 24
     assert round_trip.token_budget == 50_000
@@ -110,8 +109,7 @@ def test_new_programming_task_defaults_to_workflow_v3(tmp_path, monkeypatch) -> 
         "_scheduler",
         SimpleNamespace(
             submit=lambda task_id: (
-                submitted_task_ids.append(task_id)
-                or SimpleNamespace(status="running")
+                submitted_task_ids.append(task_id) or SimpleNamespace(status="running")
             )
         ),
     )
@@ -329,8 +327,7 @@ def test_v3_validation_result_with_active_request_is_rejected_without_side_effec
         "_scheduler",
         SimpleNamespace(
             status=lambda task_id: (
-                scheduler_status_calls.append(task_id)
-                or SimpleNamespace(status="running")
+                scheduler_status_calls.append(task_id) or SimpleNamespace(status="running")
             )
         ),
     )
@@ -391,8 +388,7 @@ def test_v3_approval_resume_is_rejected_without_side_effects(tmp_path, monkeypat
         "_scheduler",
         SimpleNamespace(
             status=lambda task_id: (
-                scheduler_status_calls.append(task_id)
-                or SimpleNamespace(status="running")
+                scheduler_status_calls.append(task_id) or SimpleNamespace(status="running")
             )
         ),
     )
@@ -449,8 +445,7 @@ def test_v3_file_commit_result_is_rejected_without_side_effects(tmp_path, monkey
         "_scheduler",
         SimpleNamespace(
             status=lambda task_id: (
-                scheduler_status_calls.append(task_id)
-                or SimpleNamespace(status="running")
+                scheduler_status_calls.append(task_id) or SimpleNamespace(status="running")
             )
         ),
     )
@@ -469,3 +464,271 @@ def test_v3_file_commit_result_is_rejected_without_side_effects(tmp_path, monkey
     assert state.model_dump(mode="json", by_alias=True) == original_payload
     assert saved_states == []
     assert scheduler_status_calls == []
+
+
+class ScriptedGateway:
+    def __init__(self, *results: ModelGatewayResult) -> None:
+        self._results = list(results)
+        self.requests: list[
+            tuple[
+                list[ModelMessage], list[dict[str, object]] | None, str | dict[str, object] | None
+            ]
+        ] = []
+
+    def chat(
+        self,
+        messages: list[ModelMessage],
+        *,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | dict[str, object] | None = None,
+    ) -> ModelGatewayResult:
+        self.requests.append((messages, tools, tool_choice))
+        return self._results.pop(0)
+
+
+def scripted_tool_result(*calls: ModelToolCall, total_tokens: int = 7) -> ModelGatewayResult:
+    return ModelGatewayResult(
+        id="response-1",
+        request_id="request-1",
+        model="test-model",
+        content="",
+        finish_reason="tool_calls",
+        latency_ms=1.0,
+        usage=ModelUsage(
+            prompt_tokens=total_tokens - 2,
+            completion_tokens=2,
+            total_tokens=total_tokens,
+        ),
+        tool_calls=calls,
+    )
+
+
+def v3_state(tmp_path, **updates: object) -> AgentState:
+    return create_initial_state(
+        task_id="v3-autonomous-loop",
+        repository_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        title="Inspect AgentState",
+        description="Find the AgentState model before editing.",
+        model_id="test-model",
+        workflow_version=3,
+        **updates,
+    )
+
+
+def test_advance_autonomous_turn_creates_runtime_request_from_scripted_search(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState","path":"agent/app"}',
+            )
+        )
+    )
+
+    advanced = advance_autonomous_turn(v3_state(tmp_path), gateway=gateway)
+
+    assert advanced.phase is AgentPhase.WAITING_RUNTIME
+    assert advanced.agent_round == 1
+    assert advanced.consumed_tokens == 7
+    assert advanced.pending_tool_request is not None
+    assert advanced.pending_tool_request.call_id == "call-search-1"
+    assert advanced.pending_tool_request.tool_name == "search_text"
+    assert advanced.pending_tool_request.arguments == {
+        "query": "AgentState",
+        "path": "agent/app",
+    }
+    assert [message.role for message in advanced.agent_messages] == ["user", "assistant"]
+    assert advanced.agent_messages[-1].tool_calls[0].id == "call-search-1"
+    request_messages, tools, tool_choice = gateway.requests[0]
+    assert request_messages[0].role == "user"
+    assert tools is not None
+    assert {tool["function"]["name"] for tool in tools} >= {"search_text", "read_file"}
+    assert tool_choice == "required"
+
+
+def test_runtime_tool_result_is_backfilled_before_next_model_read_request(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-read-2",
+                name="read_file",
+                arguments='{"path":"agent/app/graph/state.py","startLine":1,"lineCount":12}',
+            )
+        ),
+    )
+    waiting = advance_autonomous_turn(v3_state(tmp_path), gateway=gateway)
+
+    advanced = apply_runtime_tool_result(
+        waiting,
+        ToolResult(
+            call_id="call-search-1",
+            tool_name="search_text",
+            status="succeeded",
+            output={"matches": ["agent/app/graph/state.py:201"]},
+        ),
+        gateway=gateway,
+    )
+
+    assert advanced.phase is AgentPhase.WAITING_RUNTIME
+    assert advanced.pending_tool_request is not None
+    assert advanced.pending_tool_request.call_id == "call-read-2"
+    assert advanced.last_tool_result is not None
+    assert advanced.last_tool_result.call_id == "call-search-1"
+    second_messages, _, _ = gateway.requests[1]
+    assert [message.role for message in second_messages] == ["user", "assistant", "tool"]
+    assert second_messages[-1].tool_call_id == "call-search-1"
+    assert '"toolName":"search_text"' in second_messages[-1].content
+
+
+@pytest.mark.parametrize(
+    "tool_call, error_code",
+    [
+        (
+            ModelToolCall(id="call-unknown", name="shell", arguments='{"command":"dir"}'),
+            "tool.unknown",
+        ),
+        (
+            ModelToolCall(id="call-invalid", name="read_file", arguments='{"path":42}'),
+            "tool.invalidArguments",
+        ),
+    ],
+)
+def test_invalid_model_tool_call_becomes_protocol_tool_message(
+    tmp_path,
+    tool_call: ModelToolCall,
+    error_code: str,
+) -> None:
+    from app.autonomous import advance_autonomous_turn
+
+    advanced = advance_autonomous_turn(
+        v3_state(tmp_path),
+        gateway=ScriptedGateway(scripted_tool_result(tool_call)),
+    )
+
+    assert advanced.pending_tool_request is None
+    assert advanced.last_tool_result is not None
+    assert advanced.last_tool_result.error_code == error_code
+    assert [message.role for message in advanced.agent_messages] == ["user", "assistant", "tool"]
+    assert advanced.agent_messages[-1].tool_call_id == tool_call.id
+    assert error_code in advanced.agent_messages[-1].content
+
+
+def test_call_id_mismatch_requires_intervention_without_accepting_result(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    waiting = advance_autonomous_turn(
+        v3_state(tmp_path),
+        gateway=ScriptedGateway(
+            scripted_tool_result(
+                ModelToolCall(
+                    id="call-search-1",
+                    name="search_text",
+                    arguments='{"query":"AgentState"}',
+                )
+            )
+        ),
+    )
+
+    resolved = apply_runtime_tool_result(
+        waiting,
+        ToolResult(
+            call_id="call-forged",
+            tool_name="search_text",
+            status="succeeded",
+            output={},
+        ),
+    )
+
+    assert resolved.phase is AgentPhase.NEEDS_INTERVENTION
+    assert resolved.pending_tool_request == waiting.pending_tool_request
+    assert len(resolved.agent_messages) == len(waiting.agent_messages)
+
+
+def test_repeated_no_progress_tool_call_requires_intervention(tmp_path) -> None:
+    from app.autonomous import advance_autonomous_turn, apply_runtime_tool_result
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        ),
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-2",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        ),
+    )
+    waiting = advance_autonomous_turn(v3_state(tmp_path, max_agent_rounds=4), gateway=gateway)
+    state = waiting.model_copy(update={"max_duplicate_calls": 1})
+
+    resolved = apply_runtime_tool_result(
+        state,
+        ToolResult(
+            call_id="call-search-1",
+            tool_name="search_text",
+            status="succeeded",
+            output={"matches": []},
+        ),
+        gateway=gateway,
+    )
+
+    assert resolved.phase is AgentPhase.NEEDS_INTERVENTION
+    assert resolved.pending_tool_request is None
+    assert resolved.consecutive_duplicate_calls == 1
+    assert len(gateway.requests) == 2
+
+
+@pytest.mark.parametrize(
+    "state_updates, expected_rounds",
+    [
+        ({"max_agent_rounds": 1, "agent_round": 1}, 1),
+        ({"token_budget": 7, "consumed_tokens": 7}, 0),
+    ],
+)
+def test_round_or_budget_limit_prevents_another_model_turn(
+    tmp_path,
+    state_updates: dict[str, object],
+    expected_rounds: int,
+) -> None:
+    from app.autonomous import advance_autonomous_turn
+    from app.graph.state import AgentPhase
+
+    gateway = ScriptedGateway(
+        scripted_tool_result(
+            ModelToolCall(
+                id="call-search-1",
+                name="search_text",
+                arguments='{"query":"AgentState"}',
+            )
+        )
+    )
+    state = v3_state(tmp_path).model_copy(update=state_updates)
+
+    stopped = advance_autonomous_turn(state, gateway=gateway)
+
+    assert stopped.phase is AgentPhase.NEEDS_INTERVENTION
+    assert stopped.agent_round == expected_rounds
+    assert stopped.pending_tool_request is None
+    assert gateway.requests == []
