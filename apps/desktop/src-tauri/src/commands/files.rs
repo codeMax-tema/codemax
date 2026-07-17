@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -81,6 +77,12 @@ pub(crate) fn execute_transaction(
             "Directory creation is not accepted by the recoverable file-edit transaction.",
         ));
     }
+    safe_fs::validate_operation_paths(&request.operations).map_err(|error| {
+        CommandError::new(
+            "safeFile.invalidPath",
+            format!("File operation path failed workspace validation: {error}"),
+        )
+    })?;
 
     let operations_json = serde_json::to_string(&request.operations)
         .map_err(|error| CommandError::new("safeFile.invalidOperations", error.to_string()))?;
@@ -494,34 +496,39 @@ fn operation_target(operation: &SafeFileOperation) -> String {
 }
 
 fn file_content_digest(workspace: &str, operations: &[SafeFileOperation]) -> AppResult<String> {
-    let root = Path::new(workspace);
     let mut state = Vec::new();
     for operation in operations {
-        let relative = match operation {
-            SafeFileOperation::Create { path, .. }
-            | SafeFileOperation::Update { path, .. }
-            | SafeFileOperation::Delete { path }
-            | SafeFileOperation::CreateDirectory { path }
-            | SafeFileOperation::Rename { path, .. } => path,
-        };
-        let path = root.join(relative);
-        let value = match fs::read(&path) {
-            Ok(bytes) => {
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                format!("{:x}", hasher.finalize())
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing".to_string(),
-            Err(error) => {
-                return Err(CommandError::new(
-                    "approval.contentDigestFailed",
-                    error.to_string(),
-                ))
-            }
-        };
-        state.push(format!("{}:{value}", path.to_string_lossy()));
+        for relative in operation_digest_paths(operation) {
+            let value = match safe_fs::read_bytes(workspace, relative) {
+                Ok(bytes) => {
+                    let mut hasher = Sha256::new();
+                    hasher.update(bytes);
+                    format!("{:x}", hasher.finalize())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing".to_string(),
+                Err(error) => {
+                    return Err(CommandError::new(
+                        "approval.contentDigestFailed",
+                        error.to_string(),
+                    ))
+                }
+            };
+            state.push(format!("{relative}:{value}"));
+        }
     }
     Ok(digest(&state.join("\n")))
+}
+
+fn operation_digest_paths(operation: &SafeFileOperation) -> Vec<&str> {
+    match operation {
+        SafeFileOperation::Create { path, .. }
+        | SafeFileOperation::Update { path, .. }
+        | SafeFileOperation::Delete { path }
+        | SafeFileOperation::CreateDirectory { path } => vec![path.as_str()],
+        SafeFileOperation::Rename { path, destination } => {
+            vec![path.as_str(), destination.as_str()]
+        }
+    }
 }
 fn storage_busy() -> CommandError {
     CommandError::new("storage.lockUnavailable", "The local database is busy.")
@@ -573,6 +580,156 @@ mod tests {
             validation_round_id: Some("validation-1".to_string()),
             proof_pack_id: Some("proof-1".to_string()),
         }
+    }
+
+    #[test]
+    fn invalid_operation_path_is_rejected_before_approval_or_transaction() {
+        let (storage, workspace) = test_storage("invalid-path");
+        let outside = workspace
+            .parent()
+            .expect("workspace has parent")
+            .join("outside.txt");
+        fs::write(&outside, "outside").expect("write outside fixture");
+
+        for (request_id, operation) in [
+            (
+                "request-invalid-source",
+                SafeFileOperation::Update {
+                    path: "../outside.txt".to_string(),
+                    content: "changed".to_string(),
+                },
+            ),
+            (
+                "request-invalid-destination",
+                SafeFileOperation::Rename {
+                    path: "safe.txt".to_string(),
+                    destination: "../outside.txt".to_string(),
+                },
+            ),
+        ] {
+            let error =
+                execute_transaction(&storage, request(request_id, vec![operation])).unwrap_err();
+            assert_eq!(error.code, "safeFile.invalidPath");
+        }
+
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+        let store = storage.store.lock().unwrap();
+        let transaction_count: i64 = store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM file_edit_transactions WHERE request_id LIKE 'request-invalid-%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let approval_count: i64 = store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM approvals WHERE task_id = 'task-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(transaction_count, 0);
+        assert_eq!(approval_count, 0);
+    }
+
+    #[test]
+    fn approval_digest_uses_safe_binary_reads() {
+        let (storage, workspace) = test_storage("binary-digest");
+        fs::write(workspace.join("asset.bin"), [0, 159, 146, 150]).expect("write binary fixture");
+
+        let error = execute_transaction(
+            &storage,
+            request(
+                "request-binary-delete",
+                vec![SafeFileOperation::Delete {
+                    path: "asset.bin".to_string(),
+                }],
+            ),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "approval.required");
+        assert_eq!(
+            fs::read(workspace.join("asset.bin")).expect("read binary fixture"),
+            vec![0, 159, 146, 150]
+        );
+        let store = storage.store.lock().unwrap();
+        let approval_count: i64 = store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM approvals WHERE task_id = 'task-1' AND action = 'file.mutate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let transaction_count: i64 = store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM file_edit_transactions WHERE request_id = 'request-binary-delete'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(approval_count, 1);
+        assert_eq!(transaction_count, 0);
+    }
+
+    #[test]
+    fn rename_approval_is_invalidated_when_destination_changes() {
+        let (storage, workspace) = test_storage("rename-destination-digest");
+        fs::write(workspace.join("source.txt"), "source").expect("write source fixture");
+        let operations = vec![SafeFileOperation::Rename {
+            path: "source.txt".to_string(),
+            destination: "destination.txt".to_string(),
+        }];
+
+        let error = execute_transaction(
+            &storage,
+            request("request-rename-destination", operations.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "approval.required");
+        let approval_id = {
+            let store = storage.store.lock().unwrap();
+            let approval = ApprovalRepository::new(store.connection())
+                .list_pending()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            ApprovalRepository::new(store.connection())
+                .decide(&approval.id, "approved", None)
+                .unwrap();
+            approval.id
+        };
+
+        fs::write(workspace.join("destination.txt"), "occupied")
+            .expect("write destination fixture");
+        let mut approved_request = request("request-rename-destination", operations);
+        approved_request.approval_id = Some(approval_id);
+        let error = execute_transaction(&storage, approved_request).unwrap_err();
+
+        assert_eq!(error.code, "approval.authorizationInvalid");
+        assert_eq!(
+            fs::read_to_string(workspace.join("source.txt")).unwrap(),
+            "source"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join("destination.txt")).unwrap(),
+            "occupied"
+        );
+        let store = storage.store.lock().unwrap();
+        let transaction_count: i64 = store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM file_edit_transactions WHERE request_id = 'request-rename-destination'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(transaction_count, 0);
     }
 
     #[test]

@@ -31,7 +31,31 @@ pub fn execute_operations(
 }
 
 pub fn read_utf8(workspace: impl AsRef<Path>, relative: &str) -> io::Result<String> {
-    platform::read_utf8(workspace.as_ref(), relative)
+    let bytes = read_bytes(workspace, relative)?;
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "file is not UTF-8 text"))
+}
+
+pub fn read_bytes(workspace: impl AsRef<Path>, relative: &str) -> io::Result<Vec<u8>> {
+    platform::read_bytes(workspace.as_ref(), relative)
+}
+
+pub fn validate_operation_paths(operations: &[SafeFileOperation]) -> io::Result<()> {
+    for operation in operations {
+        match operation {
+            SafeFileOperation::Create { path, .. }
+            | SafeFileOperation::Update { path, .. }
+            | SafeFileOperation::Delete { path }
+            | SafeFileOperation::CreateDirectory { path } => {
+                checked_relative(path)?;
+            }
+            SafeFileOperation::Rename { path, destination } => {
+                checked_relative(path)?;
+                checked_relative(destination)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn checked_relative(raw: &str) -> io::Result<PathBuf> {
@@ -126,7 +150,7 @@ mod platform {
         id: [u8; 16],
     }
 
-    pub(super) fn read_utf8(workspace: &Path, raw: &str) -> io::Result<String> {
+    pub(super) fn read_bytes(workspace: &Path, raw: &str) -> io::Result<Vec<u8>> {
         let root = open_directory(workspace)?;
         let root_path = final_path(&root.file)?;
         let relative = checked_relative(raw)?;
@@ -135,8 +159,7 @@ mod platform {
         let mut bytes = Vec::new();
         use std::io::Read;
         file.read_to_end(&mut bytes)?;
-        String::from_utf8(bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "file is not UTF-8 text"))
+        Ok(bytes)
     }
 
     pub(super) fn execute_operations(
@@ -528,7 +551,7 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
-    pub(super) fn read_utf8(_: &Path, _: &str) -> io::Result<String> {
+    pub(super) fn read_bytes(_: &Path, _: &str) -> io::Result<Vec<u8>> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "safe file editing is only available on Windows",
@@ -561,6 +584,20 @@ mod tests {
             assert!(checked_relative("safe/CON.txt").is_err());
             assert!(checked_relative("safe/trailing. ").is_err());
         }
+    }
+
+    #[test]
+    fn validates_all_operation_paths_before_execution() {
+        assert!(validate_operation_paths(&[SafeFileOperation::Create {
+            path: "safe/file.txt".to_string(),
+            content: "ok".to_string(),
+        }])
+        .is_ok());
+        assert!(validate_operation_paths(&[SafeFileOperation::Rename {
+            path: "safe/file.txt".to_string(),
+            destination: "../escape.txt".to_string(),
+        }])
+        .is_err());
     }
 
     #[cfg(windows)]
